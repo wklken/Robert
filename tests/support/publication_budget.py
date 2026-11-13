@@ -88,6 +88,10 @@ class PublicationBudgetFixture(unittest.TestCase):
             )
 
     def runner(self, command, **kwargs):
+        if command[:3] == ["git", "remote", "get-url"]:
+            return SimpleNamespace(returncode=0, stdout="https://github.com/x/y.git\n", stderr="")
+        if command[:3] == ["git", "ls-remote", "--get-url"]:
+            return SimpleNamespace(returncode=0, stdout=command[-1] + "\n", stderr="")
         self.calls.append(command[:2])
         if command[:2] == ["git", "ls-remote"]:
             return SimpleNamespace(returncode=0, stdout="", stderr="")

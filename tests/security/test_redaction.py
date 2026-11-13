@@ -1,7 +1,41 @@
+import json
 import unittest
+
+from tests.support import TEST_ROOT
 
 
 class RedactionTests(unittest.TestCase):
+    def test_url_userinfo_is_blocked_without_returning_credentials(self):
+        from robert_agent.security import redaction
+
+        cases = json.loads((TEST_ROOT / "fixtures" / "url_userinfo.json").read_text())
+        for case in cases:
+            for scheme, host in (("https", "proxy.example.org:8443"), ("SOCKS5", "[2001:db8::1]:1080")):
+                with self.subTest(case=case["name"], scheme=scheme):
+                    text = f"Connection failed\n{scheme}://{case['userinfo']}@{host}/path"
+                    result = redaction.redact_text(text)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["status"], "blocked_secret")
+                    self.assertNotIn(case["userinfo"], str(result))
+                    self.assertEqual(result["findings"], [{"rule": "url_userinfo", "line": 2, "column": 1}])
+                    self.assertFalse(redaction.redact_and_truncate("x" * 2000 + text, 2000)["ok"])
+
+    def test_urls_without_userinfo_preserve_paths_queries_and_fragments(self):
+        from robert_agent.security import redaction
+
+        for text in (
+            "https://proxy.example.org:8443/path",
+            "https://example.org/users/alice@example.org",
+            "https://example.org?email=alice@example.org",
+            "https://example.org#alice@example.org",
+            "socks5://[2001:db8::1]:1080",
+            "git@github.com:example/repo.git",
+        ):
+            with self.subTest(text=text):
+                result = redaction.redact_text(text)
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["text"], text)
+
     def test_synthetic_password_literals_are_normalized_without_changing_url_shape(
         self,
     ):

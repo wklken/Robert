@@ -96,6 +96,7 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         "incident_id",
         "workstream_id",
         "decision_id",
+        "exit_code",
     ):
         if key in metadata:
             payload[key] = metadata[key]
@@ -109,6 +110,16 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
             return None
         payload.update(attention)
         payload["actions"] = messaging.actions_for(attention["event_type"], attention["kind"])
+    if kind == "supervision_decision_unavailable":
+        payload["summary"] = (
+            metadata.get("summary") or "自动决策调用连续失败。这是全局监督服务告警，Kanban 不会生成任务确认项。"
+        )
+        payload["required_action"] = (
+            "在 /operations 通知中心或 robert supervisor status 中检查决策服务；ack 仅记录收悉，后续有效模型调用会自动解除告警。"
+        )
+        if status == "resolved":
+            payload["summary"] = "自动决策服务已恢复；这条告警保留为历史记录。"
+            payload["required_action"] = "无需确认或批准操作；ack 仅记录收悉，不会重试任务。"
     if not payload.get("summary"):
         payload["summary"] = {
             "worker_resume_prepared": "已准备恢复执行；这条通知表示准备完成，后续进展请查看任务详情。",

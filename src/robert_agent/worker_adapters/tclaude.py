@@ -47,4 +47,7 @@ def build_launch(
         stdout_format="stream-json",
         environment_allowlist=tuple(environment_allowlist),
         timeout_seconds=int(timeout_seconds),
+        # The wrapper otherwise updates and exits successfully before running
+        # the model, leaving unattended reviews without their result artifact.
+        environment=(("TCLAUDE_SKIP_UPDATE", "1"),),
     )

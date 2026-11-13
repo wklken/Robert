@@ -460,11 +460,14 @@ def classify_remote_state(action, action_scope, run_command, *, conn=None):
     if action_type == GitHubActionType.OPEN_PR:
         return _reconcile_open_pr(action, action_scope, run_command)
     if action_type == GitHubActionType.PUSH_EXISTING_PR:
+        push_scope = publication_scope.trusted_action_scope(conn, action, include_output_type=True)
         target_scope = {
             **action_scope,
             "github_account": publication_scope.comment_publisher(conn, action, action_scope),
         }
-        target = publication_guards.existing_pr_push_target(target_scope, run_command, reconcile=True)
+        if isinstance(push_scope, dict):
+            target_scope["output_type"] = push_scope["output_type"]
+        target = publication_guards.push_target(target_scope, run_command, reconcile=True)
         if target and not target["ok"]:
             return _result("unknown", "existing_pr_push_target_mismatch")
         return _remote_branch(action, action_scope, run_command, push_remote=target["read_remote"] if target else None)

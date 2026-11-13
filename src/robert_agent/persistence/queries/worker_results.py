@@ -143,6 +143,7 @@ def find_for_trusted_action_scope(conn, result_id):
             table1.c["metadata_json"],
             table2.c["metadata_json"],
             table3.c["metadata_json"],
+            table1.c["output_type"],
         )
         .select_from(
             table1.join(table2, (table2.c["task_id"] == table1.c["task_id"]), isouter=True).join(

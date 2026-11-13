@@ -469,7 +469,7 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
             "status": "publish_failed",
             "safe_error": f"push_existing_pr action missing fields: {missing}",
         }
-    action_scope = publication_scope.trusted_action_scope(conn, action) or {}
+    action_scope = publication_scope.trusted_action_scope(conn, action, include_output_type=True) or {}
     expected_remote_sha = action_scope.get("existing_pr_head_sha", "")
     result_head_sha = action_scope.get("result_head_sha") or (source_ref if source_ref != "HEAD" else None)
     source_ref = result_head_sha or source_ref
@@ -511,7 +511,7 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
     if any(source.get("source_type") == "pull_request" for source in action_scope.get("sources", ())):
         target_scope["github_account"] = publication_scope.comment_publisher(conn, action, action_scope)
     read_remote = remote
-    target = publication_guards.existing_pr_push_target(target_scope, run_command)
+    target = publication_guards.push_target(target_scope, run_command)
     if target:
         if not target["ok"]:
             return target

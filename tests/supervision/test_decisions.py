@@ -175,6 +175,144 @@ recheck_seconds=300, message=''), sys.stdout)
             with self.assertRaises(ValueError):
                 decisions.validate(json.dumps(value), request)
 
+    def finish_model_call(self, *, status="exited", failures=0, output=None, stopped=True, request=None):
+        from robert_agent.supervision import store
+        from robert_agent.persistence import database
+
+        if request is None:
+            with closing(database.connect(self.db)) as conn:
+                request = self.request(conn)
+
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            runner = (store.get_checkpoint(conn, *decisions.RUNNER_KEY) or {}).get("metadata", {})
+            store.update_checkpoint(
+                conn,
+                *decisions.RUNNER_KEY,
+                now=self.now,
+                metadata={
+                    **runner,
+                    "failures": failures,
+                    "claim": {"bundle_id": request["bundle_id"], "cooldown_seconds": 120},
+                },
+            )
+            conn.commit()
+        loop = DecisionLoop()
+        loop.result = (
+            request,
+            {"status": status, "stopped": stopped, "exit_code": 7, "safe_error": "gateway unavailable"},
+            self.output(request, "wait") if output else None,
+        )
+        result = loop._finish(self.config, self.now)
+        return request, result
+
+    def test_failed_decision_and_global_notice_retain_diagnostics_without_task_approval(self):
+        from robert_agent.readmodels import board
+        from robert_agent.supervision import store
+
+        request, result = self.finish_model_call(failures=1)
+        self.assertEqual(result["status"], "exited")
+        with self.connect() as conn:
+            state = decisions.read(conn, "w")
+            failure = state.get("last_failure", {})
+            self.assertEqual(failure.get("decision_id"), request["bundle_id"])
+            self.assertEqual(failure.get("exit_code"), 7)
+            self.assertEqual(failure.get("safe_error"), "gateway unavailable")
+            record = store.get_checkpoint(conn, "decision_record", "w", request["bundle_id"])
+            self.assertIsNotNone(record)
+            notice = conn.execute("SELECT task_id,metadata_json FROM notifications").fetchone()
+            self.assertIsNone(notice[0])
+            metadata = json.loads(notice[1])
+            self.assertEqual(metadata.get("workstream_id"), "w")
+            self.assertEqual(metadata.get("decision_id"), request["bundle_id"])
+            self.assertEqual(metadata.get("safe_error"), "gateway unavailable")
+            self.assertIn("/operations", metadata["required_action"])
+            self.assertEqual(conn.execute("SELECT count(*) FROM work_item_events").fetchone()[0], 0)
+        detail = board.get_work_item_detail(self.db, "i")
+        self.assertEqual(detail["supervision_decision"].get("last_failure"), failure)
+
+    def test_recovery_resolves_legacy_and_current_global_alerts_preserving_receipts(self):
+        request, _ = self.finish_model_call(failures=1)
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO notifications(notification_id,notification_type,status,created_at,metadata_json) "
+                "VALUES ('legacy','supervision_decision_unavailable','recorded',?,?)",
+                (self.now, json.dumps({"delivery": {"status": "sent"}, "operator_response": {"action": "ack"}})),
+            )
+            conn.execute(
+                "INSERT INTO notifications(notification_id,notification_type,status,created_at) "
+                "VALUES ('unrelated','worker_stale','recorded',?)",
+                (self.now,),
+            )
+            conn.commit()
+        recovered, result = self.finish_model_call(status="read", failures=2, output=True)
+        self.assertEqual(result["status"], "decided")
+        with self.connect() as conn:
+            rows = conn.execute("SELECT notification_id,status,metadata_json FROM notifications").fetchall()
+        values = {row[0]: (row[1], json.loads(row[2])) for row in rows}
+        for identifier in ("legacy", "decision-unavailable-" + request["bundle_id"]):
+            self.assertEqual(values[identifier][0], "resolved")
+            self.assertEqual(values[identifier][1].get("resolved_at"), self.now)
+            self.assertEqual(values[identifier][1].get("resolution_decision_id"), recovered["bundle_id"])
+        self.assertEqual(values["legacy"][1]["delivery"], {"status": "sent"})
+        self.assertEqual(values["legacy"][1]["operator_response"], {"action": "ack"})
+        self.assertEqual(values["unrelated"][0], "recorded")
+
+    def test_invalid_or_unstopped_call_does_not_resolve_global_alert(self):
+        request, _ = self.finish_model_call(failures=1)
+        for status, output, stopped in (("invalid_output", None, True), ("read", True, False)):
+            with self.subTest(status=status, stopped=stopped):
+                self.finish_model_call(status=status, output=output, stopped=stopped, failures=2)
+                with self.connect() as conn:
+                    self.assertEqual(
+                        conn.execute(
+                            "SELECT status FROM notifications WHERE notification_id=?",
+                            ("decision-unavailable-" + request["bundle_id"],),
+                        ).fetchone()[0],
+                        "recorded",
+                    )
+
+    def test_stale_valid_response_resolves_service_alert_without_granting_action(self):
+        self.finish_model_call(failures=1)
+        from robert_agent.persistence import database
+
+        with closing(database.connect(self.db)) as conn:
+            request = self.request(conn)
+        with self.connect() as conn:
+            conn.execute("UPDATE work_items SET description='Changed requirements',version=2")
+            conn.commit()
+        _request, result = self.finish_model_call(status="read", failures=2, output=True, request=request)
+        self.assertEqual(result["status"], "stale_evidence")
+        with self.connect() as conn:
+            self.assertIsNone(decisions.read(conn, "w").get("decision"))
+            self.assertEqual(conn.execute("SELECT status FROM notifications").fetchone()[0], "resolved")
+
+    def test_real_failed_model_persists_error_in_status_after_restart(self):
+        self.config["supervision"]["decision"]["command"] = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stderr.write('local gateway unavailable'); sys.exit(7)",
+        ]
+        with self.connect() as conn:
+            self.offer(conn)
+            conn.commit()
+        loop = DecisionLoop()
+        self.addCleanup(loop.shutdown, self.config)
+        deadline = time.monotonic() + 8
+        result = {}
+        while time.monotonic() < deadline:
+            result = loop.poll(self.config)
+            if result["status"] == "exited":
+                break
+            time.sleep(0.02)
+        self.assertEqual(result["status"], "exited", result)
+        state = decision_control.status(self.config)[0]
+        self.assertEqual(state["last_failure"]["exit_code"], 7)
+        self.assertEqual(state["last_failure"]["safe_error"], "local gateway unavailable")
+        runner = decision_control.runner_status(self.config)
+        self.assertEqual(runner["last_failure"], state["last_failure"])
+        self.assertIsNone(runner["claim"])
+
     def test_cli_reply_resolves_the_board_question_without_starting_work(self):
         with self.connect() as conn:
             self.offer(conn)
@@ -233,6 +371,136 @@ recheck_seconds=300, message=''), sys.stdout)
             )
             conn.commit()
         self.assertEqual(DecisionLoop().poll(self.config)["status"], "process_attention")
+
+    def stranded_claim(self):
+        from robert_agent.supervision import store
+
+        claim = {
+            "bundle_id": "stranded",
+            "root_id": "w",
+            "claimed_at": self.now,
+            "owner_identity": {"pid": 123},
+        }
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            store.update_checkpoint(conn, *decisions.RUNNER_KEY, now=self.now, metadata={"claim": claim})
+            conn.commit()
+        return claim
+
+    def test_dead_owner_missing_model_identity_does_not_starve_other_workstreams(self):
+        from robert_agent.adapters.processes import identity
+        from robert_agent.persistence import database, transactions
+
+        claim = self.stranded_claim()
+        self.config["supervision"]["batch_size"] = 1
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO workstreams(workstream_id,repo_id,created_at,updated_at) VALUES ('z','r',?,?)",
+                [self.now] * 2,
+            )
+            conn.execute(
+                "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES ('tz','z','running',?,?)",
+                [self.now] * 2,
+            )
+            decisions.write(conn, "z", {"status": "reply_received"}, self.now)
+            decisions.offer(
+                conn,
+                self.config,
+                workstream_id="z",
+                action="retry_worker",
+                target_id="attempt-z",
+                facts={"task_id": "tz", "identity_status": "dead"},
+                now=self.now,
+            )
+            conn.commit()
+        with patch.object(identity, "inspect_recorded_identity", return_value="dead"):
+            self.assertEqual(DecisionLoop().poll(self.config)["status"], "process_attention")
+            # A restart must keep fencing w while the bounded cursor reaches z.
+            loop = DecisionLoop()
+
+            def complete(_config, _profile, request):
+                loop.result = (request, {"status": "read", "stopped": True}, self.output(request))
+
+            with patch.object(loop, "_run", side_effect=complete):
+                first = loop.poll(self.config)
+                second = loop.poll(self.config)
+                if loop.thread:
+                    loop.thread.join()
+            self.assertEqual(first["status"], "process_attention")
+            self.assertEqual(second, {"status": "launched", "workstream_id": "z"})
+        runner = decision_control.runner_status(self.config)
+        self.assertEqual(runner["attention_claims"]["w"], claim)
+        self.assertEqual(runner["claim"]["root_id"], "z")
+        with self.connect() as conn:
+            self.assertEqual(decisions.read(conn, "w")["status"], "process_attention")
+        self.assertEqual(loop.poll(self.config)["status"], "decided")
+        with closing(database.connect(self.db)) as conn, conn:
+            transactions.begin(conn, immediate=True)
+            self.assertTrue(
+                decisions.permit(
+                    conn,
+                    self.config,
+                    workstream_id="z",
+                    action="retry_worker",
+                    target_id="attempt-z",
+                    facts={"task_id": "tz", "identity_status": "dead"},
+                    now=self.now,
+                )
+            )
+
+    def test_missing_model_identity_with_live_or_unknown_owner_keeps_global_fence(self):
+        from robert_agent.adapters.processes import identity
+
+        for owner_status in ("alive_same", "unknown"):
+            with self.subTest(owner_status=owner_status):
+                claim = self.stranded_claim()
+                with patch.object(identity, "inspect_recorded_identity", return_value=owner_status):
+                    self.assertEqual(DecisionLoop().poll(self.config)["status"], "process_attention")
+                self.assertEqual(decision_control.runner_status(self.config)["claim"], claim)
+
+    def test_attention_claim_retains_shared_cooldown_and_call_budget(self):
+        from robert_agent.supervision import store
+        from robert_agent.adapters.processes import identity
+
+        claim = self.stranded_claim()
+        for field, value, expected in (
+            ("next_check_at", "2999-01-01T00:00:00+00:00", "cooldown"),
+            ("calls", [self.now] * 6, "call_budget_exhausted"),
+        ):
+            with self.subTest(field=field):
+                with self.connect() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    store.update_checkpoint(
+                        conn, *decisions.RUNNER_KEY, now=self.now, metadata={"claim": claim, field: value}
+                    )
+                    conn.commit()
+                with patch.object(identity, "inspect_recorded_identity", return_value="dead"):
+                    self.assertEqual(DecisionLoop().poll(self.config)["status"], "process_attention")
+                    self.assertEqual(DecisionLoop().poll(self.config)["status"], expected)
+
+    def test_operator_resolves_attention_claim_without_releasing_another_claim(self):
+        from robert_agent.supervision import store
+        from robert_agent.adapters.processes import identity
+
+        claim = self.stranded_claim()
+        active = {"bundle_id": "new", "root_id": "z"}
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            store.update_checkpoint(
+                conn,
+                *decisions.RUNNER_KEY,
+                now=self.now,
+                metadata={"claim": active, "attention_claims": {"w": claim}, "next_check_at": self.now},
+            )
+            conn.commit()
+        with patch.object(identity, "inspect_recorded_identity", return_value="dead"):
+            with self.assertRaises(ValueError):
+                decision_control.resolve_runner(self.config, "different", confirm_process_stopped=True)
+            decision_control.resolve_runner(self.config, "stranded", confirm_process_stopped=True)
+        runner = decision_control.runner_status(self.config)
+        self.assertEqual(runner["claim"], active)
+        self.assertEqual(runner["attention_claims"], {})
+        self.assertEqual(runner["next_check_at"], self.now)
 
     def test_notification_rechecks_do_not_repeat_an_unchanged_notice(self):
         with self.connect() as conn:

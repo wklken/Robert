@@ -26,6 +26,17 @@ function load(name, search = '') {
 }
 function descendants(node) { return [node, ...node.children.flatMap(descendants)]; }
 
+test('board task supervision presents the exact failed decision diagnostics', () => {
+  const context = load('board.js');
+  context.detail = {supervision_decision:{status:'exited', last_failure:{decision_id:'decision-failed',
+    exit_code:7, safe_error:'gateway unavailable', failed_at:'2026-11-12T06:55:01Z'}},supervision_incidents:[]};
+  const nodes = descendants(vm.runInContext('renderSupervision(detail)', context));
+  const text = nodes.map(node => node.textContent || '').join('\n');
+  assert.match(text, /gateway unavailable/);
+  assert.match(text, /decision-failed/);
+  assert.match(text, /7/);
+});
+
 test('initial board shows a populated actionable stage and honors an explicit empty stage', () => {
   for (const [search, expected] of [['', 'waiting'], ['?column=doing', 'doing']]) {
     const context = load('board.js', search);
