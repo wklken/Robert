@@ -9,7 +9,7 @@ from robert_agent.work import queries as work_queries
 
 
 def _workflow_event_subject(conn, event):
-    """Resolve an event to an existing exact workflow binding only."""
+    """Resolve an event to an existing active workflow binding only."""
 
     metadata = event.get("metadata") if isinstance(event, dict) else {}
     remediation_id = (
@@ -25,7 +25,7 @@ def _workflow_event_subject(conn, event):
             return None
         subject_type, subject_id = "task", str(task_id)
     binding = execution_store.get_binding(conn, subject_type, subject_id)
-    if not binding:
+    if not binding or binding["binding_status"] != BindingStatus.ACTIVE:
         return None
     return subject_type, subject_id, binding
 
