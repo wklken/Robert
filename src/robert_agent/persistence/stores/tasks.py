@@ -1,6 +1,7 @@
 """Shared stores operations for tasks."""
 
 from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.execution import AttemptStatus
 from robert_agent.foundation.contracts.work import TaskLifecycle
 
 from sqlalchemy import literal
@@ -99,6 +100,33 @@ def update_for_dispatch_queued_locked_2(conn, now, task_id):
         .where((tables["tasks"].c["task_id"] == bindparam("p1")))
     )
     return statements.write(conn, stmt, {"p0": now, "p1": task_id})
+
+
+def mark_task_running_for_attempt(conn, task_id, attempt_id, now):
+    attempt = tables["attempts"]
+    running_attempt = (
+        select(sql_constant(1))
+        .select_from(attempt)
+        .where(
+            and_(
+                attempt.c.attempt_id == bindparam("attempt_id"),
+                attempt.c.task_id == tables["tasks"].c.task_id,
+                attempt.c.status == sql_constant(AttemptStatus.RUNNING.value),
+            )
+        )
+    )
+    stmt = (
+        update(tables["tasks"])
+        .values(lifecycle=TaskLifecycle.RUNNING.value, updated_at=bindparam("now"))
+        .where(
+            and_(
+                tables["tasks"].c.task_id == bindparam("target_task_id"),
+                tables["tasks"].c.lifecycle == sql_constant(TaskLifecycle.QUEUED.value),
+                running_attempt.exists(),
+            )
+        )
+    )
+    return statements.write(conn, stmt, {"target_task_id": task_id, "attempt_id": attempt_id, "now": now})
 
 
 def update_for_supervise_running_attempts(conn, run_now, task_id):

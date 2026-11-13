@@ -8,6 +8,7 @@ import unittest
 from robert_agent.persistence.schema.database import init_database
 from robert_agent.persistence.queries import github_actions, notifications, tasks, workstreams
 from robert_agent.persistence.stores import work_items
+from robert_agent.persistence.stores import tasks as task_store
 
 NOW = "2026-11-08T12:00:00+00:00"
 
@@ -49,6 +50,58 @@ class ReviewQueryTests(unittest.TestCase):
         self.assertEqual(rows[0][1], "queue_delayed")
         self.conn.execute("UPDATE github_actions SET created_at='2026-11-08T11:00:00+00:00'")
         self.assertEqual(tasks.collect_filtered(self.conn, ["r"], NOW, NOW, 10)[0][1], "publication_delayed")
+
+    def test_active_attempt_is_not_reported_as_queue_delay(self):
+        self.conn.execute("DELETE FROM worker_results")
+        for status in ("running", "stale"):
+            with self.subTest(status=status):
+                self.conn.execute("UPDATE attempts SET status=?,heartbeat_at=?", (status, NOW))
+                self.assertEqual(list(tasks.collect_filtered(self.conn, ["r"], NOW, NOW, 10)), [])
+
+    def test_prepared_attempt_still_reports_queue_delay(self):
+        self.conn.execute("DELETE FROM worker_results")
+        self.conn.execute("UPDATE attempts SET status='prepared'")
+        self.assertEqual(
+            [tuple(row) for row in tasks.collect_filtered(self.conn, ["r"], NOW, NOW, 10)],
+            [("t", "queue_delayed")],
+        )
+
+    def test_launch_inflight_and_unconfirmed_exit_are_not_queue_delays(self):
+        self.conn.execute("DELETE FROM worker_results")
+        self.conn.execute("UPDATE attempts SET status='completed',metadata_json='{\"dispatch\":{\"pid\":123}}'")
+        self.assertEqual(list(tasks.collect_filtered(self.conn, ["r"], NOW, NOW, 10)), [])
+        self.conn.execute("UPDATE attempts SET status='prepared',metadata_json='{}'")
+        self.conn.execute(
+            "INSERT INTO execution_subjects(subject_type,subject_id,workflow_kind,binding_status,created_at,updated_at,metadata_json) "
+            "VALUES('task','t','human_request','active',?,?, '{\"dispatch_inflight\":\"a\"}')",
+            (NOW, NOW),
+        )
+        self.assertEqual(list(tasks.collect_filtered(self.conn, ["r"], NOW, NOW, 10)), [])
+
+    def test_active_attempt_does_not_hide_publication_delay(self):
+        self.conn.execute("UPDATE attempts SET status='running'")
+        self.action("delayed")
+        self.conn.execute("UPDATE github_actions SET created_at='2026-11-08T11:00:00+00:00'")
+        self.assertEqual(
+            [tuple(row) for row in tasks.collect_filtered(self.conn, ["r"], NOW, NOW, 10)],
+            [("t", "publication_delayed")],
+        )
+
+    def test_dispatch_start_only_promotes_queued_task_for_its_running_attempt(self):
+        self.conn.execute("UPDATE attempts SET status='running'")
+        task_store.mark_task_running_for_attempt(self.conn, "t", "a", NOW)
+        self.assertEqual(self.conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "running")
+        for lifecycle in ("completed", "canceled", "failed", "waiting_for_user"):
+            with self.subTest(lifecycle=lifecycle):
+                self.conn.execute("UPDATE tasks SET lifecycle=?", (lifecycle,))
+                task_store.mark_task_running_for_attempt(self.conn, "t", "a", NOW)
+                self.assertEqual(self.conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], lifecycle)
+        self.conn.execute("UPDATE tasks SET lifecycle='queued'")
+        task_store.mark_task_running_for_attempt(self.conn, "t", "missing", NOW)
+        self.assertEqual(self.conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "queued")
+        self.conn.execute("UPDATE attempts SET status='completed'")
+        task_store.mark_task_running_for_attempt(self.conn, "t", "a", NOW)
+        self.assertEqual(self.conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "queued")
 
     def test_skipped_publication_does_not_block_future_source_work(self):
         self.conn.execute("UPDATE tasks SET lifecycle='completed'")

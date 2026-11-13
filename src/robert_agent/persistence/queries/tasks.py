@@ -8,7 +8,7 @@ from functools import cache
 
 from robert_agent.persistence.expressions import sql_constant, valid_json_or_empty
 
-from robert_agent.persistence.predicates import runnable_task
+from robert_agent.persistence.predicates import occupied_attempt, runnable_task
 
 from sqlalchemy import (
     select,
@@ -1377,6 +1377,18 @@ def find_for_task(conn, task_id):
 def collect_filtered(conn, items, value_1, value_2, value_3):
     table1 = tables["tasks"].alias("t")
     table2 = tables["workstreams"].alias("w")
+    attempt = tables["attempts"].alias("active_attempt")
+    active_attempt = (
+        select(sql_constant(1))
+        .select_from(attempt)
+        .where(
+            and_(
+                attempt.c.task_id == table1.c.task_id,
+                occupied_attempt(attempt),
+            )
+        )
+        .correlate_except(attempt)
+    )
     table6 = tables["github_actions"].alias("ga")
     query7 = (
         select(sql_constant(1))
@@ -1417,6 +1429,7 @@ def collect_filtered(conn, items, value_1, value_2, value_3):
                 or_(
                     and_(
                         table1.c["lifecycle"] == sql_constant(TaskLifecycle.QUEUED.value),
+                        not_(active_attempt.exists()),
                         func.julianday(table1.c["created_at"])
                         < func.julianday(bindparam("p0")) - sql_constant(5.0) / sql_constant(1440),
                     ),

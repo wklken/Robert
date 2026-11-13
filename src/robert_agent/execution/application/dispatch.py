@@ -725,6 +725,10 @@ def dispatch_queued_locked(
                     results.append(dispatch_result)
                     continue
                 _record_dispatch_result(conn, task_info["attempt_id"], dispatch_result)
+                if dispatch_result.get("ok") and dispatch_result.get("status") == AttemptStatus.RUNNING.value:
+                    db_write_tasks.mark_task_running_for_attempt(
+                        conn, task_info["task_id"], task_info["attempt_id"], values.utc_now()
+                    )
                 subject_type, subject_id = execution_ownership.subject_for_task(conn, task_info["task_id"])
                 binding = execution_store.get_binding(conn, subject_type, subject_id)
                 if binding:
