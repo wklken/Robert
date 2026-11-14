@@ -1,0 +1,32 @@
+services:
+  fixtures:
+    image: ${ROBERT_COMPOSE_IMAGE:?Set by the test runner}
+    init: true
+    command: [python, /harness/fixture_server.py, --db, /fixtures/state.db, --git-root, /git, --host, 0.0.0.0, --port, "8765"]
+    volumes:
+      - fixtures:/fixtures
+      - git:/git:ro
+    networks: [offline]
+  sut:
+    image: ${ROBERT_COMPOSE_IMAGE:?Set by the test runner}
+    build:
+      context: ../../..
+      dockerfile: tests/simulations/compose/Dockerfile
+    init: true
+    command: [python, /harness/bootstrap.py, serve]
+    stop_grace_period: 25s
+    volumes:
+      - state:/state
+      - git:/git
+    networks: [offline]
+    environment:
+      ROBERT_FIXTURE_URL: http://fixtures:8765
+      GH_CONFIG_DIR: /state/gh
+      GIT_CONFIG_NOSYSTEM: "1"
+networks:
+  offline:
+    internal: true
+volumes:
+  state:
+  fixtures:
+  git:
