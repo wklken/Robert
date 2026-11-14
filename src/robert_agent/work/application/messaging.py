@@ -143,8 +143,10 @@ def reply(config, request):
         return {"ok": True, "status": "ignored"}
     message_id = validate_text(request.get("message_id"), "message_id", 256, required=True)
     body = validate_text(request.get("body"), "body", MAX_REPLY, required=True)
-    if not redact_text(body)["ok"]:
+    safe = redact_text(body)
+    if not safe["ok"]:
         raise WorkItemValidationError("Response contains sensitive text; use local controls.")
+    body = safe["text"]
     quote_body = validate_text(request.get("quote_body", ""), "quote_body", 20000)
     quote_message_id = validate_text(request.get("quote_message_id", ""), "quote_message_id", 256)
     quoted = request.get("quoted", False)

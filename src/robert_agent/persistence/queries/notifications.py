@@ -455,7 +455,6 @@ def find_chat_question(conn, *, messaging_repo_ids, messaging_settings, notifica
     notice = tables["notifications"]
     predicates = [
         notice.c.channel == "local",
-        notice.c.notification_type == "operator_question",
         func.json_extract(notice.c.metadata_json, "$.delivery.status") == "sent",
         _dispatch_identity(messaging_settings),
     ]
@@ -464,10 +463,21 @@ def find_chat_question(conn, *, messaging_repo_ids, messaging_settings, notifica
             func.json_extract(notice.c.metadata_json, "$.delivery.endpoint." + field)
             == messaging_settings.get(field, "")
         )
-    item = tables["work_items"]
+    event, item = tables["work_item_events"], tables["work_items"]
+    attention_id = func.json_extract(notice.c.metadata_json, "$.attention_event_id")
     item_id = func.json_extract(notice.c.metadata_json, "$.work_item_id")
     predicates.append(
-        select(1).where(item.c.work_item_id == item_id, item.c.repo_id.in_(sorted(messaging_repo_ids))).exists()
+        select(1)
+        .select_from(event.join(item, item.c.work_item_id == event.c.work_item_id))
+        .where(
+            event.c.event_id == attention_id,
+            item.c.work_item_id == item_id,
+            item.c.repo_id.in_(sorted(messaging_repo_ids)),
+            event.c.event_type == "operator_question",
+            func.coalesce(func.json_extract(event.c.metadata_json, "$.kind"), "") != "result_contract_cutover",
+        )
+        .correlate(notice)
+        .exists()
     )
     if notification_id is not None:
         predicates.append(notice.c.notification_id == notification_id)
