@@ -200,6 +200,13 @@ def admit_requests(
                     run_now,
                 )
                 continue
+        # A consumed trigger belongs to its original task, even when the
+        # workstream now points to a stopped task or a different execution.
+        if source_events.should_skip_terminal_trigger(conn, event):
+            supervision_lineage.record_disposition(
+                conn, admission, disposition="explicitly_ignored", now=run_now, reason_code="trigger_already_processed"
+            )
+            continue
         workflow_fact = facts.apply_workflow_event_fact(conn, event, run_now)
         if workflow_fact:
             attempt_id = workflow_fact.get("attempt_id")
@@ -225,11 +232,6 @@ def admit_requests(
         } - {None}
         if related_workstreams & failed_workstreams:
             failed_workstreams.update(related_workstreams)
-            continue
-        if source_events.should_skip_terminal_trigger(conn, event):
-            supervision_lineage.record_disposition(
-                conn, admission, disposition="explicitly_ignored", now=run_now, reason_code="trigger_already_processed"
-            )
             continue
         if work_policies.is_driving_context_event(event):
             waiting_task = source_events.waiting_task_state(conn, event["workstream_id"])

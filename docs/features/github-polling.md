@@ -18,6 +18,12 @@ or lease records. A pending operator notification schedules the publisher
 independently; it does not start repository pipelines. Empty event lists still
 reach local processing when tracked sources need closure or PR health checks.
 
+Replayed comments that already triggered a completed, failed or canceled task,
+or were consumed by an earlier task, are skipped before applying execution facts.
+New inputs apply facts only to active execution controls; terminal and attention
+controls retain their state and evidence. Fresh trusted follow-up requests still
+use the existing admission checks; replay alone does not retry a failed task.
+
 ## Diagnostic history
 
 Run summaries and business events remain separate from detailed controller steps.
