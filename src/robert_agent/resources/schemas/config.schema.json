@@ -720,6 +720,7 @@
           "default": false
         },
         "dispatch_enabled": {"type": "boolean", "default": false},
+        "contextual_replies": {"type": "boolean", "default": false},
         "send_after": {
           "type": "string",
           "minLength": 1,

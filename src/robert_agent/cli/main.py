@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     messaging_parser = subparsers.add_parser("messages", help="Authenticated local messaging bridge.")
-    messaging_parser.add_argument("messages_command", choices=["inbox", "respond", "dispatch"])
+    messaging_parser.add_argument("messages_command", choices=["inbox", "respond", "reply", "dispatch"])
     _add_config_argument(messaging_parser)
     _add_output_argument(messaging_parser)
 
@@ -418,6 +418,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if args.messages_command == "dispatch"
                     else messaging.inbox(validated, request)
                     if args.messages_command == "inbox"
+                    else messaging.reply(validated, request)
+                    if args.messages_command == "reply"
                     else messaging.respond(validated, request)
                 )
             except (WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError) as exc:

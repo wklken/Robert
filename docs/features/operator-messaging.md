@@ -146,13 +146,44 @@ For example:
 
 Use only the actions offered by that message. Free-text replies preserve spaces
 and newlines. Choice IDs/labels are suggestions; answers can explain a choice in
-text. There is no implicit “latest question” or natural-language authorization.
+text. With the default configuration, replies use these explicit commands.
 A changed version or resolved/replaced question is rejected. Refresh the inbox
 and read the current question before issuing a new response. Duplicate identical
 commands reuse the committed receipt and do not create another task. Replies,
 retries and cancellations still enforce active attempt, fencing, publication and
 repository restrictions. A blocked retry must be investigated through existing
 local controls, not bypassed through chat.
+
+### Plain replies in a dedicated conversation
+
+For a conversation used exclusively for Robert notifications, enable
+`messaging.contextual_replies: true` in Robert and
+`plugins.entries.robert-openclaw.config.contextualReplies: true` in OpenClaw.
+Both default to false. Install the current generated plugin and reload the
+services after changing these settings.
+
+Ordinary text in the authorized conversation becomes a `reply`. A quoted
+Robert message selects that question using its response command, Delivery ID,
+or the channel message ID stored at delivery. Without a quote, Robert selects
+the most recently delivered unresolved question that accepts `reply`. Other
+notifications and questions that have not been delivered do not change this
+selection. The acknowledgement includes the selected notification and resulting
+task IDs. There is no model interpretation of the answer or action.
+
+An unavailable, ambiguous, already handled, or stale quoted question is rejected
+without falling back to another question. If a channel omits a usable quoted
+message ID and quote text, use `/robert-inbox` and the explicit response command.
+Robert checks the version recorded at delivery; a later task edit requires a
+fresh explicit command from the inbox. Previously sent notifications without
+the new delivery receipt fields also require explicit commands.
+
+The OpenClaw `reply_dispatch` hook uses the authenticated incoming channel,
+account, raw `From`, thread and sender fields. Unrelated conversations remain
+outside this handler. Slash commands keep their existing behavior. Plain text
+does not approve, cancel, or retry work; use the offered command for those actions.
+Attachments require explicit text controls. Incoming channel message IDs reuse
+the existing atomic command receipt, so a duplicate message cannot answer a newer
+question. Missing message identity withholds the reply.
 
 Secrets are blocked or omitted; details that cannot safely be shown require local
 inspection. The CLI bridge accepts JSON on stdin, not arbitrary shell commands. The plugin

@@ -43,7 +43,15 @@ class MessagingConfigTests(BoardControlIntegrationFixture):
         self.assertFalse(validate_config(self.config_path, skip_external=True)["messaging"]["enabled"])
         result = self.configure(self.settings())
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["messaging"], {**self.settings(), "thread": "", "dispatch_enabled": False})
+        self.assertEqual(
+            result["messaging"],
+            {**self.settings(), "thread": "", "dispatch_enabled": False, "contextual_replies": False},
+        )
+
+    def test_contextual_replies_require_explicit_enablement(self):
+        self.assertTrue(self.configure({**self.settings(), "contextual_replies": True})["ok"])
+        self.assertFalse(self.configure({**self.settings(), "enabled": False, "contextual_replies": True})["ok"])
+        self.assertFalse(self.configure({**self.settings(), "contextual_replies": "true"})["ok"])
 
     def test_incomplete_or_unscoped_settings_fail_closed(self):
         for key in ("channel", "account", "target", "conversation", "allowed_senders", "repos"):

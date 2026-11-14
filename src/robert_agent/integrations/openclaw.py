@@ -79,10 +79,11 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-async function runRobert(args, input) {
+async function runRobert(args, input, rawResult = false) {
   try {
     const serialized = input === undefined ? "" : JSON.stringify(input);
     if (Buffer.byteLength(serialized, "utf8") > 65536) {
+      if (rawResult) return { ok: false, safe_error: "Message exceeds the input limit." };
       return { text: "Message exceeds the input limit.", isError: true };
     }
     const pending = execFileAsync(
@@ -99,6 +100,7 @@ async function runRobert(args, input) {
     const { stdout } = await pending;
     if (inputError) return { text: "Robert could not receive the request.", isError: true };
     const parsed = JSON.parse(stdout);
+    if (rawResult) return parsed;
     if (parsed?.ok === true) {
       return { text: JSON.stringify(parsed, null, 2) };
     }
@@ -109,8 +111,10 @@ async function runRobert(args, input) {
   } catch (error) {
     try {
       const parsed = JSON.parse(error.stdout);
+      if (rawResult && typeof parsed?.safe_error === "string") return parsed;
       if (typeof parsed?.safe_error === "string") return { text: parsed.safe_error, isError: true };
     } catch {}
+    if (rawResult) return { ok: false, safe_error: "Robert command failed; inspect local diagnostics." };
     return {
       text: "Robert command failed; inspect local diagnostics.",
       isError: true,
@@ -135,9 +139,40 @@ export default definePluginEntry({
         thread: String(ctx.messageThreadId ?? ""), sender_id: ctx.senderId ?? "",
       };
     }
-    function runConfigured(args, input) {
+    function runConfigured(args, input, rawResult = false) {
       if (api.pluginConfig?.robertConfig) args.push("--config", api.pluginConfig.robertConfig);
-      return runRobert(args, input);
+      return runRobert(args, input, rawResult);
+    }
+    if (api.pluginConfig?.contextualReplies === true) {
+      api.on("reply_dispatch", async (event, host) => {
+        const ctx = event.ctx;
+        if (event.isTailDispatch || !ctx || ctx.CommandAuthorized !== true) return;
+        const body = String(ctx.RawBody ?? ctx.CommandBody ?? "").trim();
+        if (!body || body.startsWith("/") || event.sendPolicy === "deny"
+            || event.suppressUserDelivery || ctx.MediaPaths?.length || ctx.MediaPath) return;
+        const channel = ctx.Surface ?? ctx.Provider;
+        const identity = {
+          protocol: "robert.message.v1", provider: "openclaw", channel,
+          account: ctx.AccountId ?? "", conversation: ctx.From ?? "",
+          thread: String(ctx.MessageThreadId ?? ""), sender_id: ctx.SenderId ?? "",
+        };
+        const result = await runConfigured(["messages", "reply", "--output", "json"], {
+          ...identity, message_id: ctx.MessageSidFull ?? ctx.MessageSid ?? "", body,
+          quoted: Boolean(ctx.ReplyToIsQuote || ctx.ReplyToIdFull || ctx.ReplyToId || ctx.ReplyToBody),
+          quote_message_id: ctx.ReplyToIdFull ?? ctx.ReplyToId ?? "",
+          quote_body: ctx.ReplyToBody ?? "",
+        }, true);
+        if (result.status === "ignored") return;
+        const text = result.ok && result.status === "accepted"
+          ? `Robert 已收到答复。\\n关联消息: ${result.notification_id}\\n任务: ${result.task_id ?? "查看 /robert-inbox"}`
+          : result.ok && result.status === "no_question"
+            ? "Robert 当前没有已送达的待回复问题，请使用 /robert-inbox 查看。"
+            : `Robert 未提交答复: ${result.safe_error ?? "请查看本地诊断。"}`;
+        const queuedFinal = host.dispatcher.sendFinalReply({ text });
+        host.recordProcessed("completed", { reason: "robert_contextual_reply" });
+        host.markIdle("message_completed");
+        return { handled: true, queuedFinal, counts: host.dispatcher.getQueuedCounts() };
+      });
     }
     api.registerCommand({
       name: "robert-messaging-context",
@@ -293,7 +328,10 @@ def write_plugin(plugin_dir, force=False, dry_run=False):
         "configSchema": {
             "type": "object",
             "additionalProperties": False,
-            "properties": {"robertConfig": {"type": "string", "minLength": 1}},
+            "properties": {
+                "robertConfig": {"type": "string", "minLength": 1},
+                "contextualReplies": {"type": "boolean", "default": False},
+            },
         },
     }
     files = {

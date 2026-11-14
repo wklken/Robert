@@ -135,3 +135,23 @@ class MessagePresentationTests(unittest.TestCase):
         body = argv[argv.index("--message") + 1]
         self.assertIn("执行进程意外退出", body)
         self.assertNotIn("failed_worker_process_exited", body)
+
+    def test_dedicated_chat_question_explains_plain_and_quoted_reply(self):
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"ok":true}', ""))
+        config = {
+            "messaging": {
+                "enabled": True,
+                "provider": "openclaw",
+                "channel": "wecom",
+                "account": "default",
+                "target": "operator",
+                "contextual_replies": True,
+            }
+        }
+        self.assertTrue(
+            send(self.payload(type="operator_question", actions=["reply", "cancel"]), config=config, runner=runner)
+        )
+        body = runner.call_args.args[0][runner.call_args.args[0].index("--message") + 1]
+        self.assertIn("直接回复", body)
+        self.assertIn("引用", body)
+        self.assertIn("最近", body)
