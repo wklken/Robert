@@ -28,6 +28,7 @@ from robert_agent.delivery.application import scope as publication_scope
 from robert_agent.delivery.application import intents as publication_intents
 from robert_agent.delivery.application import outcomes as publication_outcomes
 from robert_agent.delivery.application import receipts as publication_receipts
+from robert_agent.delivery.application import tapd_comments
 from robert_agent.delivery import intents as intent_facts
 from robert_agent.delivery import queries as publication_queries
 from robert_agent.delivery import values as publication_values
@@ -53,6 +54,7 @@ def publish_ready_actions(
         )
         return control_command(*args, runner=run_command, **kwargs)
 
+    tapd = tapd_comments.publisher_for(config, run_command)
     with closing(db_database.connect(db_path)) as conn:
         from robert_agent.execution.application import cutover as result_cutover
 
@@ -344,6 +346,7 @@ def publish_ready_actions(
                         action,
                         reconcile_scope if scope is not None else None,
                         bounded_command,
+                        tapd=tapd,
                     )
                     if reconciliation["status"] == "confirmed_effect":
                         result = {
@@ -596,6 +599,7 @@ def publish_ready_actions(
                         conn=conn,
                         source_sha=current.get("source_sha"),
                         trusted_head_owner=current.get("head_owner"),
+                        tapd=tapd,
                         **guard_kwargs,
                     )
                 now = publication_values.now()

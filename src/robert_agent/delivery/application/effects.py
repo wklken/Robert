@@ -16,6 +16,8 @@ from robert_agent.supervision import git as supervision_git
 
 from robert_agent.delivery.application import scope as publication_scope
 from robert_agent.delivery.application import guards as publication_guards
+from robert_agent.delivery.application import tapd_comments
+from robert_agent.foundation import tapd_identity
 from robert_agent.delivery import values as publication_values
 from robert_agent.delivery.comment_receipts import match_comment
 
@@ -717,6 +719,7 @@ def publish_action(
     source_sha=None,
     trusted_head_owner=None,
     recovery_guard=None,
+    tapd=None,
 ):
     scope_violation = publication_guards.publish_scope_violation(conn, action)
     if scope_violation:
@@ -734,6 +737,21 @@ def publish_action(
             action,
             publication_scope.trusted_action_scope(conn, action),
             run_command,
+            scope_guard=lambda: publication_guards.publication_scope_guard(conn, action, recovery_guard),
+        )
+    if action["action_type"] == GitHubActionType.COMMENT and tapd_identity.parse_ticket_url(action.get("target_url")):
+        marker = hidden_marker(publication_values.decode_json(action["metadata_json"]).get("body"), COMMENT_MARKER_RE)
+        if not marker:
+            return {
+                "ok": False,
+                "status": "publish_failed",
+                "safe_error": "comment action requires robert-comment idempotency marker",
+                "retryable": False,
+            }
+        return tapd_comments.publish(
+            action,
+            tapd,
+            marker,
             scope_guard=lambda: publication_guards.publication_scope_guard(conn, action, recovery_guard),
         )
     if action["action_type"] == GitHubActionType.COMMENT and vote_publish.is_vote(action):

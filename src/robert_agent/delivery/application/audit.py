@@ -18,9 +18,12 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
+from robert_agent.delivery import contract as result_contract
 from robert_agent.delivery import policies
+from robert_agent.foundation import tapd_identity
 from robert_agent.foundation.commands import emit
 from robert_agent.security import redaction
+from robert_agent.work import tapd_policy
 from robert_agent.workflows.review import publish as review_publish
 from robert_agent.workflows.vote import publish as vote_publish
 
@@ -56,6 +59,7 @@ CLASSIFICATION_RECOMMENDED_ROUTES = {
     "review-pr",
     "waiting-for-user",
 }
+TAPD_RECOMMENDED_ROUTES = CLASSIFICATION_RECOMMENDED_ROUTES & tapd_policy.ROUTE_IDS
 BRANCH_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 MAX_BRANCH_SLUG_LENGTH = 60
 
@@ -222,7 +226,18 @@ def action_scope_violation(actions, action_scope):
     scoped_sources = {
         (source.get("source_type"), source.get("number")) for source in raw_sources if isinstance(source, dict)
     }
+    tapd_targets = {
+        url for url in result_contract.target_urls(action_scope) if tapd_identity.parse_ticket_url(url) is not None
+    }
     for action in actions:
+        if action.get("type") == GitHubActionType.COMMENT and not vote_publish.is_vote(action):
+            target_url = _string_value(action, "target_url", "url")
+            if tapd_identity.parse_ticket_url(target_url) is not None:
+                if target_url not in tapd_targets:
+                    return "comment target TAPD ticket is outside the workstream"
+                continue
+            if tapd_targets:
+                return "a TAPD request can only be answered on its own TAPD ticket"
         action_type = action.get("type")
         if action_type == GitHubActionType.SUBMIT_PR_REVIEW:
             try:
@@ -607,6 +622,16 @@ def audit_result(
                 "status": AuditStatus.FAILED.value,
                 "safe_error": "Issue dispatch implementation requires an Issue result comment as well as a PR.",
             }
+    if (
+        origin_type == SourceProvider.TAPD
+        and result.get("output_type") == OutputType.CLASSIFICATION_RESULT
+        and result.get("recommended_route") not in {None, "", *TAPD_RECOMMENDED_ROUTES}
+    ):
+        return {
+            "ok": False,
+            "status": AuditStatus.FAILED.value,
+            "safe_error": "TAPD classification requires an analysis or clarification route.",
+        }
     if origin_type == "web":
         if not result.get("consumed_work_item_event_ids"):
             return {

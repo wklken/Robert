@@ -239,6 +239,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 "robert_agent.delivery.policies",
                 "robert_agent.foundation.contracts.delivery",
                 "robert_agent.foundation.contracts.work",
+                "robert_agent.foundation.tapd_identity",
             },
         )
         for dependency in self.graph["robert_agent.execution.stages"]:

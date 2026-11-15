@@ -16,6 +16,21 @@ class FakeClient:
         self.comments = []
         self.fail_items = set()
         self.author_calls = []
+        self.written = []
+        self.fail_reads = False
+        self.write_error = None
+
+    def add_comment(self, workspace_id, kind, external_id, body):
+        """Store the body as TAPD returns it: Markdown paragraphs become HTML paragraphs."""
+        self.written.append(body)
+        comment_id = str(9000 + len(self.written))
+        html = "".join(f"<p>{part}</p>" for part in body.split("\n\n"))
+        self.comments.append(
+            TapdComment(comment_id, kind, external_id, "alice", html, "2026-11-20 11:00:00", "2026-11-20 11:00:00")
+        )
+        if self.write_error:
+            raise TapdError(self.write_error, effect_unknown=True)
+        return comment_id
 
     def author_comments(self, workspace_id, author, *, since):
         self.author_calls.append(since)
@@ -23,6 +38,8 @@ class FakeClient:
         return tuple(sorted(rows, key=lambda row: (row.created, int(row.comment_id)), reverse=True))
 
     def ticket_comments(self, workspace_id, kind, external_id):
+        if self.fail_reads:
+            raise TapdError("command_failed")
         return tuple(row for row in self.comments if row.entry_id == external_id)
 
     def get_item(self, workspace_id, kind, external_id):
