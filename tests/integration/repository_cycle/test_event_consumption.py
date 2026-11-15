@@ -105,7 +105,7 @@ class EventConsumptionTests(RepositoryCycleFixture):
             event_status = conn.execute(
                 """
                 SELECT authorization_status
-                FROM github_events
+                FROM source_events
                 WHERE event_fingerprint = 'comment:comment-1'
                 """
             ).fetchone()[0]
@@ -185,7 +185,7 @@ class EventConsumptionTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
             relationship = conn.execute(
-                "SELECT relationship FROM task_events WHERE task_id = ?",
+                "SELECT state FROM request_events WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
         # The classifier completes with one clarification child; replay must not
@@ -198,11 +198,12 @@ class EventConsumptionTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(":memory:")) as conn:
             conn.executescript("""
                 CREATE TABLE tasks(task_id TEXT, lifecycle TEXT);
-                CREATE TABLE github_events(event_id TEXT, event_fingerprint TEXT);
+                CREATE TABLE source_events(event_id TEXT, event_fingerprint TEXT);
                 CREATE TABLE task_events(task_id TEXT, event_id TEXT, relationship TEXT);
+                CREATE TABLE request_events(task_id TEXT, event_id TEXT, state TEXT);
                 INSERT INTO tasks VALUES ('task-1', 'waiting_for_user');
-                INSERT INTO github_events VALUES ('event-1', 'comment:1');
-                INSERT INTO task_events VALUES ('task-1', 'event-1', 'consumed');
+                INSERT INTO source_events VALUES ('event-1', 'comment:1');
+                INSERT INTO task_events VALUES ('task-1', 'event-1', 'context');
             """)
             event = {"event_fingerprint": "comment:1", "actor_kind": "github_user"}
             for lifecycle, relationship, expected in (
@@ -215,12 +216,16 @@ class EventConsumptionTests(RepositoryCycleFixture):
             ):
                 with self.subTest(lifecycle=lifecycle, relationship=relationship):
                     conn.execute("UPDATE tasks SET lifecycle = ?", (lifecycle,))
-                    conn.execute("UPDATE task_events SET relationship = ?", (relationship,))
+                    conn.execute("DELETE FROM request_events")
+                    if relationship == "consumed":
+                        conn.execute("INSERT INTO request_events VALUES ('task-1','event-1','consumed')")
+                    else:
+                        conn.execute("UPDATE task_events SET relationship = ?", (relationship,))
                     self.assertEqual(
                         source_events.should_skip_terminal_trigger(conn, event),
                         expected,
                     )
-            conn.execute("UPDATE task_events SET relationship = 'consumed'")
+            conn.execute("INSERT INTO request_events VALUES ('task-1','event-1','consumed')")
             self.assertFalse(
                 source_events.should_skip_terminal_trigger(
                     conn,
@@ -272,7 +277,7 @@ class EventConsumptionTests(RepositoryCycleFixture):
                 (attempt_id,),
             )
             conn.execute(
-                "UPDATE task_events SET relationship = 'consumed' WHERE task_id = ?",
+                "INSERT INTO request_events(task_id,event_id,state,created_at) SELECT task_id,event_id,'consumed',created_at FROM task_events WHERE task_id=?",
                 (task_id,),
             )
 
@@ -292,7 +297,7 @@ class EventConsumptionTests(RepositoryCycleFixture):
                 ("waiting_for_user", task_id),
             )
             self.assertEqual(
-                conn.execute("SELECT relationship FROM task_events WHERE task_id = ?", (task_id,)).fetchone()[0],
+                conn.execute("SELECT state FROM request_events WHERE task_id = ?", (task_id,)).fetchone()[0],
                 "consumed",
             )
         item = workbench.get_work_item(db_path, "github:example/backend!456")
@@ -325,7 +330,7 @@ class EventConsumptionTests(RepositoryCycleFixture):
                 ("active", child_id),
             )
             fingerprints = conn.execute(
-                "SELECT ge.event_fingerprint FROM task_events te JOIN github_events ge ON ge.event_id = te.event_id WHERE te.task_id = ?",
+                "SELECT ge.event_fingerprint FROM task_events te JOIN source_events ge ON ge.event_id = te.event_id WHERE te.task_id = ?",
                 (child_id,),
             ).fetchall()
             self.assertEqual(fingerprints, [("comment:waiting-reply",)])

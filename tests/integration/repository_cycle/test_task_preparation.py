@@ -33,8 +33,8 @@ class TaskPreparationTests(RepositoryCycleFixture):
                 table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 for table in [
                     "repos",
-                    "github_sources",
-                    "github_events",
+                    "sources",
+                    "source_events",
                     "workstreams",
                     "tasks",
                     "attempts",
@@ -45,12 +45,12 @@ class TaskPreparationTests(RepositoryCycleFixture):
             }
             route = conn.execute("SELECT expected_output, recommended_skills_json FROM route_decisions").fetchone()
 
-            source = conn.execute("SELECT html_url, state, source_updated_at FROM github_sources").fetchone()
+            source = conn.execute("SELECT html_url, state, source_updated_at FROM sources").fetchone()
             attempt = conn.execute("SELECT status, metadata_json, worktree_path, branch_name FROM attempts").fetchone()
             artifacts = dict(conn.execute("SELECT artifact_type, path FROM artifacts").fetchall())
         self.assertEqual(counts["repos"], 1)
-        self.assertEqual(counts["github_sources"], 1)
-        self.assertEqual(counts["github_events"], 1)
+        self.assertEqual(counts["sources"], 1)
+        self.assertEqual(counts["source_events"], 1)
         self.assertEqual(counts["workstreams"], 1)
         self.assertEqual(counts["tasks"], 1)
         self.assertEqual(counts["attempts"], 1)
@@ -177,8 +177,8 @@ class TaskPreparationTests(RepositoryCycleFixture):
                     "tasks",
                     "attempts",
                     "artifacts",
-                    "github_sources",
-                    "github_events",
+                    "sources",
+                    "source_events",
                     "task_events",
                     "worker_results",
                 )
@@ -194,8 +194,8 @@ class TaskPreparationTests(RepositoryCycleFixture):
         self.assertEqual(counts["workstreams"], 1)
         self.assertEqual(counts["tasks"], 1)
         self.assertEqual(counts["attempts"], 1)
-        self.assertEqual(counts["github_sources"], 0)
-        self.assertEqual(counts["github_events"], 0)
+        self.assertEqual(counts["sources"], 0)
+        self.assertEqual(counts["source_events"], 0)
         self.assertEqual(counts["task_events"], 0)
         self.assertEqual(counts["worker_results"], 0)
         self.assertEqual(task[1:3], ("local-result", "local_result"))

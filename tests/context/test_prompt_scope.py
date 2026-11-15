@@ -316,3 +316,25 @@ class PromptScopeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_native_evidence_uses_bound_helper_and_repo_digest_contract(self):
+        prompt = self.render(
+            "source-evidence",
+            runtime_context={
+                "origin_type": "tapd",
+                "native_result": {
+                    "round_id": "round-1",
+                    "request_id": "request-1",
+                    "repo_id": "repo-1",
+                    "capability": "readonly",
+                    "role": "evidence",
+                    "allowed_actions": [],
+                },
+                "native_input_revision": "input-v1",
+            },
+        )
+        self.assertIn("task.source_evidence", prompt)
+        self.assertIn('"planned_actions": []', prompt)
+        self.assertIn('"repo_id": "repo-1"', prompt)
+        self.assertIn("sha256:<byte digest>", prompt)
+        self.assertNotIn("planned_github_actions", prompt)

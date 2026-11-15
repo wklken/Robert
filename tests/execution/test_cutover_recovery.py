@@ -144,12 +144,12 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
 
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
-                "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,state) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open')"
+                "INSERT INTO sources(source_id,repo_id,source_key,source_type,number,html_url,state, provider, host, project_key, external_id) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo'), '205')"
             )
             conn.execute("UPDATE workstreams SET primary_source_id='source' WHERE workstream_id='bad'")
             event = {"event_type": "assigned", "number": 205, "body": "", "event_fingerprint": "assignment:205"}
             conn.execute(
-                "INSERT INTO github_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','assigned','assignment:205',?,?)",
+                "INSERT INTO source_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','assigned','assignment:205',?,?)",
                 (json.dumps(event), self.now),
             )
             conn.execute(
@@ -180,7 +180,7 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
             )
             self.assertEqual(metadata["refreshed_context"][0]["body"], "suppress specified plugin warning")
             self.assertEqual(
-                json.loads(conn.execute("SELECT payload_json FROM github_events WHERE event_id='event'").fetchone()[0])[
+                json.loads(conn.execute("SELECT payload_json FROM source_events WHERE event_id='event'").fetchone()[0])[
                     "body"
                 ],
                 "",
@@ -191,10 +191,10 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
         event = {"body": "", "event_fingerprint": "assignment:205", "authorization_status": "authorized_trigger"}
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
-                "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,state) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open')"
+                "INSERT INTO sources(source_id,repo_id,source_key,source_type,number,html_url,state, provider, host, project_key, external_id) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo'), '205')"
             )
             conn.execute(
-                "INSERT INTO github_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','assigned','assignment:205',?,?)",
+                "INSERT INTO source_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','assigned','assignment:205',?,?)",
                 (json.dumps(event), self.now),
             )
             conn.execute(
@@ -223,12 +223,12 @@ class CutoverRecoveryTests(CutoverRecoveryFixture):
 
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
-                "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,state) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open')"
+                "INSERT INTO sources(source_id,repo_id,source_key,source_type,number,html_url,state, provider, host, project_key, external_id) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo'), '205')"
             )
             conn.execute("UPDATE workstreams SET primary_source_id='source' WHERE workstream_id='bad'")
             event = {"event_type": "notification", "number": 205, "event_fingerprint": "assignment:205"}
             conn.execute(
-                "INSERT INTO github_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','notification','assignment:205',?,?)",
+                "INSERT INTO source_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','notification','assignment:205',?,?)",
                 (json.dumps(event), self.now),
             )
             conn.execute(

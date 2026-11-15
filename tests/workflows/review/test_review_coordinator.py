@@ -55,9 +55,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM review_sessions").fetchone()[0], 2)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
-            self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM task_events WHERE relationship='pending'").fetchone()[0], 0
-            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM request_events WHERE state='pending'").fetchone()[0], 0)
         self.finish_task(first.task_id)
         self.git_fixture.commit("value = 3\n")
         self.cycle([])  # local drain starts the already queued request, no new GitHub event
@@ -760,7 +758,10 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
                 task, _ = fixture.current()
                 fixture.finish_task(task)
                 with fixture_database.connect(fixture.db) as conn:
-                    conn.execute("UPDATE task_events SET relationship='consumed' WHERE task_id=?", (task,))
+                    conn.execute(
+                        "INSERT INTO request_events(task_id,event_id,state,created_at) SELECT task_id,event_id,'consumed',created_at FROM task_events WHERE task_id=?",
+                        (task,),
+                    )
                     self.assertEqual(
                         conn.execute("SELECT COUNT(*) FROM task_events WHERE task_id=?", (task,)).fetchone()[0], 1
                     )
@@ -786,7 +787,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         runtime = validate_config.validate_config(self.config_path, skip_external=True)
         repo = runtime["repos"][0]
         with fixture_database.connect(self.db) as conn:
-            event = json.loads(conn.execute("SELECT payload_json FROM github_events LIMIT 1").fetchone()[0])
+            event = json.loads(conn.execute("SELECT payload_json FROM source_events LIMIT 1").fetchone()[0])
             route = workflow_routing.effective_route(runtime, repo, event)
             queued = review_store.enqueue(conn, repo, event, route, route["native_review_workers"])
 

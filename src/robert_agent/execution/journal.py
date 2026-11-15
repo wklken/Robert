@@ -158,7 +158,10 @@ def mark_repo_failure(conn, run_id, repo_id, failed_step, run_now, error):
             )
 
 
-def summarize_repositories(conn, run_id, run_now, repo_summaries, prompt_count, queued_count, *, dry_run, skip_publish):
+def summarize_repositories(
+    conn, run_id, run_now, repo_summaries, prompt_count, queued_count, *, dry_run, skip_publish, source_publish=None
+):
+    source_publish = source_publish or {}
     aggregate_counts = {
         "supervised_count": sum(item["supervised_count"] for item in repo_summaries),
         "failed_timeout_recovered_count": sum(item["failed_timeout_recovered_count"] for item in repo_summaries),
@@ -167,14 +170,18 @@ def summarize_repositories(conn, run_id, run_now, repo_summaries, prompt_count, 
         "raw_event_count": sum(item["raw_event_count"] for item in repo_summaries),
         "decision_count": sum(item["decision_count"] for item in repo_summaries),
         "current_state_closed_skip_count": sum(item["current_state_closed_skip_count"] for item in repo_summaries),
-        "publish_pending_count": sum(item["publish_pending_count"] for item in repo_summaries),
-        "published_count": sum(item["published_count"] for item in repo_summaries),
-        "publish_skipped_count": sum(item["publish_skipped_count"] for item in repo_summaries),
-        "publish_failed_count": sum(item["publish_failed_count"] for item in repo_summaries),
+        "publish_pending_count": sum(item["publish_pending_count"] for item in repo_summaries)
+        + source_publish.get("pending_count", 0),
+        "published_count": sum(item["published_count"] for item in repo_summaries)
+        + source_publish.get("published_count", 0),
+        "publish_skipped_count": sum(item["publish_skipped_count"] for item in repo_summaries)
+        + source_publish.get("skipped_count", 0),
+        "publish_failed_count": sum(item["publish_failed_count"] for item in repo_summaries)
+        + source_publish.get("failed_count", 0),
         "finalized_task_count": sum(item["finalized_task_count"] for item in repo_summaries),
     }
     publish_result = {
-        "ok": aggregate_counts["publish_failed_count"] == 0,
+        "ok": aggregate_counts["publish_failed_count"] == 0 and source_publish.get("ok", True),
         "status": (
             "skipped"
             if skip_publish
@@ -188,6 +195,16 @@ def summarize_repositories(conn, run_id, run_now, repo_summaries, prompt_count, 
         "failed_count": aggregate_counts["publish_failed_count"],
         "finalized_task_count": aggregate_counts["finalized_task_count"],
     }
+    if source_publish:
+        publish_result["source_publication"] = source_publish
+        publish_result.update({key: count for key, count in source_publish.items() if key.startswith("native_")})
+        if not source_publish.get("ok", True):
+            publish_result["status"] = source_publish.get("status", "publish_failed")
+    for item in repo_summaries:
+        for key, count in item.get("native_publication_counts", {}).items():
+            publish_result[key] = publish_result.get(key, 0) + count
+        if item.get("failure_status") in {"core_rate_limit_floor", "rate_limit_check_failed"}:
+            publish_result["status"] = item["failure_status"]
     if skip_publish:
         publish_result["reason"] = "skip_publish"
 
@@ -229,19 +246,26 @@ def summarize_repositories(conn, run_id, run_now, repo_summaries, prompt_count, 
             (item for item in repo_summaries if item["status"] == "failed" and item.get("safe_error")),
             None,
         )
+        status = aggregate_repo_step_status(conn, run_id, step)
         error = None
-        if aggregate_repo_step_status(conn, run_id, step) == "failed" and failed_summary:
+        if status == "failed" and failed_summary:
             error = {
                 "status": failed_summary.get("failure_status", "failed"),
                 "safe_error": failed_summary["safe_error"],
                 "repo_id": failed_summary["repo_id"],
                 "full_name": failed_summary["full_name"],
             }
+        if step == "publish_actions" and source_publish:
+            if not source_publish.get("ok", True):
+                error = publish_result
+                status = "failed"
+            elif status in {"skipped", "pending"}:
+                status = "succeeded"
         mark_run_step(
             conn,
             run_id,
             step,
-            aggregate_repo_step_status(conn, run_id, step),
+            status,
             run_now,
             output=step_outputs.get(step),
             error=error,
@@ -320,7 +344,7 @@ def finish_dispatch(
         return
     mark_run_step(conn, run_id, "dispatch", "succeeded", finished_at, output={"dispatch_count": dispatch_count})
     mark_run_step(conn, run_id, "summarize", "succeeded", finished_at, output=summary)
-    if overall_status not in {"failed", "partial_failure"}:
+    if overall_status not in {"failed", "partial_failure"} and publish_result["ok"]:
         finish_run(conn, run_id, "completed", finished_at, summary)
         return
     first_repo_error = next(

@@ -8,6 +8,8 @@ from sqlalchemy import case, func, select
 
 from robert_agent.persistence import statements
 from robert_agent.persistence.catalog import tables
+from robert_agent.persistence.queries.repair_cycles import episode_attempt_count
+from robert_agent.persistence.queries.request_events import task_relationship
 from robert_agent.persistence.predicates import occupied_attempt
 
 
@@ -236,7 +238,7 @@ def remediation_for_workstreams(conn, workstream_ids):
         episode.observed_head_sha,
         episode.observed_base_sha,
         episode.result_head_sha,
-        episode.attempt_count,
+        episode_attempt_count(episode).label("attempt_count"),
         episode.failure_signature,
         episode.first_seen_at,
         episode.updated_at,
@@ -260,12 +262,12 @@ def occupied_tasks(conn, workstream_ids):
 def event_sources_for_tasks(conn, task_ids):
     links, events, sources = (
         tables["task_events"],
-        tables["github_events"],
-        tables["github_sources"],
+        tables["source_events"],
+        tables["sources"],
     )
     preference = case(
         {"trigger": 0, "context": 1, "pending": 2, "consumed": 3},
-        value=links.c.relationship,
+        value=task_relationship(links),
         else_=4,
     )
     query = (
@@ -293,7 +295,7 @@ def primary_sources_for_tasks(conn, task_ids):
     tasks, workstreams, sources = (
         tables["tasks"],
         tables["workstreams"],
-        tables["github_sources"],
+        tables["sources"],
     )
     query = select(
         tasks.c.task_id,

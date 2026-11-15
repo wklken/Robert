@@ -33,6 +33,7 @@ from sqlalchemy import (
 
 
 from robert_agent.persistence.catalog import tables
+from robert_agent.persistence.queries.request_events import task_relationship
 from robert_agent.persistence import statements
 
 
@@ -293,7 +294,7 @@ def find_for_current_dispatch_target(conn, attempt_id):
 def find_for_prepared_attempt_event_and_route(conn, attempt_id):
     table1 = tables["attempts"].alias("a")
     table2 = tables["task_events"].alias("te")
-    table3 = tables["github_events"].alias("ge")
+    table3 = tables["source_events"].alias("ge")
     table4 = tables["route_decisions"].alias("rd")
     query5 = (
         select(table3.c["payload_json"], table4.c["route_id"])
@@ -306,7 +307,7 @@ def find_for_prepared_attempt_event_and_route(conn, attempt_id):
         .order_by(
             case(
                 (sql_constant("trigger"), sql_constant(0)),
-                value=table2.c["relationship"],
+                value=task_relationship(table2),
                 else_=sql_constant(1),
             ).asc(),
             table2.c["created_at"].asc(),
@@ -1386,6 +1387,11 @@ def has_local_work_filtered(conn, items, value_1, value_2):
     )
 
 
+def _owned_by_source_round(task):
+    member = tables["source_round_tasks"]
+    return select(member.c.task_id).where(member.c.task_id == task.c.task_id).correlate(task).exists()
+
+
 @lru_cache(maxsize=2)
 def _has_local_work_filtered_2_statement(scoped):
     table1 = tables["attempts"].alias("a")
@@ -1425,6 +1431,7 @@ def _has_local_work_filtered_2_statement(scoped):
                     [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]
                 ),
                 runnable_task(table2),
+                ~_owned_by_source_round(table2),
             )
         )
         .correlate_except(table1, table2, table3, table4)
@@ -1511,7 +1518,7 @@ def _lifecycle_facts_filtered_statement():
     table1 = tables["attempts"].alias("a")
     table2 = tables["tasks"].alias("t")
     table3 = tables["workstreams"].alias("w")
-    table4 = tables["github_sources"].alias("gs")
+    table4 = tables["sources"].alias("gs")
     query5 = (
         select(
             table1.c["attempt_id"],
@@ -1606,6 +1613,7 @@ def find_for_queue_prepared_attempts(conn, repo_id, capacity, *, reserved_only=F
                 table1.c["status"] == sql_constant(AttemptStatus.PREPARED.value),
                 func.json_extract(table2.c["metadata_json"], sql_constant("$.dispatch_wait")).is_(null()),
                 runnable_task(table2),
+                ~_owned_by_source_round(table2),
                 resumable_native_slot(table2, table1) if reserved_only else ~resumable_native_slot(table2, table1),
                 table2.c["lifecycle"].in_(
                     [sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value)]

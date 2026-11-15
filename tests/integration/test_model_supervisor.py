@@ -16,7 +16,7 @@ class ModelPrSupervisionTests(PrRemediationIntegrationFixture):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             for old, key in (("source:issue", "github:example/backend#1"), ("source:pr", "github:example/backend!13")):
                 current = github_source_id(key)
-                conn.execute("UPDATE github_sources SET source_id=? WHERE source_id=?", (current, old))
+                conn.execute("UPDATE sources SET source_id=? WHERE source_id=?", (current, old))
                 conn.execute("UPDATE workstreams SET primary_source_id=? WHERE primary_source_id=?", (current, old))
 
     def test_model_selects_one_repair_and_old_rules_cannot_bypass_wait(self):
@@ -72,7 +72,7 @@ class ModelPrSupervisionTests(PrRemediationIntegrationFixture):
                 conn, "repo:example/backend", self.repo, self.runner(), now, config=config
             )
             request = decisions.packet(decisions.snapshot(conn, "github:example/backend#1", config, now), {})
-            conn.execute("UPDATE github_sources SET state='closed' WHERE source_type='pull_request'")
+            conn.execute("UPDATE sources SET state='closed' WHERE source_type='pull_request'")
             self.assertFalse(decisions.approve(conn, config, request, {}, now))
 
     def test_cleared_conflict_and_green_ci_retract_old_model_candidates(self):
@@ -117,12 +117,13 @@ class ModelPrSupervisionTests(PrRemediationIntegrationFixture):
     def test_multiple_pr_scan_never_commits_partial_candidate_withdrawal(self):
         config = {"repos": [self.repo], "supervision": {"mode": "decide"}}
         runner = self.runner()
-        runner.responses[("gh", "api", "repos/example/backend/pulls/14")] = runner.responses[
-            ("gh", "api", "repos/example/backend/pulls/13")
-        ]
+        runner.responses[("gh", "api", "repos/example/backend/pulls/14")] = {
+            **runner.responses[("gh", "api", "repos/example/backend/pulls/13")],
+            "html_url": "https://github.com/example/backend/pull/14",
+        }
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,title,state,author_login) VALUES ('source14','repo:example/backend','github:example/backend!14','pull_request',14,'Fix','open','robert-bot')"
+                "INSERT INTO sources(source_id,repo_id,source_key,source_type,number,title,state,author_login, provider, host, project_key, external_id) VALUES ('source14','repo:example/backend','github:example/backend!14','pull_request',14,'Fix','open','robert-bot', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), '14')"
             )
             conn.execute(
                 "INSERT INTO workstreams(workstream_id,repo_id,primary_source_id,origin_workstream_id,lifecycle,created_at,updated_at) VALUES ('github:example/backend!14','repo:example/backend','source14','github:example/backend#1','completed','2026-07-26','2026-07-26')"

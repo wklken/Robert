@@ -111,19 +111,19 @@ class WorkItemCommandFixture(unittest.TestCase):
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute(
                 """
-                INSERT INTO github_sources(
+                INSERT INTO sources(
                   source_id, repo_id, source_key, source_type, number, html_url,
                   title, state, author_login
-                ) VALUES (
+                , provider, host, project_key, external_id) VALUES (
                   'source-pr-21', 'repo-1', 'github:example/repo!21',
                   'pull_request', 21, 'https://github.com/example/repo/pull/21',
                   'Update AIDev integration', 'open', 'robot'
-                )
+                , 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '21')
                 """
             )
             conn.execute(
                 """
-                INSERT INTO github_events(
+                INSERT INTO source_events(
                   event_id, repo_id, source_id, event_fingerprint, event_type,
                   actor_login, author_association, authorization_status,
                   event_at, payload_json

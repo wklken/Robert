@@ -17,6 +17,7 @@ from robert_agent.persistence.queries import dispatch_requests as queries, repos
 from robert_agent.persistence.stores import dispatch_requests as stores
 from robert_agent.security.redaction import redact_text
 from robert_agent.work import dispatch_requests as facts
+from robert_agent.work.application import dispatch_ingress
 from robert_agent.work.errors import WorkItemValidationError, WorkItemNotFoundError, WorkItemConflictError
 from robert_agent.work.inputs import validate_text, MAX_DESCRIPTION
 from robert_agent.work.messaging_identity import authenticate, dispatch_allowed, IDENTITY_FIELDS
@@ -129,7 +130,7 @@ def _failed(config, row, status, message):
 def _advance_one(config, row, runner):
     repo = next(item for item in config["repos"] if values.repository_id(item["full_name"]) == row["repo_id"])
     request_id = row["request_id"]
-    body = row["body"] + f"\n\n<!-- robert-dispatch request_id={request_id} -->"
+    body = facts.issue_body(row)
     if row["status"] == Status.ACCEPTED:
         try:
             issues.check_identity(repo["github_account"], runner=runner)
@@ -191,7 +192,11 @@ def _advance_one(config, row, runner):
             error="",
         ):
             saved = queries.get(conn, request_id)
-            _notice(conn, saved, "created", "Issue created; Robert will classify and execute the request.", now)
+            event = dispatch_ingress.record_confirmed(conn, saved, now)
+            if event is None:
+                _notice(conn, saved, "attention", "Issue created; its request binding needs local inspection.", now)
+            else:
+                _notice(conn, saved, "created", "Issue created; Robert will classify and execute the request.", now)
     wakeup.notify(config["db_path"])
 
 

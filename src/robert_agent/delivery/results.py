@@ -1,6 +1,6 @@
 """Read worker results and persist audit and result bookkeeping."""
 
-from robert_agent.foundation.contracts.delivery import AuditStatus, PublishStatus
+from robert_agent.foundation.contracts.delivery import AuditStatus, NATIVE_RESULT_CONTRACT, PublishStatus
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
 
 from robert_agent.persistence import records as db_records
@@ -25,23 +25,36 @@ def load_result_payload(conn, result_row):
         handoff,
         metadata_json,
     ) = result_row
+    metadata = json.loads(metadata_json) if metadata_json else {}
+    native = metadata.get("result_contract") == NATIVE_RESULT_CONTRACT
     actions = []
-    for row in db_read_github_actions.find_metadata_json_and_target_url_and_external_id_by_result_id(conn, result_id):
+    for row in db_read_github_actions.find_action_records_by_result_id(conn, result_id):
         action = json.loads(row[0])
-        if row[1]:
+        if native:
+            action.update(provider=row[3], target=json.loads(row[4]) if row[4] else None, type=row[5])
+        elif row[1]:
             action["target_url"] = row[1]
             action["url"] = row[1]
-        if row[2]:
+        if row[2] and not native:
             action["id"] = row[2]
         actions.append(action)
-    metadata = json.loads(metadata_json) if metadata_json else {}
+    normalized = metadata.get("normalized_payload", {})
     recommended_route = metadata.get("recommended_route", "")
     return {
         "result_id": result_id,
         "task_id": task_id,
         "attempt_id": attempt_id,
         "output_type": output_type,
-        "planned_github_actions": actions,
+        **(
+            {"planned_actions": actions, "native_source": normalized.get("native_source")}
+            if native
+            else {"planned_github_actions": actions}
+        ),
+        **(
+            {field: normalized[field] for field in ("evidence", "investigation_question") if field in normalized}
+            if native
+            else {}
+        ),
         "consumed_event_fingerprints": json.loads(consumed_json),
         "verification": json.loads(verification_json),
         "handoff": handoff,
@@ -51,8 +64,7 @@ def load_result_payload(conn, result_row):
         "review_point_evaluation": metadata.get("review_point_evaluation", []),
         "review_input_kind": metadata.get("review_input_kind"),
         "recommended_route": recommended_route,
-        "classification_route_defaulted": metadata.get("normalized_payload", {}).get("classification_route_defaulted")
-        is True,
+        "classification_route_defaulted": normalized.get("classification_route_defaulted") is True,
         "branch_slug": metadata.get("branch_slug", ""),
         "consumed_work_item_event_ids": metadata.get(
             "consumed_work_item_event_ids",

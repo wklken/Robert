@@ -16,8 +16,8 @@ class WorkstreamSourceQueryTests(unittest.TestCase):
                 VALUES ('repo-1', 'owner/repo', 'robot', 'main', '/repo', '/repo/.worktrees')"""
             )
             conn.executemany(
-                """INSERT INTO github_sources (source_id, repo_id, source_key, source_type, number)
-                VALUES (?, 'repo-1', ?, ?, ?)""",
+                """INSERT INTO sources (source_id, repo_id, source_key, source_type, number, provider, host, project_key, external_id)
+                VALUES (?, 'repo-1', ?, ?, ?, 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), CAST(?4 AS TEXT))""",
                 [
                     ("issue", "owner/repo#4", "issue", 4),
                     ("pr", "owner/repo!4", "pull_request", 4),

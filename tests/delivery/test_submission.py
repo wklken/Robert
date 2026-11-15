@@ -167,7 +167,7 @@ class SubmissionTests(WorkerProtocolFixture):
             conn.execute(
                 "UPDATE tasks SET task_kind='ci_remediation', metadata_json=json_object('remediation_episode_id','episode-ci')"
             )
-            conn.execute("UPDATE github_sources SET source_type='pull_request',source_key='x/y!1'")
+            conn.execute("UPDATE sources SET source_type='pull_request',source_key='x/y!1'")
             conn.execute("""INSERT INTO pr_remediation_episodes(episode_id,workstream_id,episode_kind,subject_key,
                 observed_head_sha,observed_base_sha,status,failure_signature,first_seen_at,updated_at)
                 VALUES('episode-ci','ws-1','ci','ci-1','head-1','base-1','remediating','failure-1','now','now')""")

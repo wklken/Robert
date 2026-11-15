@@ -297,13 +297,14 @@ def controlled_e2e_acceptance(
     runner = _PublishRunner()
     original_publish_ready_actions = publish.publish_ready_actions
 
-    def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None):
+    def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None, *, provider):
         return original_publish_ready_actions(
             db_path,
             dry_run=dry_run,
             run_command=runner,
             repo_id=repo_id,
             config=config,
+            provider=provider,
         )
 
     try:

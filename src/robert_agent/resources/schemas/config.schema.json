@@ -152,6 +152,76 @@
       },
       "additionalProperties": false,
       "default": {}
+    },
+    "tapdProjectScope": {
+      "type": "object",
+      "required": ["host", "workspace_id"],
+      "additionalProperties": false,
+      "properties": {
+        "host": {"type": "string", "minLength": 1},
+        "workspace_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "tapdProject": {
+      "type": "object",
+      "required": ["workspace_id", "trusted_author", "repositories"],
+      "additionalProperties": false,
+      "properties": {
+        "workspace_id": {"type": "string", "minLength": 1},
+        "trusted_author": {"type": "string", "minLength": 1},
+        "operators": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1},
+          "default": []
+        },
+        "repositories": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "mentions": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean", "default": false},
+            "activated_after": {"type": "string", "minLength": 1}
+          }
+        },
+        "rules": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/tapdRule"},
+          "default": []
+        }
+      }
+    },
+    "tapdRule": {
+      "type": "object",
+      "required": ["id", "assignee", "label", "repo", "kinds"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "assignee": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "repo": {"type": "string", "minLength": 1},
+        "kinds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "enum": ["story", "bug"]}
+        },
+        "repair": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": false,
+          "properties": {
+            "ci": {"type": "boolean", "default": true},
+            "conflict": {"type": "boolean", "default": true}
+          }
+        }
+      }
     }
   },
   "required": [
@@ -710,6 +780,26 @@
       "additionalProperties": false,
       "default": {}
     },
+    "tapd": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean", "default": false},
+        "host": {"type": "string", "minLength": 1},
+        "executable": {"type": "string", "minLength": 1},
+        "cwd": {"type": "string", "minLength": 1},
+        "api_timezone": {"type": "string", "minLength": 1},
+        "bot_name": {"type": "string", "minLength": 1},
+        "reply_name": {"type": "string", "minLength": 1},
+        "model_worker": {"type": "string", "minLength": 1},
+        "projects": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/tapdProject"},
+          "default": []
+        }
+      }
+    },
     "messaging": {
       "type": "object",
       "default": {},
@@ -759,12 +849,16 @@
         },
         "repos": {
           "type": "array",
-          "minItems": 1,
           "uniqueItems": true,
           "items": {
             "type": "string",
             "minLength": 1
           }
+        },
+        "tapd_projects": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/tapdProjectScope"}
         },
         "thread": {
           "type": "string",

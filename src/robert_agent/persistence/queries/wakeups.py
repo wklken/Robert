@@ -34,7 +34,7 @@ def find_for_parent_allows_child(conn, retrigger_wakeup_id, parent_task_id):
     table1 = tables["wakeups"].alias("wu")
     table2 = tables["tasks"].alias("t")
     table3 = tables["workstreams"].alias("w")
-    table4 = tables["github_sources"].alias("gs")
+    table4 = tables["sources"].alias("gs")
     query5 = (
         select(sql_constant(1))
         .select_from(

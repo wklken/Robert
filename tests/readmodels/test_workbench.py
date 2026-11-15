@@ -47,10 +47,10 @@ class WorkbenchTests(unittest.TestCase):
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute(
                 """
-                INSERT INTO github_sources(
+                INSERT INTO sources(
                   source_id, repo_id, source_key, source_type, number,
                   html_url, title, state, author_login, source_updated_at
-                ) VALUES (?, 'repo-1', ?, 'pull_request', ?, ?, ?, 'open', ?, ?)
+                , provider, host, project_key, external_id) VALUES (?, 'repo-1', ?, 'pull_request', ?, ?, ?, 'open', ?, ?, 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), CAST(?3 AS TEXT))
                 """,
                 (
                     source_id,
@@ -91,7 +91,7 @@ class WorkbenchTests(unittest.TestCase):
             )
             conn.execute(
                 """
-                INSERT INTO github_events(
+                INSERT INTO source_events(
                   event_id, repo_id, source_id, event_fingerprint,
                   event_type, actor_login, authorization_status, event_at
                 ) VALUES (?, 'repo-1', ?, ?, 'review_requested', ?, 'authorized', ?)
@@ -131,7 +131,7 @@ class WorkbenchTests(unittest.TestCase):
 
         self.seed_workstream(task_lifecycle="completed", workstream_lifecycle="completed")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute("UPDATE github_sources SET state = 'closed'")
+            conn.execute("UPDATE sources SET state = 'closed'")
             conn.execute("""
                 INSERT INTO work_items(
                   work_item_id, repo_id, title, origin_type, origin_source_id,
@@ -244,7 +244,7 @@ class WorkbenchTests(unittest.TestCase):
         self.seed_workstream(task_lifecycle="failed", workstream_lifecycle="completed")
         self.seed_publish_action(publish_status="skipped")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute("UPDATE github_sources SET state='closed'")
+            conn.execute("UPDATE sources SET state='closed'")
             conn.execute("UPDATE attempts SET status='failed'")
         payload = workbench.list_work_items(self.db_path, bucket="history")
         self.assertEqual(payload["counts"]["needs_attention"], 0)

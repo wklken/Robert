@@ -15,9 +15,11 @@ class StageProfile:
 
 STAGES = {
     "task.classify": StageProfile("helper", (OutputType.CLASSIFICATION_RESULT,)),
+    "task.classify_source": StageProfile("helper", (OutputType.CLASSIFICATION_RESULT,)),
     "task.implement": StageProfile("helper", (OutputType.NEW_PR,)),
     "task.update_pr": StageProfile("helper", (OutputType.UPDATE_EXISTING_PR,)),
     "task.analyze": StageProfile("helper", (OutputType.LOCAL_RESULT, OutputType.COMMENT_ANALYSIS)),
+    "task.source_evidence": StageProfile("helper", (OutputType.LOCAL_RESULT,)),
     "task.review_pr": StageProfile("helper", (OutputType.PR_REVIEW_COMMENT,)),
     "task.review_feedback": StageProfile("helper", (OutputType.REVIEW_COMMENT,)),
     "task.ask_user": StageProfile("helper", (OutputType.WAITING_FOR_USER,)),
@@ -30,6 +32,8 @@ STAGES = {
     "vote.prepare": StageProfile("atomic-files", ("prepared_request",), boundary="vote"),
     "vote.cast": StageProfile("atomic-files", ("ballot",), boundary="vote"),
     "vote.synthesize": StageProfile("atomic-files", ("synthesis",), boundary="vote"),
+    "source.identify": StageProfile("stdout-json", ("source-identify-v1", "source-identify-v2"), tools=False),
+    "source.synthesis": StageProfile("stdout-json", ("source-synthesis-v1", "source-synthesis-v2"), tools=False),
     "supervision.diagnose": StageProfile("stdout-json", ("diagnosis",), tools=False),
     "supervision.decide": StageProfile("stdout-json", ("decision",), tools=False),
 }

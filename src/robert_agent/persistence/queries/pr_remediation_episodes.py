@@ -8,6 +8,7 @@ from sqlalchemy import select, bindparam, and_, null, case, LABEL_STYLE_NONE
 
 
 from robert_agent.persistence.catalog import tables
+from robert_agent.persistence.queries.repair_cycles import episode_attempt_count
 from robert_agent.persistence import statements
 
 
@@ -124,7 +125,7 @@ def load_episode(conn, episode_id):
             tables["pr_remediation_episodes"].c["observed_base_sha"],
             tables["pr_remediation_episodes"].c["result_head_sha"],
             tables["pr_remediation_episodes"].c["status"],
-            tables["pr_remediation_episodes"].c["attempt_count"],
+            episode_attempt_count(tables["pr_remediation_episodes"].c).label("attempt_count"),
             tables["pr_remediation_episodes"].c["failure_signature"],
             tables["pr_remediation_episodes"].c["first_seen_at"],
             tables["pr_remediation_episodes"].c["updated_at"],
@@ -151,7 +152,7 @@ def find_for_episodes_for_workstream(conn, workstream_id):
             tables["pr_remediation_episodes"].c["observed_base_sha"],
             tables["pr_remediation_episodes"].c["result_head_sha"],
             tables["pr_remediation_episodes"].c["status"],
-            tables["pr_remediation_episodes"].c["attempt_count"],
+            episode_attempt_count(tables["pr_remediation_episodes"].c).label("attempt_count"),
             tables["pr_remediation_episodes"].c["failure_signature"],
             tables["pr_remediation_episodes"].c["first_seen_at"],
             tables["pr_remediation_episodes"].c["updated_at"],

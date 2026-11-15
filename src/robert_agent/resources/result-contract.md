@@ -1,7 +1,8 @@
-# Compact worker result contract
+# Worker result contracts
 
-`compact-v1` is the only submission protocol. Robert records the binding on each
-attempt. The worker helper requires `--db`, `--task-id`, `--attempt-id` and
+Robert selects the submission contract from the persisted attempt. GitHub and
+Web use `compact-v1`. A TAPD source-round Worker attempt uses `native-v1` when
+bound to a supported repository role. The worker helper requires `--db`, `--task-id`, `--attempt-id` and
 `--output-type`; stdin contains only the semantic submission. Programmatic
 callers use `build_result(...)` to produce that same binding envelope and
 `record_result(db, envelope)`. The helper accepts semantic JSON through stdin.
@@ -138,3 +139,30 @@ Explicit retrigger requires stopped workers and reconciled publications, then
 creates a replacement task with fresh source context. Ordinary approval cannot
 clear protocol isolation. Cancellation cannot be followed by Retry on that
 canceled work item. Completed terminal history does not require a result parser.
+
+
+## Native source-round results
+
+TAPD integration remains disabled while the live identity protocol awaits
+validation. The local `native-v1` contract uses the same helper and envelope.
+It requires `planned_actions`, `used_skills`, `verification` and the handled
+`consumed_event_fingerprints` from the bound request.
+
+- Each action selects a controller-provided `provider`, `type` and `target_id`
+  from the attempt's `allowed_actions`. TAPD comments also carry a `body`.
+- Classification returns an allowed recommendation with no actions.
+- Repository investigations return `local_result`, an empty action list,
+  and one to 32 `evidence` entries. Each entry has `repo_id`, a
+  repository-relative `path` and a `revision` of `sha256:<64 lowercase hex digits>`
+  for the exact file bytes. The controller validates file evidence separately.
+  If no exact file evidence is available, return a bounded `investigation_question`
+  with absent or empty evidence instead. It remains a local result.
+- TAPD answers and questions carry one TAPD comment. Waiting also requires the
+  existing structured `operator_question`.
+- Development plans GitHub push then open for a new PR, or push for an existing
+  PR, followed by a TAPD comment. GitHub candidates accept only their action
+  selectors. Preparing public GitHub text and validating the actual commit,
+  refs, and publication authority belong to the publisher.
+- A result acknowledgement records a candidate. A local child can finish
+  after its Worker process settles. Root consumption and publication require
+  their own controller receipts.

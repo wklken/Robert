@@ -1,4 +1,4 @@
-"""Single-protocol guard and isolation of incompatible task evidence."""
+"""Guard supported Worker results and isolate incompatible evidence."""
 
 from robert_agent.foundation.contracts.execution import AttemptStatus
 from robert_agent.foundation.contracts.work import TaskKind, TaskLifecycle
@@ -35,10 +35,8 @@ RECOVERY = (
 
 def inspect(conn, db_path):
     blockers = []
-    attempts, results = contract_queries.legacy_evidence(conn, result_contract.CONTRACT_ID)
-    for attempt, task, status, metadata, lifecycle in attempts:
-        if json.loads(metadata or "{}").get("result_contract") == result_contract.CONTRACT_ID:
-            continue
+    attempts, results = contract_queries.legacy_evidence(conn, tuple(result_contract.NORMALIZER_VERSIONS))
+    for attempt, task, status, _, lifecycle in attempts:
         if status in {AttemptStatus.RUNNING.value, AttemptStatus.STALE.value} or (
             status == AttemptStatus.PREPARED.value
             and lifecycle in {TaskLifecycle.QUEUED.value, TaskLifecycle.RUNNING.value}
@@ -50,7 +48,11 @@ def inspect(conn, db_path):
     for path in sorted(root.glob("*.json")):
         try:
             record = json.loads(path.read_text())
-            result_spool._validate_record(record)
+            result_spool.validate_record(record, path=path)
+            payload = record["payload"]
+            bound = db_records.first(db_read_attempts.record_result_db(conn, payload["attempt_id"], payload["task_id"]))
+            if bound and json.loads(bound[0] or "{}").get("result_contract") != record["result_contract"]:
+                raise ValueError("spool contract differs from bound attempt")
         except FileNotFoundError:
             continue  # Concurrent ingestion already removed this pending record.
         except (ValueError, OSError, TypeError, KeyError):

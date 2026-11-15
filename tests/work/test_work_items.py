@@ -33,9 +33,9 @@ class WorkItemSchemaTests(unittest.TestCase):
         )
         self.conn.execute(
             """
-            INSERT INTO github_sources(
+            INSERT INTO sources(
               source_id, repo_id, source_key, source_type, number, title, author_login
-            ) VALUES ('source-1', 'repo-1', 'example/repo#1', 'issue', 1, 'Issue one', 'owner')
+            , provider, host, project_key, external_id) VALUES ('source-1', 'repo-1', 'example/repo#1', 'issue', 1, 'Issue one', 'owner', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '1')
             """
         )
         self.conn.execute(
@@ -348,7 +348,7 @@ class WorkItemCommandTests(WorkItemCommandFixture):
 
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("UPDATE tasks SET lifecycle = 'failed' WHERE task_id = ?", (task_id,))
-            conn.execute("UPDATE github_sources SET state = 'closed' WHERE source_id = 'source-pr-21'")
+            conn.execute("UPDATE sources SET state = 'closed' WHERE source_id = 'source-pr-21'")
         with self.assertRaisesRegex(work_items.WorkItemConflictError, "open GitHub source"):
             work_items.retrigger_failed_github_task(
                 self.db_path,
@@ -597,12 +597,12 @@ class WorkItemCommandTests(WorkItemCommandFixture):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 """
-                INSERT INTO github_sources(
+                INSERT INTO sources(
                   source_id, repo_id, source_key, source_type, number, title, author_login
-                ) VALUES (
+                , provider, host, project_key, external_id) VALUES (
                   'source-route-decision', 'repo-1', 'github:example/repo#7',
                   'issue', 7, 'Classify issue seven', 'owner'
-                )
+                , 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '7')
                 """
             )
             conn.execute(
@@ -757,12 +757,12 @@ class WorkItemCommandTests(WorkItemCommandFixture):
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute(
                 """
-                INSERT INTO github_sources(
+                INSERT INTO sources(
                   source_id, repo_id, source_key, source_type, number, title, author_login
-                ) VALUES
-                  ('issue-7', 'repo-1', 'github:example/repo#7', 'issue', 7, 'Fix issue seven', 'owner'),
-                  ('pr-8', 'repo-1', 'github:example/repo!8', 'pull_request', 8, 'Fix issue seven', 'robot'),
-                  ('pr-9', 'repo-1', 'github:example/repo!9', 'pull_request', 9, 'Independent PR', 'contributor')
+                , provider, host, project_key, external_id) VALUES
+                  ('issue-7', 'repo-1', 'github:example/repo#7', 'issue', 7, 'Fix issue seven', 'owner', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '7'),
+                  ('pr-8', 'repo-1', 'github:example/repo!8', 'pull_request', 8, 'Fix issue seven', 'robot', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '8'),
+                  ('pr-9', 'repo-1', 'github:example/repo!9', 'pull_request', 9, 'Independent PR', 'contributor', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '9')
                 """
             )
             conn.execute(

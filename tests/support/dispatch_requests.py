@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from tests.support.board_control_integration import BoardControlIntegrationFixture
 from robert_agent.configuration.validation import validate_config
@@ -38,3 +39,25 @@ class DispatchFixture(BoardControlIntegrationFixture):
         return dispatch_requests.handle(
             self.config, {**self.identity, "action": action, "request_id": request_id, **extra}
         )
+
+    def create_issue(self, *, number=1, state="open"):
+        request_id = self.draft()["request_id"]
+        self.command(request_id)
+
+        def runner(argv, **kwargs):
+            value = (
+                {"login": "robot"}
+                if argv[-1] == "user"
+                else {
+                    "id": 11 + number,
+                    "number": number,
+                    "html_url": f"https://github.com/example/repo/issues/{number}",
+                    "user": {"login": "robot"},
+                    "state": state,
+                    "body": json.loads(kwargs["input"])["body"],
+                }
+            )
+            return SimpleNamespace(stdout=json.dumps(value), returncode=0)
+
+        dispatch_requests.advance(self.config, runner=runner)
+        return request_id

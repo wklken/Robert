@@ -3,7 +3,7 @@
 import json
 
 from robert_agent.persistence import records
-from robert_agent.persistence.queries import notifications, work_item_events
+from robert_agent.persistence.queries import notification_scope as persisted_scope, work_item_events
 from robert_agent.persistence.stores import notifications as notification_store
 from robert_agent.work.inputs import QUESTION_EVENTS, FAILURE_EVENTS, DECISION_EVENTS
 
@@ -26,21 +26,22 @@ def record_attention(conn, *, event_id, work_item_id, event_type, metadata, reso
     )
 
 
-def notification_scope(conn, task_id, metadata):
-    """Return repository identity without inferring authority from chat text."""
-    item_id = metadata.get("work_item_id")
-    if item_id or task_id:
-        row = records.first(notifications.find_scope(conn, work_item_id=item_id, task_id=task_id))
-        return (row[0] if row else None), True
-    repo_id = metadata.get("repo_id")
-    if repo_id is not None or metadata.get("repository_scoped"):
-        return repo_id, True
-    if metadata.get("incident_id"):
-        row = records.first(notifications.find_incident_scope(conn, metadata["incident_id"]))
-        if row and row[0] == "controller":
-            return None, False
-        return (row[1] if row and row[0] in {"github_event", "work_item_event"} else None), True
-    return None, False
+def notification_scope(conn, notification_id):
+    """Return the actual persisted source/repository target or a denied scope."""
+    return persisted_scope.for_notice(conn, notification_id)
+
+
+def configured_operator_projects(config, identity):
+    """Resolve project access for an identity authenticated by the caller."""
+    tapd = (config or {}).get("tapd", {})
+    host = tapd.get("host")
+    if not identity or not host:
+        return frozenset()
+    return frozenset(
+        (host, project["workspace_id"])
+        for project in tapd.get("projects", ())
+        if identity in project.get("operators", ())
+    )
 
 
 def attention_details(conn, metadata, *, include_closed=False):

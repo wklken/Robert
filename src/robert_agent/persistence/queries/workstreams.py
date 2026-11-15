@@ -48,7 +48,7 @@ def find_repo_id_by_workstream_id(conn, workstream_id):
 @cache
 def _find_for_derived_pr_statement():
     table1 = tables["workstreams"].alias("w")
-    table2 = tables["github_sources"].alias("gs")
+    table2 = tables["sources"].alias("gs")
     query3 = (
         select(
             table2.c["number"],
@@ -130,7 +130,7 @@ def find_for_repair_allowed(conn, task_id):
 
 def find_for_ensure_github_work_item(conn, root_workstream_id):
     table1 = tables["workstreams"].alias("w")
-    table2 = tables["github_sources"].alias("gs")
+    table2 = tables["sources"].alias("gs")
     query3 = (
         select(
             table1.c["primary_source_id"],
@@ -184,7 +184,7 @@ def find_origin_workstream_id_by_workstream_id(conn, current):
 
 def find_for_has_open_pull_request(conn, workstream_id, workstream_id_2):
     table1 = tables["workstreams"].alias("w")
-    table2 = tables["github_sources"].alias("gs")
+    table2 = tables["sources"].alias("gs")
     query3 = (
         select(sql_constant(1))
         .select_from(
@@ -268,7 +268,7 @@ def find_active_task_id_by_workstream_id(conn, workstream_id):
 
 def find_for_collect_pr_remediation_decisions(conn, repo_id):
     table1 = tables["workstreams"].alias("w")
-    table2 = tables["github_sources"].alias("gs")
+    table2 = tables["sources"].alias("gs")
     query3 = (
         select(
             table1.c["workstream_id"],
@@ -384,7 +384,7 @@ def find_for_source_has_active_unpublished_result(conn, source_id, source_id_2):
 
 def find_for_scan_repo(conn, repo_id):
     table1 = tables["workstreams"].alias("w")
-    table2 = tables["github_sources"].alias("gs")
+    table2 = tables["sources"].alias("gs")
     query3 = (
         select(table2.c["source_type"], table2.c["number"])
         .select_from(
@@ -524,7 +524,7 @@ def load_known_workstreams(conn, repo_id):
 
 def find_for_remote_source_rows(conn, repo_id):
     table1 = tables["workstreams"].alias("w")
-    table2 = tables["github_sources"].alias("gs")
+    table2 = tables["sources"].alias("gs")
     table4 = tables["work_items"].alias("wi")
     query5 = (
         select(sql_constant(1))
@@ -558,6 +558,7 @@ def find_for_remote_source_rows(conn, repo_id):
         .where(
             and_(
                 (table1.c["repo_id"] == bindparam("p0")),
+                table2.c.provider == sql_constant("github"),
                 (
                     or_(
                         and_(

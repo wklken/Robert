@@ -102,7 +102,7 @@ class BoardLifecycleTests(unittest.TestCase):
         self.assertNotIn("approve", detail["valid_commands"])
 
     def test_issue_close_keeps_unfinished_execution_visible(self):
-        for pending in ("child_worker", "child_queued", "publication"):
+        for number, pending in enumerate(("child_worker", "child_queued", "publication"), start=16):
             with self.subTest(pending=pending):
                 item = self.create("Closed issue " + pending, start=True)
                 now = "2026-10-27T00:00:00+00:00"
@@ -112,8 +112,8 @@ class BoardLifecycleTests(unittest.TestCase):
                         "SELECT active_task_id FROM workstreams WHERE workstream_id=?", (item["workstream_id"],)
                     ).fetchone()[0]
                     conn.execute(
-                        "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,title,state) VALUES (?,'repo-1',?,'issue',16,'Closed issue','open')",
-                        (source_id, source_id),
+                        "INSERT INTO sources(source_id,repo_id,source_key,source_type,number,title,state, provider, host, project_key, external_id) VALUES (?,'repo-1',?,'issue',?,'Closed issue','open', 'github', 'github.com', 'example/repo', ?)",
+                        (source_id, source_id, number, str(number)),
                     )
                     conn.execute(
                         "UPDATE workstreams SET primary_source_id=?,lifecycle='completed',active_task_id=NULL WHERE workstream_id=?",
@@ -158,7 +158,7 @@ class BoardLifecycleTests(unittest.TestCase):
                             source_id,
                             source_id,
                             "issue",
-                            16,
+                            number,
                             task_id,
                             {"state": "closed", "state_reason": "completed", "closed_at": now},
                             "completed",
@@ -404,7 +404,7 @@ class BoardLifecycleTests(unittest.TestCase):
     def test_closed_child_pr_exposes_its_running_worker(self):
         item = self.fixture._seed_six_columns()["review"]
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute("UPDATE github_sources SET state='closed' WHERE source_id='pr-review'")
+            conn.execute("UPDATE sources SET state='closed' WHERE source_id='pr-review'")
             conn.execute(
                 "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES ('child-task','github:example/repo!12','running','2026-10-22','2026-10-22')"
             )

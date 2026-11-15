@@ -144,7 +144,6 @@ def record_task_started(conn, task_id, now, episode_id):
         .values(
             {
                 "status": sql_constant(RemediationStatus.REMEDIATING.value),
-                "attempt_count": (tables["pr_remediation_episodes"].c["attempt_count"] + sql_constant(1)),
                 "last_task_id": bindparam("p0"),
                 "updated_at": bindparam("p1"),
                 "terminal_at": null(),

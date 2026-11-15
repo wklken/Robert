@@ -3,10 +3,10 @@
 from robert_agent.persistence import transactions as transactions
 from robert_agent.foundation import errors as run_errors
 from robert_agent.execution import journal as run_journal
-from robert_agent.delivery.application import publish
+from robert_agent.delivery.application import lane as publication_lane, publish
 from robert_agent.delivery.application import result_audit
 from robert_agent.execution.application import monitor
-from robert_agent.work.application import completion, dispatch_delivery
+from robert_agent.work.application import completion, dispatch_delivery, dispatch_ingress
 from robert_agent.work.application import discovery
 from robert_agent.work.application import intake
 from robert_agent.work.application import remediation_requests
@@ -31,6 +31,7 @@ def _publish_ready_actions_for_repo(
     kwargs = {
         "dry_run": dry_run,
         "repo_id": repo_id,
+        "provider": "github",
     }
     if limit is not None:
         kwargs["limit"] = limit
@@ -62,6 +63,7 @@ def run_repo_pipeline(
     prompt_paths,
     observation=None,
     finalize_external=False,
+    source_publication=None,
 ):
     summary = {
         "repo_id": repo_id,
@@ -188,6 +190,7 @@ def run_repo_pipeline(
 
         run_journal.mark_repo_run_step(conn, run_id, repo_id, "audit_results", "running", run_now)
         try:
+            dispatch_ingress.recover_confirmed(conn, config_result, repo_id, run_now)
             audited_result_count = result_audit.audit_completed_results(
                 conn,
                 repo_id,
@@ -289,14 +292,21 @@ def run_repo_pipeline(
                 }
             else:
                 try:
-                    publish_result = _publish_ready_actions_for_repo(
-                        db_path,
-                        dry_run,
-                        repo_id,
-                        repo_count,
-                        limit=publish_limit,
-                        config_result=config_result,
-                    )
+                    if source_publication is not None:
+                        publish_result = publication_lane.publish_github_repo(
+                            db_path, config_result, repo_id, limit=publish_limit, **source_publication
+                        )
+                    else:
+                        publish_result = _publish_ready_actions_for_repo(
+                            db_path,
+                            dry_run,
+                            repo_id,
+                            repo_count,
+                            limit=publish_limit,
+                            config_result=config_result,
+                        )
+                except ControlDeadlineExceeded:
+                    raise
                 except Exception as exc:
                     publish_result = run_errors.safe_publish_error(exc)
                 if publish_limit is not None:
@@ -390,10 +400,16 @@ def run_repo_pipeline(
                 config_result=config_result,
             )
         dispatch_delivery.complete(conn, [repo_id], run_now)
+        if source_publication is not None:
+            summary["native_publication_counts"] = {
+                key: count
+                for key, count in publish_result.items()
+                if key.startswith("native_") and key.endswith("_count")
+            }
         summary["publish_pending_count"] = publish_result.get("pending_count", 0)
         summary["published_count"] = publish_result.get("published_count", 0)
         summary["publish_skipped_count"] = publish_result.get("skipped_count", 0)
-        summary["publish_failed_count"] = publish_result.get("failed_count", 0)
+        summary["publish_failed_count"] = max(int(not publish_result["ok"]), publish_result.get("failed_count", 0))
         summary["finalized_task_count"] = publish_result.get("finalized_task_count", 0)
 
         if (fixture_path or skip_external) and observation is None:

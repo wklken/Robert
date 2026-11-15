@@ -22,14 +22,14 @@ class WorkstreamBackfillTests(RepositoryCycleFixture):
             )
             conn.execute(
                 """
-                INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, title, state, author_login)
-                VALUES ('source:github:example/backend#123', 'repo:example/backend', 'github:example/backend#123', 'issue', 123, '', 'open', 'wklken')
+                INSERT INTO sources(source_id, repo_id, source_key, source_type, number, title, state, author_login, provider, host, project_key, external_id)
+                VALUES ('source:github:example/backend#123', 'repo:example/backend', 'github:example/backend#123', 'issue', 123, '', 'open', 'wklken', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), '123')
                 """
             )
             conn.execute(
                 """
-                INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, title, state, author_login)
-                VALUES ('source:github:example/backend!456', 'repo:example/backend', 'github:example/backend!456', 'pull_request', 456, '', 'open', 'robert-bot')
+                INSERT INTO sources(source_id, repo_id, source_key, source_type, number, title, state, author_login, provider, host, project_key, external_id)
+                VALUES ('source:github:example/backend!456', 'repo:example/backend', 'github:example/backend!456', 'pull_request', 456, '', 'open', 'robert-bot', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), '456')
                 """
             )
             conn.execute(
@@ -40,7 +40,7 @@ class WorkstreamBackfillTests(RepositoryCycleFixture):
             )
             conn.execute(
                 """
-                INSERT INTO github_events(event_id, repo_id, source_id, event_fingerprint, event_type, actor_login, author_association, authorization_status, event_at, payload_json)
+                INSERT INTO source_events(event_id, repo_id, source_id, event_fingerprint, event_type, actor_login, author_association, authorization_status, event_at, payload_json)
                 VALUES ('event:comment:legacy', 'repo:example/backend', 'source:github:example/backend!456', 'comment:legacy', 'comment', 'wklken', 'COLLABORATOR', 'accepted_context', '2026-06-17T00:00:00Z', '{"workstream_id": "github:example/backend!456", "origin_workstream_id": "github:example/backend#123"}')
                 """
             )

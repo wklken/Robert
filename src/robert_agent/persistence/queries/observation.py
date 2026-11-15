@@ -24,7 +24,7 @@ def task_page(conn, cursor, limit, since, repos=(), has_incidents=True):
     table1 = tables["tasks"].alias("t")
     table2 = tables["workstreams"].alias("w")
     table3 = tables["repos"].alias("r")
-    table4 = tables["github_sources"].alias("s")
+    table4 = tables["sources"].alias("s")
     table5 = tables["work_items"].alias("wi")
     query6 = (
         select(sql_constant(1))
@@ -130,7 +130,7 @@ def task_page(conn, cursor, limit, since, repos=(), has_incidents=True):
 def receipt_page(conn, scope_type, scope_id, since, limit, repos=()):
     table1 = tables["supervision_checkpoints"].alias("c")
     table2 = tables["repos"].alias("r")
-    table3 = tables["github_sources"].alias("gs")
+    table3 = tables["sources"].alias("gs")
     table5 = tables["supervision_incidents"].alias("i")
     query6 = (
         select(sql_constant(1))

@@ -3,12 +3,14 @@
 import json
 from pathlib import Path
 import sys
+from robert_agent.foundation.tapd_identity import CREDENTIAL_ENVIRONMENT
 from robert_agent.foundation.timestamps import utc_timestamp
 
 import yaml
 
 from robert_agent import worker_adapters
 from robert_agent.configuration import supervision as supervision_policy
+from robert_agent.configuration import tapd
 from robert_agent.configuration.loading import load_config
 from robert_agent.configuration.routes import load_route_policies, resolve_route_config
 from robert_agent.configuration.schema import apply_schema
@@ -22,12 +24,12 @@ def _workers(config):
         "GITHUB_TOKEN",
         "GH_ENTERPRISE_TOKEN",
         "GITHUB_ENTERPRISE_TOKEN",
-    }
+    } | CREDENTIAL_ENVIRONMENT
     for name, raw in config["workers"].items():
         if name != name.strip():
             raise ValueError(f"workers.{name} name must not contain surrounding whitespace")
         if credentials.intersection(name.strip() for name in raw["environment_allowlist"]):
-            raise ValueError(f"workers.{name}.environment_allowlist must not include GitHub credentials")
+            raise ValueError(f"workers.{name}.environment_allowlist must not include GitHub or TAPD credentials")
         normalized = worker_adapters.normalize_worker_agent_config(
             {
                 "worker_agent": raw["adapter"],
@@ -169,7 +171,10 @@ def _normalize(config, path, skip_external):
     for repo in result["repos"]:
         for policy in known_routes.values():
             resolve_route_config(result, repo, policy)
+    result["tapd"] = tapd.normalize(config["tapd"], repos=result["repos"], workers=by_name)
     messaging = result["messaging"]
+    if "tapd_projects" in messaging:
+        messaging["tapd_projects"] = tapd.normalize_notification_projects(messaging["tapd_projects"], result["tapd"])
     if "send_after" in messaging:
         start = utc_timestamp(messaging["send_after"])
         if start is None:
@@ -178,7 +183,7 @@ def _normalize(config, path, skip_external):
     if messaging.get("dispatch_enabled") and not messaging["enabled"]:
         raise ValueError("messaging.dispatch_enabled requires messaging.enabled")
     if messaging["enabled"]:
-        for field in ("channel", "account", "target", "conversation", "allowed_senders", "repos", "send_after"):
+        for field in ("channel", "account", "target", "conversation", "allowed_senders", "send_after"):
             if not messaging.get(field):
                 raise ValueError(f"messaging.{field} is required when enabled")
         for field in ("channel", "account", "target", "conversation"):
@@ -186,7 +191,12 @@ def _normalize(config, path, skip_external):
                 raise ValueError(f"messaging.{field} must not contain surrounding whitespace")
         if any(value != value.strip() for value in messaging["allowed_senders"]):
             raise ValueError("messaging.allowed_senders must use exact sender IDs")
-        if set(messaging["repos"]) - {repo["full_name"] for repo in result["repos"]}:
+        messaging_repos = messaging.get("repos", [])
+        if not messaging_repos and (messaging.get("dispatch_enabled") or not messaging.get("tapd_projects")):
+            raise ValueError(
+                "messaging.repos is required for Issue dispatch or when no TAPD project scope is configured"
+            )
+        if set(messaging_repos) - seen:
             raise ValueError("messaging.repos must reference configured repositories")
     return result
 

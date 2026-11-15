@@ -59,11 +59,10 @@ def task_review_input_policy(conn, task_id):
     return values.json_object(row[0] if row else None).get("review_input_policy", "required")
 
 
-def insert_source_and_event(conn, repo_id, event, run_now):
-    source_id = values.github_source_id(event["source_key"])
-    db_write_github_sources.insert_source_and_event(
+def insert_source_and_event(conn, repo_id, event, run_now, *, preserve_existing_source=False):
+    source_id = db_write_github_sources.insert_source_and_event(
         conn,
-        source_id,
+        values.github_source_id(event["source_key"]),
         repo_id,
         event["source_key"],
         event["source_type"],
@@ -74,6 +73,7 @@ def insert_source_and_event(conn, repo_id, event, run_now):
         event.get("source_author_login", event.get("actor_login")),
         event.get("source_updated_at"),
         event.get("state"),
+        preserve_existing=preserve_existing_source,
     )
     event_id = values.github_event_id(event["event_fingerprint"])
     previous = db_records.first(

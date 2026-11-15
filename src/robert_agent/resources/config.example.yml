@@ -114,3 +114,11 @@ messaging:
   dispatch_enabled: false
   # Before enabling, set send_after to the current time with an explicit timezone.
   # Retain that value on normal restarts; only newer notifications are delivered.
+
+# TAPD source configuration is validated locally. Live TAPD is unavailable.
+# See docs/features/tapd-source.md for project, identity and routing fields.
+tapd:
+  enabled: false
+  # bot_name: robert-wklken
+  # reply_name defaults to the selected bot_name.
+  projects: []

@@ -19,7 +19,7 @@ from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
 
 
-def find_for_owner_lease_active(conn, owner):
+def find_for_owner_lease_active(conn, owner, *, resource_key=None):
     query1 = (
         select(sql_constant(1))
         .select_from(tables["leases"])
@@ -38,7 +38,14 @@ def find_for_owner_lease_active(conn, owner):
         .correlate_except(tables["leases"])
         .set_label_style(LABEL_STYLE_NONE)
     )
-    return statements.read(conn, query1, {"p0": owner})
+    parameters = {"p0": owner}
+    if resource_key is not None:
+        query1 = query1.where(
+            tables["leases"].c["resource_key"] == bindparam("resource_key"),
+            func.julianday(tables["leases"].c["expires_at"]) > func.julianday(sql_constant("now")),
+        )
+        parameters["resource_key"] = resource_key
+    return statements.read(conn, query1, parameters)
 
 
 def find_for_acquire(conn, resource_key):

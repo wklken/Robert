@@ -21,7 +21,7 @@ class AnalysisCompletionTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.row_factory = sqlite3.Row
             conn.execute(
-                "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,state) VALUES ('source','repo-1','github:example/repo#119','issue',119,'open')"
+                "INSERT INTO sources(source_id,repo_id,source_key,source_type,number,state, provider, host, project_key, external_id) VALUES ('source','repo-1','github:example/repo#119','issue',119,'open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '119')"
             )
             conn.execute(
                 "INSERT INTO workstreams(workstream_id,repo_id,primary_source_id,lifecycle,created_at,updated_at) VALUES ('stream','repo-1','source','completed',?,?)",
@@ -102,11 +102,15 @@ class AnalysisCompletionTests(unittest.TestCase):
 
     def test_pending_request_is_not_hidden_by_completion(self):
         self.change(
-            "INSERT INTO github_events(event_id,repo_id,source_id,event_fingerprint,event_type,event_at) VALUES ('event','repo-1','source','comment:next','comment',?)",
+            "INSERT INTO source_events(event_id,repo_id,source_id,event_fingerprint,event_type,event_at) VALUES ('event','repo-1','source','comment:next','comment',?)",
             (self.now,),
         )
         self.change(
-            "INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES ('task','event','pending',?)",
+            "INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES ('task','event','context',?)",
+            (self.now,),
+        )
+        self.change(
+            "INSERT INTO request_events(task_id,event_id,state,created_at) VALUES ('task','event','pending',?)",
             (self.now,),
         )
         self.assertIsNone(self.reconcile()["completed_at"])
@@ -135,7 +139,7 @@ class AnalysisCompletionTests(unittest.TestCase):
 
     def test_related_pr_keeps_its_existing_lifecycle(self):
         self.change(
-            "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,state) VALUES ('pr','repo-1','github:example/repo!120','pull_request',120,'open')"
+            "INSERT INTO sources(source_id,repo_id,source_key,source_type,number,state, provider, host, project_key, external_id) VALUES ('pr','repo-1','github:example/repo!120','pull_request',120,'open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '120')"
         )
         self.change(
             "INSERT INTO workstreams(workstream_id,repo_id,primary_source_id,origin_workstream_id,lifecycle,created_at,updated_at) VALUES ('pr-stream','repo-1','pr','stream','completed',?,?)",

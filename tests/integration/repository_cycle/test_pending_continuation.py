@@ -64,14 +64,14 @@ class PendingContinuationTests(RepositoryCycleFixture):
         self.assertTrue(followup["ok"], followup)
         if pending_assignment:
             with closing(sqlite3.connect(db_path)) as conn, conn:
-                conn.execute("""UPDATE github_events SET payload_json=json_set(payload_json,
+                conn.execute("""UPDATE source_events SET payload_json=json_set(payload_json,
                     '$.actor_login','robert-bot','$.event_type','assigned',
                     '$.assigned_to','robert-bot','$.assignment_actor_login','wklken',
                     '$.body','issue body','$.mentions_dd',json('false'))
                     WHERE event_fingerprint IN ('comment:comment-2','comment:comment-3')""")
         if legacy_untrusted:
             with closing(sqlite3.connect(db_path)) as conn, conn:
-                conn.execute("""UPDATE github_events SET actor_login='external-author',
+                conn.execute("""UPDATE source_events SET actor_login='external-author',
                     authorization_status='accepted_review_participant',
                     payload_json=json_set(payload_json,'$.actor_login','external-author',
                         '$.authorization_status','accepted_review_participant')
@@ -117,7 +117,7 @@ class PendingContinuationTests(RepositoryCycleFixture):
                 self.assertEqual(tasks[0][2], "completed")
                 self.assertIsNone(active_task_id)
                 self.assertEqual(
-                    conn.execute("SELECT count(*) FROM github_events WHERE actor_login='external-author'").fetchone()[
+                    conn.execute("SELECT count(*) FROM source_events WHERE actor_login='external-author'").fetchone()[
                         0
                     ],
                     2,
@@ -127,7 +127,7 @@ class PendingContinuationTests(RepositoryCycleFixture):
                 """
                 SELECT te.relationship, ge.event_fingerprint
                 FROM task_events te
-                JOIN github_events ge ON ge.event_id = te.event_id
+                JOIN source_events ge ON ge.event_id = te.event_id
                 WHERE te.task_id = ?
                 ORDER BY te.relationship, ge.event_fingerprint
                 """,

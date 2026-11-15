@@ -358,7 +358,7 @@ def head_for_pr_create(repo, head, owner):
     return f"{owner}:{head}" if owner else head
 
 
-def publish_open_pr(action, run_command, conn=None, trusted_head_owner=None, recovery_guard=None):
+def publish_open_pr(action, run_command, conn=None, trusted_head_owner=None, recovery_guard=None, *, native_scope=None):
     metadata = publication_values.decode_json(action["metadata_json"])
     repo = metadata_value(metadata, "repo", "repository")
     head = metadata_value(metadata, "head", "head_branch", "branch")
@@ -394,10 +394,13 @@ def publish_open_pr(action, run_command, conn=None, trusted_head_owner=None, rec
         if trusted_head_owner is not None
         else head_owner_for_action(metadata, head, action, conn, run_command)
     )
-    existing = find_existing_open_pr(repo, head, marker, run_command, base=base, head_owner=head_owner)
-    if not existing["ok"] or existing["status"] == "published":
-        return existing
-    scope_guard = publication_guards.publication_scope_guard(conn, action, recovery_guard)
+    if native_scope is not None and head_owner != metadata.get("head_repository", "").split("/", 1)[0]:
+        return {"ok": False, "status": "native_scope_rejected", "safe_error": "Native GitHub PR owner changed."}
+    if native_scope is None:
+        existing = find_existing_open_pr(repo, head, marker, run_command, base=base, head_owner=head_owner)
+        if not existing["ok"] or existing["status"] == "published":
+            return existing
+    scope_guard = publication_guards.publication_scope_guard(conn, action, recovery_guard, native_scope=native_scope)
     if scope_guard:
         return scope_guard
     create_head = head_for_pr_create(repo, head, head_owner)
@@ -450,7 +453,9 @@ def publish_open_pr(action, run_command, conn=None, trusted_head_owner=None, rec
     }
 
 
-def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", recovery_guard=None):
+def publish_push_existing_pr(
+    action, run_command, conn=None, source_ref="HEAD", recovery_guard=None, *, native_scope=None
+):
     metadata = publication_values.decode_json(action["metadata_json"])
     worktree_path = metadata_value(metadata, "worktree_path")
     remote = metadata_value(metadata, "remote") or "origin"
@@ -472,6 +477,9 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
     action_scope = publication_scope.trusted_action_scope(conn, action, include_output_type=True) or {}
     expected_remote_sha = action_scope.get("existing_pr_head_sha", "")
     result_head_sha = action_scope.get("result_head_sha") or (source_ref if source_ref != "HEAD" else None)
+    if native_scope is not None:
+        expected_remote_sha = metadata.get("expected_remote_sha", "")
+        result_head_sha = metadata.get("head_sha")
     source_ref = result_head_sha or source_ref
     destination_ref = f"refs/heads/{branch}"
     if action_scope and not result_head_sha:
@@ -481,6 +489,12 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
             "safe_error": "audited result SHA is missing; retry the task to obtain a new audited result",
         }
     if action_scope.get("supervision_repair"):
+        if native_scope is not None:
+            return {
+                "ok": False,
+                "status": "native_scope_rejected",
+                "safe_error": "Native GitHub effect scope conflicts.",
+            }
         blocked = None
 
         def before_push():
@@ -511,13 +525,27 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
     if any(source.get("source_type") == "pull_request" for source in action_scope.get("sources", ())):
         target_scope["github_account"] = publication_scope.comment_publisher(conn, action, action_scope)
     read_remote = remote
-    target = publication_guards.push_target(target_scope, run_command)
+    target = publication_guards.push_target(
+        target_scope,
+        run_command,
+        pinned_head_repository=metadata.get("head_repository") if native_scope is not None else None,
+    )
     if target:
         if not target["ok"]:
             return target
         remote = target["remote"]
         read_remote = target["read_remote"]
-    if expected_remote_sha:
+    if native_scope is not None:
+        # The native preflight observes refs with exact provider coordinates.
+        # The frozen lease still enforces the same expected ref at mutation.
+        command = [
+            "git",
+            "push",
+            f"--force-with-lease={destination_ref}:{expected_remote_sha}",
+            remote,
+            f"{source_ref}:{destination_ref}",
+        ]
+    elif expected_remote_sha:
         lookup_command = ["git", "ls-remote", "--heads", read_remote, branch]
         lookup = run_command(lookup_command, cwd=worktree_path, capture_output=True, text=True)
         lookup_error = command_failure(lookup, "git ls-remote failed")
@@ -600,7 +628,7 @@ def publish_push_existing_pr(action, run_command, conn=None, source_ref="HEAD", 
         ]
     else:
         command = ["git", "push", remote, f"{source_ref}:{destination_ref}"]
-    scope_guard = publication_guards.publication_scope_guard(conn, action, recovery_guard)
+    scope_guard = publication_guards.publication_scope_guard(conn, action, recovery_guard, native_scope=native_scope)
     if scope_guard:
         return scope_guard
     completed = run_command(command, cwd=worktree_path, capture_output=True, text=True)
@@ -775,3 +803,22 @@ def publish_action(
         "status": "unsupported_action",
         "safe_error": f"publisher does not support action_type {action['action_type']}",
     }
+
+
+def publish_native_github(action, run_command, *, conn, native_scope):
+    """Reuse existing mutations with an independently validated exact native guard."""
+    if native_scope is None or action.get("action_type") not in (
+        GitHubActionType.OPEN_PR,
+        GitHubActionType.PUSH_EXISTING_PR,
+    ):
+        return {"ok": False, "status": "native_scope_rejected", "safe_error": "Native GitHub effect is unsupported."}
+    metadata = publication_values.decode_json(action["metadata_json"])
+    if action["action_type"] == GitHubActionType.OPEN_PR:
+        return publish_open_pr(
+            action,
+            run_command,
+            conn=conn,
+            native_scope=native_scope,
+            trusted_head_owner=metadata["head_repository"].split("/", 1)[0],
+        )
+    return publish_push_existing_pr(action, run_command, conn=conn, native_scope=native_scope)

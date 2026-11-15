@@ -1,4 +1,4 @@
-from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
+from robert_agent.foundation.contracts.delivery import GitHubActionType, NATIVE_RESULT_CONTRACT, OutputType
 from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskLifecycle
@@ -10,6 +10,7 @@ from robert_agent.persistence.dialects import sqlite as db_sqlite
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
@@ -21,6 +22,7 @@ from robert_agent.persistence.stores import worker_results as db_write_worker_re
 #!/usr/bin/env python3
 from contextlib import closing
 import json
+import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -30,6 +32,7 @@ from robert_agent.persistence import execution_control as execution_store
 from robert_agent.execution import spool as result_spool
 from robert_agent.delivery.application import validation as result_validation
 from robert_agent.delivery import contract as result_contract
+from robert_agent.delivery import native_contract
 from robert_agent.delivery.application import audit as audit_result
 from robert_agent.delivery.application import scope as action_scope
 
@@ -60,15 +63,15 @@ def _insert_worker_result_wakeup(conn, payload, result_id, created_at):
     return wakeup_id
 
 
-def _validate_actions(actions):
+def _validate_actions(actions, field):
     if not isinstance(actions, list):
-        return None, "planned_github_actions must be a list"
+        return None, field + " must be a list"
     for action in actions:
         if not isinstance(action, dict):
-            return None, "planned_github_actions entries must be objects"
+            return None, field + " entries must be objects"
         action_type = action.get("type")
         if not isinstance(action_type, str) or not action_type:
-            return None, "planned_github_actions[*].type must be a non-empty string"
+            return None, field + "[*].type must be a non-empty string"
     return actions, None
 
 
@@ -197,9 +200,78 @@ def _unavailable():
     }
 
 
-def _lookup(db_path, envelope, digest):
+def _same_native_spool_payload(conn, result_id, metadata, payload):
+    internal = {"_result_contract", "_normalizer_version", "_submission_fingerprint"}
+    saved = metadata.get("normalized_payload")
+    supplied = {key: value for key, value in payload.items() if key not in internal | {"planned_actions"}}
+    if not isinstance(saved, dict) or json.dumps(saved, sort_keys=True) != json.dumps(supplied, sort_keys=True):
+        return False
+    actions = []
+    for encoded, _, _, provider, raw_target, kind in db_read_github_actions.find_action_records_by_result_id(
+        conn, result_id
+    ):
+        saved_action = json.loads(encoded)
+        target = json.loads(raw_target) if raw_target else None
+        if not isinstance(saved_action, dict) or not isinstance(target, dict) or not saved_action.get("target_id"):
+            return False
+        action = {
+            "provider": provider,
+            "type": kind,
+            "target": target,
+            "target_id": saved_action["target_id"],
+        }
+        if provider == "tapd":
+            if not isinstance(saved_action.get("body"), str):
+                return False
+            action["body"] = saved_action["body"]
+        actions.append(action)
+    return actions == payload["planned_actions"]
+
+
+def _recorded_native_receipt(conn, identity, fingerprint, *, spool_payload=None):
+    task_id, attempt_id = identity["task_id"], identity["attempt_id"]
+    row = db_records.first(db_read_worker_results.find_for_lookup(conn, attempt_id, task_id))
+    if row is None:
+        return None
+    attempt = db_records.first(db_read_attempts.record_result_db(conn, attempt_id, task_id))
+    attempt_metadata = json.loads(attempt[0] or "{}") if attempt else {}
+    metadata = json.loads(row[1] or "{}")
+    version = result_contract.NORMALIZER_VERSIONS[NATIVE_RESULT_CONTRACT]
+    if attempt_metadata.get("result_contract") != NATIVE_RESULT_CONTRACT:
+        return None
+    if (
+        not attempt_metadata.get("result_received_at")
+        or metadata.get("result_contract") != NATIVE_RESULT_CONTRACT
+        or type(metadata.get("normalizer_version")) is not int
+        or metadata["normalizer_version"] != version
+    ):
+        return {"ok": False, "status": "unsupported_contract"}
+    saved = metadata.get("normalized_payload")
+    if (
+        isinstance(fingerprint, str)
+        and re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+        and metadata.get("submission_fingerprint") == fingerprint
+        and isinstance(saved, dict)
+        and all(saved.get(key) == identity[key] for key in ("task_id", "attempt_id", "output_type"))
+        and (spool_payload is None or _same_native_spool_payload(conn, row[0], metadata, spool_payload))
+    ):
+        return {"ok": True, "status": "recorded", "result_id": row[0], "deduplicated": True}
+    return {
+        "ok": False,
+        "status": "result_conflict",
+        "safe_error": "A different result is already recorded for this attempt.",
+    }
+
+
+def _lookup(db_path, envelope, digest, contract_id):
     with closing(db_database.connect(db_path, timeout=0.1)) as conn:
-        _, rejection = result_validation.context(conn, envelope["task_id"], envelope["attempt_id"], include_scope=False)
+        if contract_id == NATIVE_RESULT_CONTRACT:
+            recorded = _recorded_native_receipt(conn, envelope, digest)
+            if recorded is not None:
+                return recorded
+        settings, rejection = result_validation.context(
+            conn, envelope["task_id"], envelope["attempt_id"], include_scope=False
+        )
         if rejection:
             return rejection
         row = db_records.first(
@@ -208,7 +280,7 @@ def _lookup(db_path, envelope, digest):
         if not row:
             return None
         metadata = json.loads(row[1] or "{}")
-        if metadata.get("result_contract") != result_contract.CONTRACT_ID:
+        if settings["result_contract"] != contract_id or metadata.get("result_contract") != contract_id:
             return {"ok": False, "status": "unsupported_contract"}
         if metadata.get("submission_fingerprint") == digest:
             return {"ok": True, "status": "recorded", "result_id": row[0], "deduplicated": True}
@@ -227,16 +299,19 @@ def _prepare(db_path, envelope):
         if rejection:
             return None, rejection
         try:
-            normalized = result_contract.normalize(envelope, settings)
+            if settings["native"] is None:
+                normalized = result_contract.normalize(envelope, settings)
+            else:
+                normalized = native_contract.normalize(envelope, settings["native"])
         except result_contract.InvalidSubmission as exc:
             response = exc.response()
         else:
-            checked = audit_result.audit_result(normalized, final=False, **settings)
+            checked = audit_result.audit_result(
+                normalized, final=False, **{key: value for key, value in settings.items() if key != "result_contract"}
+            )
             if checked["ok"]:
-                if any(
-                    action["type"] == GitHubActionType.PUSH_EXISTING_PR.value
-                    for action in normalized["planned_github_actions"]
-                ):
+                actions = normalized.get("planned_actions", normalized.get("planned_github_actions", []))
+                if any(action["type"] == GitHubActionType.PUSH_EXISTING_PR.value for action in actions):
                     if action_scope.observe_worktree_status(settings["action_scope"]) != "clean":
                         response = result_validation.failure(
                             {
@@ -247,7 +322,7 @@ def _prepare(db_path, envelope):
                         result_validation.record_diagnostic(db_path, envelope, response["reason_code"])
                         return None, response
                     normalized["submission_head_sha"] = action_scope.observe_head(settings["action_scope"])
-                return normalized, None
+                return {**normalized, "_prepared_contract": settings["result_contract"]}, None
             response = result_validation.failure(checked)
     result_validation.record_diagnostic(db_path, envelope, response["reason_code"])
     return None, response
@@ -269,7 +344,31 @@ def record_result(db_path, payload, *, notifier=None):
             "safe_error": "Use the bound compact submission envelope.",
         }
     try:
-        return result_spool.submit(db_path, payload, _record_result_db, notifier, prepare=_prepare, lookup=_lookup)
+        with closing(db_database.connect(db_path, timeout=0.1)) as conn:
+            settings, rejection = result_validation.context(
+                conn, payload["task_id"], payload["attempt_id"], include_scope=False
+            )
+            if rejection:
+                attempt = db_records.first(
+                    db_read_attempts.record_result_db(conn, payload["attempt_id"], payload["task_id"])
+                )
+                contract_id = json.loads(attempt[0] or "{}").get("result_contract") if attempt else None
+                if contract_id not in result_contract.NORMALIZER_VERSIONS:
+                    return rejection
+                # The spool lock still owns the first semantic result. Its
+                # writer archives a matching pending result after cancellation;
+                # lookup/prepare enforce the same rejection when no slot exists.
+            else:
+                contract_id = settings["result_contract"]
+        return result_spool.submit(
+            db_path,
+            payload,
+            _record_result_db,
+            notifier,
+            contract_id=contract_id,
+            prepare=_prepare,
+            lookup=lambda path, envelope, digest: _lookup(path, envelope, digest, contract_id),
+        )
     except (db_errors.Error, OSError, subprocess.TimeoutExpired):
         return _unavailable()
     except (ValueError, TypeError):
@@ -292,16 +391,20 @@ def replay_pending_results(db_path, limit=100, *, config=None, attempt_id=None):
 
 
 def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, replay=False, recovery_config=None):
-    if payload.get("_result_contract") != result_contract.CONTRACT_ID:
+    contract_id = payload.get("_result_contract")
+    if not result_contract.supports_normalizer(contract_id, payload.get("_normalizer_version")):
         return {"ok": False, "status": "unsupported_contract"}
-    if "planned_github_actions" not in payload:
+    native = contract_id == NATIVE_RESULT_CONTRACT
+    action_field = "planned_actions" if native else "planned_github_actions"
+    other_field = "planned_github_actions" if native else "planned_actions"
+    if action_field not in payload or other_field in payload:
         return {
             "ok": False,
             "status": "failed_validation",
-            "safe_error": "planned_github_actions is required; actual_github_actions is legacy",
+            "safe_error": action_field + " is required and only one action representation is supported",
         }
-    action_payload = payload.get("planned_github_actions")
-    actions, action_error = _validate_actions(action_payload)
+    action_payload = payload[action_field]
+    actions, action_error = _validate_actions(action_payload, action_field)
     if action_error:
         return {"ok": False, "status": "failed_validation", "safe_error": action_error}
     used_skills, skill_error = _validate_used_skills(payload.get("used_skills"))
@@ -352,7 +455,9 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
     metadata["submission_fingerprint"] = payload["_submission_fingerprint"]
     metadata["result_contract"] = payload["_result_contract"]
     metadata["normalizer_version"] = payload["_normalizer_version"]
-    metadata["normalized_payload"] = {key: value for key, value in payload.items() if not key.startswith("_")}
+    metadata["normalized_payload"] = {
+        key: value for key, value in payload.items() if not key.startswith("_") and (not native or key != action_field)
+    }
     created_at = datetime.now(timezone.utc)
     result_created_at = created_at.isoformat()
     result_id = f"result-{uuid4().hex[:12]}"
@@ -360,6 +465,12 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
         db_sqlite.configure(conn, foreign_keys=True)
         db_sqlite.configure(conn, busy_timeout_ms=busy_timeout_ms)
         db_transactions.begin(conn, immediate=True)
+        if native:
+            recorded = _recorded_native_receipt(
+                conn, payload, metadata["submission_fingerprint"], spool_payload=payload
+            )
+            if recorded is not None:
+                return recorded
         metadata["result_saved_at"] = result_spool.saved_at(db_path, payload["attempt_id"])
         metadata["result_ingested_at"] = datetime.now(timezone.utc).isoformat()
         task = db_records.first(
@@ -376,13 +487,30 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
         if owner and owner["binding_status"] != BindingStatus.ACTIVE:
             return {"ok": False, "status": "rejected_by_workflow_owner"}
         bound = db_records.first(db_read_attempts.record_result_db(conn, payload["attempt_id"], payload["task_id"]))
-        if not bound or json.loads(bound[0] or "{}").get("result_contract") != result_contract.CONTRACT_ID:
+        if not bound or json.loads(bound[0] or "{}").get("result_contract") != contract_id:
             return {"ok": False, "status": "unsupported_contract"}
-        existing = db_records.first(
-            db_read_worker_results.find_result_id_and_metadata_json_by_attempt_id(conn, payload["attempt_id"])
+        if native:
+            settings, rejection = result_validation.context(
+                conn, payload["task_id"], payload["attempt_id"], include_scope=False
+            )
+            if rejection:
+                return rejection
+            try:
+                native_contract.validate_bound_result(payload, settings["native"])
+            except result_contract.InvalidSubmission as exc:
+                return exc.response()
+        existing = (
+            None
+            if native
+            else db_records.first(
+                db_read_worker_results.find_result_id_and_metadata_json_by_attempt_id(conn, payload["attempt_id"])
+            )
         )
         if existing:
-            if json.loads(existing[1] or "{}").get("submission_fingerprint") == metadata["submission_fingerprint"]:
+            existing_metadata = json.loads(existing[1] or "{}")
+            if existing_metadata.get("result_contract") != contract_id:
+                return {"ok": False, "status": "unsupported_contract"}
+            if existing_metadata.get("submission_fingerprint") == metadata["submission_fingerprint"]:
                 return {"ok": True, "status": "recorded", "result_id": existing[0], "deduplicated": True}
             return {
                 "ok": False,
@@ -460,7 +588,14 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
                 action.get("target_url") or action.get("url"),
                 action.get("id"),
                 action_created_at,
-                json.dumps(action, sort_keys=True),
+                json.dumps(
+                    {key: value for key, value in action.items() if key not in {"provider", "target", "type"}}
+                    if native
+                    else action,
+                    sort_keys=True,
+                ),
+                provider=action["provider"] if native else "github",
+                target_json=json.dumps(action["target"], sort_keys=True) if native else None,
             )
         cur = db_write_attempts.record_result_db(
             conn, result_created_at, result_created_at, payload["attempt_id"], payload["task_id"]

@@ -58,7 +58,7 @@ class WorkerProtocolFixture(unittest.TestCase):
             conn.execute("UPDATE attempts SET metadata_json=json_set(metadata_json,'$.result_contract','compact-v1')")
             conn.execute("UPDATE repos SET full_name='x/y'")
             conn.execute(
-                "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number) VALUES('source-1','repo-1','x/y#1','issue',1)"
+                "INSERT INTO sources(source_id,repo_id,source_key,source_type,number, provider, host, project_key, external_id) VALUES('source-1','repo-1','x/y#1','issue',1, 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '1')"
             )
             conn.execute("UPDATE workstreams SET primary_source_id='source-1'")
             conn.execute(

@@ -30,12 +30,17 @@ def _connection(config, *, write=False):
 
 
 def inbox(config, request):
-    authenticate(config, request)
+    identity = authenticate(config, request)
     with _connection(config) as conn:
+        access = messages.notification_access(conn, config, operator_identity=identity)
         rows = notifications.find_inbox(
-            conn, messaging_repo_ids=messages.allowed_repo_ids(conn, config), messaging_settings=config["messaging"]
+            conn,
+            messaging_repo_ids=access.repo_ids,
+            messaging_settings=config["messaging"],
+            tapd_project_repos=access.tapd_project_repos,
+            tapd_projects=access.tapd_projects,
         )
-        entries = [messages.envelope(conn, row[0], config=config) for row in rows]
+        entries = [messages.envelope(conn, row[0], config=config, operator_identity=identity) for row in rows]
     return {
         "ok": True,
         "messages": [entry for entry in entries if entry],
@@ -71,20 +76,17 @@ def respond(config, request):
         ).hexdigest()
     )
     with _connection(config) as conn:
-        row = records.first(notifications.find_local_response(conn, notification_id))
-        if not row:
-            raise WorkItemNotFoundError("Message not found.")
-        metadata = json.loads(row[1] or "{}")
-        repo_id, repository_scoped = messaging.notification_scope(conn, row[0], metadata)
-        allowed = messages.allowed_repo_ids(conn, config)
-        if repository_scoped and repo_id not in allowed:
-            raise WorkItemNotFoundError("Message not found.")
-        displayed = messages.envelope(conn, notification_id, config=config, include_closed=True)
+        scope, metadata, access = _response_target(conn, config, identity, notification_id)
+        if scope.kind == "tapd" and action != "ack":
+            raise WorkItemValidationError("Native notification commands are unavailable.")
+        displayed = messages.envelope(
+            conn, notification_id, config=config, include_closed=True, operator_identity=identity
+        )
         if not displayed or action not in displayed["actions"]:
             raise WorkItemValidationError("This message does not authorize that action.")
     if action != "ack":
         context = CommandContext(
-            "operator", identity, allowed, frozenset(worker["name"] for worker in config["workers"])
+            "operator", identity, access.repo_ids, frozenset(worker["name"] for worker in config["workers"])
         )
         result = commands.execute_command(
             config["db_path"],
@@ -107,11 +109,21 @@ def respond(config, request):
     # Acknowledgement only records receipt; it never resolves an incident or task.
     with _connection(config, write=True) as conn, conn:
         transactions.begin_immediate(conn)
-        row = records.first(notifications.find_metadata_json_by_notification_id(conn, notification_id))
-        if not row:
+        current_identity = authenticate(config, request)
+        current, metadata, _access = _response_target(conn, config, current_identity, notification_id)
+        if current_identity != identity or current != scope:
             raise WorkItemNotFoundError("Message not found.")
-        metadata = json.loads(row[0] or "{}")
+        if current.kind == "tapd":
+            displayed = messages.envelope(
+                conn, notification_id, config=config, include_closed=True, operator_identity=current_identity
+            )
+            if not displayed or "ack" not in displayed["actions"]:
+                raise WorkItemValidationError("This message does not authorize that action.")
+            if version != displayed["version"]:
+                raise WorkItemConflictError("Message version changed.")
         previous = metadata.get("operator_response")
+        if current.attention_id is not None and displayed["status"] == "resolved" and not previous:
+            raise WorkItemConflictError("Message is no longer open.")
         if previous and previous["request_key"] != request_key:
             raise WorkItemConflictError("Message already acknowledged.")
         if not previous:
@@ -126,3 +138,14 @@ def respond(config, request):
                 conn, json.dumps(metadata, ensure_ascii=False), notification_id
             )
     return {"ok": True, "status": "acknowledged", "notification_id": notification_id}
+
+
+def _response_target(conn, config, identity, notification_id):
+    row = records.first(notifications.find_local_response(conn, notification_id))
+    if row is None:
+        raise WorkItemNotFoundError("Message not found.")
+    scope = messaging.notification_scope(conn, notification_id)
+    access = messages.notification_access(conn, config, operator_identity=identity)
+    if not access.allows(scope):
+        raise WorkItemNotFoundError("Message not found.")
+    return scope, json.loads(row[1] or "{}"), access

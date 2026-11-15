@@ -81,3 +81,17 @@ class ModelCommandStatus(StrEnum):
 
 # Recovery metadata for a stopped attempt; the attempt itself remains FAILED.
 MODEL_DECISION_WAIT_STATUS = "waiting_for_model_decision"
+
+
+@unique
+class SourceModelStage(StrEnum):
+    IDENTIFY = "identify"
+    SYNTHESIS = "synthesis"
+
+
+@unique
+class SourceModelExit(StrEnum):
+    NOT_LAUNCHED = "not_launched"
+    SPAWN_FAILED = "spawn_failed"
+    GROUP_EXITED = "group_exited"
+    STARTUP_GROUP_CLEANED = "startup_group_cleaned"

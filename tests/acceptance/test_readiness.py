@@ -256,8 +256,8 @@ class ReadinessTests(AcceptanceFixture):
             )
             conn.execute(
                 """
-                INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number)
-                VALUES ('source-1', 'repo-1', 'github:x/y#1', 'issue', 1)
+                INSERT INTO sources(source_id, repo_id, source_key, source_type, number, provider, host, project_key, external_id)
+                VALUES ('source-1', 'repo-1', 'github:x/y#1', 'issue', 1, 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '1')
                 """
             )
             conn.execute(

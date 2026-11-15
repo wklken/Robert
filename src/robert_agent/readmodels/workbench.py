@@ -38,7 +38,7 @@ PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 SORTS = {"priority", "updated-desc", "updated-asc"}
 REQUIRED_TABLES = {
     "repos",
-    "github_sources",
+    "sources",
     "workstreams",
     "tasks",
     "attempts",

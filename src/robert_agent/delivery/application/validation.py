@@ -1,5 +1,6 @@
 """Pre-submit checks; diagnostics never reserve a final result slot."""
 
+from robert_agent.foundation.contracts.delivery import NATIVE_RESULT_CONTRACT
 from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
 from robert_agent.foundation.contracts.work import TaskLifecycle
 
@@ -9,9 +10,12 @@ from robert_agent.persistence import transactions as db_transactions
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import result_contract as db_read_contract
+from robert_agent.persistence.queries import source_tasks
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.stores import source_sessions as source_rounds
 from contextlib import closing
 import json
 
@@ -21,14 +25,42 @@ from robert_agent.persistence import execution_control as execution_store
 from robert_agent.workflows import pr_remediation as remediation
 from robert_agent.workflows import routes as route
 from robert_agent.delivery import contract as result_contract
+from robert_agent.delivery import native_contract
 
 
-def context(conn, task_id, attempt_id, *, include_scope=True, allow_completed=True):
+def context(conn, task_id, attempt_id, *, include_scope=True, allow_completed=True, native_launch_preflight=False):
     row = db_records.first(db_read_tasks.find_for_context(conn, task_id, attempt_id))
     if not row:
         return None, {"ok": False, "status": "rejected_by_supervisor"}
     attempt_metadata = json.loads(row[5] or "{}")
-    if attempt_metadata.get("result_contract") != result_contract.CONTRACT_ID:
+    contract_id = attempt_metadata.get("result_contract")
+    native = None
+    if contract_id == NATIVE_RESULT_CONTRACT:
+        binding = db_read_contract.task_round_binding(conn, task_id)
+        fixed = route.ROUTES.get(row[10])
+        if fixed and fixed["expected_output"] == row[7]:
+            native = native_contract.binding(
+                attempt_metadata,
+                binding,
+                expected_output=row[7],
+                route_actions=set(json.loads(row[6])) & set(fixed["allowed_github_actions"]),
+                route_id=row[10],
+            )
+        if native is not None:
+            members = source_rounds.pending_round_members(conn, binding["round_id"])
+            events = source_tasks.round_trigger_events(conn, binding["round_id"])
+            if (
+                {row["request_id"] for row in events} != {row["request_id"] for row in members}
+                or not events
+                or {row["event_id"] for row in events} != source_tasks.trigger_bindings(conn, task_id)
+            ):
+                native = None
+            else:
+                native["event_fingerprints"] = frozenset(row["event_fingerprint"] for row in events)
+    if (contract_id == NATIVE_RESULT_CONTRACT and native is None) or (
+        contract_id != NATIVE_RESULT_CONTRACT
+        and (contract_id != result_contract.CONTRACT_ID or source_tasks.has_native_origin(conn, task_id))
+    ):
         return None, {
             "ok": False,
             "status": "unsupported_contract",
@@ -47,7 +79,7 @@ def context(conn, task_id, attempt_id, *, include_scope=True, allow_completed=Tr
         return None, {"ok": False, "status": "rejected_by_supervisor"}
     if not allow_completed and row[4] == AttemptStatus.COMPLETED.value:
         return None, {"ok": False, "status": "rejected_by_supervisor"}
-    if json.loads(row[5] or "{}").get("result_validation"):
+    if attempt_metadata.get("result_validation"):
         return None, {"ok": False, "status": "rejected_by_supervisor"}
     subject_type, subject_id = "task", task_id
     if row[1] in audit_result.REMEDIATION_TASK_KINDS and metadata.get("remediation_episode_id"):
@@ -55,6 +87,10 @@ def context(conn, task_id, attempt_id, *, include_scope=True, allow_completed=Tr
     owner = execution_store.get_binding(conn, subject_type, subject_id)
     if owner and owner["binding_status"] != BindingStatus.ACTIVE:
         return None, {"ok": False, "status": "rejected_by_workflow_owner"}
+    if native is not None and row[4] == AttemptStatus.PREPARED and not native_launch_preflight:
+        checkpoint = json.loads(owner["metadata_json"] or "{}") if owner else {}
+        if checkpoint.get("dispatch_inflight") != attempt_id:
+            return None, {"ok": False, "status": "rejected_by_supervisor"}
     origin = db_records.first(db_read_work_items.find_origin_type_by_workstream_id(conn, row[0]))
     episode = (
         remediation.load_episode(conn, metadata.get("remediation_episode_id"))
@@ -62,6 +98,8 @@ def context(conn, task_id, attempt_id, *, include_scope=True, allow_completed=Tr
         else None
     )
     return {
+        "result_contract": contract_id,
+        "native": native,
         "allowed_github_actions": json.loads(row[6]),
         "expected_output": row[7],
         "required_skills": json.loads(row[8] or "[]"),
@@ -72,7 +110,7 @@ def context(conn, task_id, attempt_id, *, include_scope=True, allow_completed=Tr
         "review_input_policy": metadata.get("review_input_policy", "required"),
         "remediation_context": episode,
         "action_scope": action_scope.for_result(conn, task_id, attempt_id, row[0], observe=False)
-        if include_scope
+        if include_scope and (native is None or native["source"]["role"] == "development")
         else None,
     }, None
 
@@ -117,7 +155,7 @@ def failure(audit):
     if violations and code == "result_contract":
         code = "action_not_allowed"
         message = "The result contains actions outside its allowed contract."
-    field = "planned_github_actions"
+    field = audit.get("field_path", "planned_github_actions")
     for name in (
         "consumed_work_item_event_ids",
         "consumed_event_fingerprints",

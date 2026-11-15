@@ -60,7 +60,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
         self.assertEqual(relationships, {"context", "trigger"})
         with closing(sqlite3.connect(db_path)) as conn:
             event = conn.execute(
-                "SELECT authorization_status FROM github_events WHERE event_fingerprint='comment:comment-2'"
+                "SELECT authorization_status FROM source_events WHERE event_fingerprint='comment:comment-2'"
             ).fetchone()
         self.assertEqual(event, ("context_only",))
 
@@ -112,7 +112,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
             event_status = conn.execute(
                 """
                 SELECT authorization_status
-                FROM github_events
+                FROM source_events
                 WHERE event_fingerprint = 'comment:comment-2'
                 """
             ).fetchone()[0]
@@ -214,10 +214,10 @@ class FollowupIntakeTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
                 """
-                INSERT INTO github_sources(
+                INSERT INTO sources(
                   source_id, repo_id, source_key, source_type, number, title, state, author_login
-                )
-                VALUES (?, ?, ?, 'pull_request', 456, '', 'open', 'robert-bot')
+                , provider, host, project_key, external_id)
+                VALUES (?, ?, ?, 'pull_request', 456, '', 'open', 'robert-bot', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id=?2), '456')
                 """,
                 (
                     "source:github:example/backend!456",
@@ -284,7 +284,7 @@ class FollowupIntakeTests(RepositoryCycleFixture):
             event_row = conn.execute(
                 """
                 SELECT authorization_status, actor_login, event_fingerprint
-                FROM github_events
+                FROM source_events
                 WHERE event_fingerprint = 'comment:pr-member-followup'
                 """
             ).fetchone()
@@ -307,10 +307,10 @@ class FollowupIntakeTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
                 """
-                INSERT INTO github_sources(
+                INSERT INTO sources(
                   source_id, repo_id, source_key, source_type, number, title, state, author_login
-                )
-                VALUES (?, ?, ?, 'pull_request', 456, '', 'open', 'robert-bot')
+                , provider, host, project_key, external_id)
+                VALUES (?, ?, ?, 'pull_request', 456, '', 'open', 'robert-bot', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id=?2), '456')
                 """,
                 (
                     "source:github:example/backend!456",
@@ -584,10 +584,11 @@ class FollowupIntakeTests(RepositoryCycleFixture):
             ).fetchall()
             event_relationships = conn.execute(
                 """
-                SELECT t.workstream_id, te.relationship, ge.event_fingerprint
+                SELECT t.workstream_id, COALESCE(re.state, te.relationship), ge.event_fingerprint
                 FROM task_events te
                 JOIN tasks t ON t.task_id = te.task_id
-                JOIN github_events ge ON ge.event_id = te.event_id
+                JOIN source_events ge ON ge.event_id = te.event_id
+                LEFT JOIN request_events re ON re.task_id = te.task_id AND re.event_id = te.event_id
                 ORDER BY t.workstream_id, ge.event_fingerprint
                 """
             ).fetchall()

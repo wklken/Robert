@@ -302,22 +302,26 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
         self.addCleanup(fixture.doCleanups)
         fixture.repo["pr_automation"]["ci"]["enabled"] = False
         with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
-            conn.execute("""INSERT INTO github_sources(source_id,repo_id,source_key,
-                source_type,number,title,state,author_login) VALUES ('source:pr2',
+            conn.execute("""INSERT INTO sources(source_id,repo_id,source_key,
+                source_type,number,title,state,author_login, provider, host, project_key, external_id) VALUES ('source:pr2',
                 'repo:example/backend','github:example/backend!14','pull_request',
-                14,'Fix2','open','robert-bot')""")
+                14,'Fix2','open','robert-bot', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), '14')""")
             conn.execute("""INSERT INTO workstreams(workstream_id,repo_id,primary_source_id,
                 origin_workstream_id,lifecycle,created_at,updated_at) VALUES (
                 'github:example/backend!14','repo:example/backend','source:pr2',
                 'github:example/backend#1','completed','2026-07-27','2026-07-27')""")
         delegate = fixture.runner()
+        delegate.responses[("gh", "api", "repos/example/backend/pulls/14")] = {
+            **delegate.responses[("gh", "api", "repos/example/backend/pulls/13")],
+            "html_url": "https://github.com/example/backend/pull/14",
+        }
         observed = []
 
         def runner(args, **kwargs):
             with closing(sqlite3.connect(fixture.db_path, timeout=0)) as other, other:
                 other.execute("BEGIN IMMEDIATE")
             observed.append(args[-1])
-            return delegate([arg.replace("/pulls/14", "/pulls/13") for arg in args], **kwargs)
+            return delegate(args, **kwargs)
 
         with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
             decisions = remediation_requests.collect_pr_remediation_decisions(
@@ -390,7 +394,7 @@ driver.run()
                 """SELECT w.repo_id,
                 w.workstream_id,gs.source_id,gs.source_key,gs.source_type,gs.number
                 FROM tasks t JOIN workstreams w ON w.workstream_id=t.workstream_id
-                JOIN github_sources gs ON gs.source_id=w.primary_source_id
+                JOIN sources gs ON gs.source_id=w.primary_source_id
                 WHERE t.task_id=?""",
                 (driver.task_id,),
             ).fetchone()

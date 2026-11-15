@@ -31,7 +31,8 @@ from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 from robert_agent.adapters.notifications import messaging as message_transport
 from robert_agent.work import wakeup
 from robert_agent.adapters.processes import identity as worker_identity
-from robert_agent.runtime import loop as loop_engine
+from robert_agent.runtime import loop as loop_engine, native_sources
+from robert_agent.delivery.application import lane as publication_lane
 from robert_agent.configuration import command as validate_config
 from robert_agent.delivery.application import notifications as notify
 
@@ -63,6 +64,7 @@ class DaemonContext:
     repo_ids: list[str] | None = None
     dry_run: bool = False
     next_live_poll_at: str | None = None
+    next_native_scan_at: str | None = None
     startup_live_poll_pending: bool = False
     rate_limit_decision_cache: dict | None = None
     rate_limit_cache_expires_at: str | None = None
@@ -70,6 +72,8 @@ class DaemonContext:
     runtime_config: dict | None = None
     next_health_at: float = 0.0
     publisher_retry_at: float = 0.0
+    source_publisher_retry_at: float = 0.0
+    source_publish_only: bool = False
     background_lanes: dict | None = None
     scan_context_refresh: bool = False
     context_refresh_retry_at: float = 0.0
@@ -87,7 +91,7 @@ def _workflow_args(workflow_path):
     return ["--workflow", str(workflow_path)] if workflow_path else []
 
 
-def build_run_once_command(config_path, workflow_path=None, *, dry_run=False):
+def build_run_once_command(config_path, workflow_path=None, *, dry_run=False, manage_sources=True):
     command = [
         sys.executable,
         "-B",
@@ -98,6 +102,8 @@ def build_run_once_command(config_path, workflow_path=None, *, dry_run=False):
     ]
     if dry_run:
         command.append("--dry-run")
+    if not manage_sources:
+        command.append("--repository-only")
     return command
 
 
@@ -109,6 +115,7 @@ def build_loop_command(
     max_seconds=180,
     skip_publish=False,
     consume_observations=False,
+    manage_sources=True,
 ):
     command = [
         sys.executable,
@@ -127,6 +134,8 @@ def build_loop_command(
         command.append("--skip-publish")
     if consume_observations:
         command.append("--consume-observations")
+    if not manage_sources:
+        command.append("--repository-only")
     return command
 
 
@@ -385,17 +394,27 @@ def _schedule_next_live_poll(context, *, now, capacity_full):
 def _idle_sleep_seconds(context, *, now=None):
     now = now or daemon_state.utc_now()
     local_poll_seconds = context.daemon_config["local_poll_seconds"]
-    if context.background_lanes is not None and context.background_lanes["scan"].process is not None:
-        return local_poll_seconds
-    if _control_blocked(context, "scan"):
-        return local_poll_seconds
-    if context.next_live_poll_at is None:
-        return local_poll_seconds
-    remaining_seconds = max(
-        0,
-        (_parse_time(context.next_live_poll_at) - _parse_time(now)).total_seconds(),
-    )
-    return min(local_poll_seconds, remaining_seconds)
+    lanes = context.background_lanes or {}
+    for name in (native_sources.SCAN, native_sources.MODEL, "local"):
+        if name in lanes and lanes[name].process is not None:
+            local_poll_seconds = min(5, local_poll_seconds)
+    waits = [local_poll_seconds]
+    if (
+        native_sources.SCAN in lanes
+        and context.next_native_scan_at is not None
+        and not _control_blocked(context, native_sources.SCAN)
+    ):
+        seconds = (_parse_time(context.next_native_scan_at) - _parse_time(now)).total_seconds()
+        # A due but suppressed scan must not cause an idle busy loop.
+        if seconds > 0:
+            waits.append(seconds)
+    if (
+        not (lanes.get("scan") and lanes["scan"].process is not None)
+        and not _control_blocked(context, "scan")
+        and context.next_live_poll_at is not None
+    ):
+        waits.append(max(0, (_parse_time(context.next_live_poll_at) - _parse_time(now)).total_seconds()))
+    return min(waits)
 
 
 def _sleep_seconds_after_decision(context, result, *, now=None):
@@ -673,27 +692,31 @@ def _supervise_paused_workers(context, *, child_runner=run_child_json, now=None)
     return result
 
 
-def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json, now=None):
-    blocked = _control_blocked(context, "local")
-    if blocked:
-        return blocked
-    command = build_loop_command(
+def _local_drain_command(context, *, skip_publish):
+    return build_loop_command(
         context.config_path,
         context.workflow_path,
         dry_run=context.dry_run,
         max_seconds=max(1, int(context.daemon_config["local_drain_timeout_seconds"] * 0.9)),
         skip_publish=skip_publish,
         consume_observations=context.background_lanes is not None,
+        manage_sources=False,
     )
+
+
+def _record_local_drain_start(context, command, *, now):
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.record_event(
-            conn,
-            context.daemon_run_id,
-            "local_drain_started",
-            "running",
-            {"command": command},
-            now=now,
+            conn, context.daemon_run_id, "local_drain_started", "running", {"command": command}, now=now
         )
+
+
+def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json, now=None):
+    blocked = _control_blocked(context, "local")
+    if blocked:
+        return blocked
+    command = _local_drain_command(context, skip_publish=skip_publish)
+    _record_local_drain_start(context, command, now=now)
     result = child_runner(
         command,
         timeout_seconds=context.daemon_config["local_drain_timeout_seconds"],
@@ -720,6 +743,7 @@ def _run_live_poll(context, child_runner=run_child_json, now=None):
         context.config_path,
         context.workflow_path,
         dry_run=context.dry_run,
+        manage_sources=False,
     )
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.record_event(
@@ -878,6 +902,7 @@ def run_once_decision(
             )
         return {"ok": False, "decision": "control_attention", "result": cutover}
     if context.background_lanes is not None:
+        _schedule_native_lanes(context, now=now)
         return _background_decision(context, now=now, child_runner=child_runner)
     _maybe_prune(context, now=now)
     if not context.dry_run:
@@ -967,9 +992,27 @@ def _poll_background_lanes(context, *, now):
     for name, lane in (context.background_lanes or {}).items():
         result = lane.poll()
         if result is not None:
-            _record_control_outcome(context, name, result, now=now)
+            github_budget_blocked = name == "publish" and result.get("status") in {
+                "core_rate_limit_floor",
+                "rate_limit_check_failed",
+            }
+            if github_budget_blocked:
+                context.control_failures[name] = 0
+                context.control_retry_at.pop(name, None)
+            else:
+                _record_control_outcome(context, name, result, now=now)
+            if name == native_sources.SCAN:
+                context.next_native_scan_at = _iso_after(now, native_sources.SCAN_INTERVAL_SECONDS)
             if name == "publish":
-                context.publisher_retry_at = time.monotonic() + (5 if result.get("ok") else 30)
+                completed_at = time.monotonic()
+                if not context.source_publish_only:
+                    context.publisher_retry_at = completed_at + max(
+                        5 if result.get("ok") else 30, int(result.get("retry_after_seconds") or 0)
+                    )
+                context.source_publisher_retry_at = completed_at + (
+                    5 if result.get("ok") or github_budget_blocked else 30
+                )
+                context.source_publish_only = False
             if name == "scan" and context.scan_context_refresh:
                 context.context_refresh_retry_at = time.monotonic() + max(
                     5 if result.get("ok") else 30, int(result.get("retry_after_seconds") or 0)
@@ -984,11 +1027,43 @@ def _poll_background_lanes(context, *, now):
                 daemon_state.record_event(
                     conn,
                     context.daemon_run_id,
-                    name + "_completed",
+                    "local_drain_completed" if name == "local" else name + "_completed",
                     "ok" if result.get("ok") else "failed",
-                    result,
+                    _event_result(result) if name == "local" else result,
                     now=now,
                 )
+
+
+def _schedule_native_lanes(context, *, now):
+    lanes = context.background_lanes
+    scan = lanes.get(native_sources.SCAN)
+    model = lanes.get(native_sources.MODEL)
+    config = context.runtime_config or {}
+    if context.dry_run or scan is None or model is None:
+        return
+    local_only = "local" in context.control_attention
+    if (
+        not local_only
+        and scan.process is None
+        and not _control_blocked(context, native_sources.SCAN)
+        and (context.next_native_scan_at is None or _parse_time(now) >= _parse_time(context.next_native_scan_at))
+        and native_sources.scan_due(context.db_path, config)
+    ):
+        scan.start(
+            native_sources.command(native_sources.SCAN, context.config_path, context.db_path, context.daemon_run_id),
+            timeout_seconds=native_sources.timeout(native_sources.SCAN, config),
+        )
+    if (
+        model.process is None
+        and not _control_blocked(context, native_sources.MODEL)
+        and native_sources.model_due(context.db_path, config, owner=context.daemon_run_id, local_only=local_only)
+    ):
+        model.start(
+            native_sources.command(
+                native_sources.MODEL, context.config_path, context.db_path, context.daemon_run_id, local_only=local_only
+            ),
+            timeout_seconds=native_sources.timeout(native_sources.MODEL, config),
+        )
 
 
 def _background_decision(context, *, now, child_runner=run_child_json):
@@ -1011,6 +1086,21 @@ def _background_decision(context, *, now, child_runner=run_child_json):
             include_publication=False,
         )
         pending_publish = any(delivery_queries.ready_actions(conn, 1, repo_id=repo_id) for repo_id in repo_ids)
+        pending_source_publish = not context.dry_run and publication_lane.source_ready(
+            conn, context.runtime_config, source_owner=context.daemon_run_id
+        )
+        pending_native_github = (
+            not context.dry_run
+            and context.runtime_config.get("tapd", {}).get("enabled") is True
+            and publication_lane.source_ready(
+                conn,
+                context.runtime_config,
+                source_owner=context.daemon_run_id,
+                provider="github",
+                recover=False,
+                reconcile_only="local" in context.control_attention,
+            )
+        )
         pending_publish = pending_publish or bool(
             issue_dispatch.pending(conn, context.runtime_config, remote=True, repo_ids=repo_ids)
         )
@@ -1034,19 +1124,31 @@ def _background_decision(context, *, now, child_runner=run_child_json):
             scan_command = command
             context.startup_live_poll_pending = False
         lanes["scan"].start(scan_command, timeout_seconds=context.daemon_config["live_run_timeout_seconds"])
-    if (
-        (pending_publish or pending_delivery)
-        and lanes["publish"].process is None
-        and time.monotonic() >= context.publisher_retry_at
-        and not _control_blocked(context, "publish")
-    ):
+    publish_now = time.monotonic()
+    github_due = (
+        pending_publish or pending_delivery or pending_native_github
+    ) and publish_now >= context.publisher_retry_at
+    native_due = pending_source_publish and publish_now >= context.source_publisher_retry_at
+    if (github_due or native_due) and lanes["publish"].process is None and not _control_blocked(context, "publish"):
         publish_command = command + ["--publish"]
+        context.source_publish_only = not github_due
+        if context.source_publish_only:
+            publish_command.append("--source-only")
         if context.dry_run:
             publish_command.append("--dry-run")
+        if "local" in context.control_attention:
+            publish_command.append("--source-reconcile-only")
         lanes["publish"].start(publish_command, timeout_seconds=context.daemon_config["local_drain_timeout_seconds"])
     if local_work:
         if _control_blocked(context, "local"):
             return {"ok": True, "decision": "control_attention"}
+        local = lanes.get("local")
+        if local is not None:
+            if local.process is None:
+                command = _local_drain_command(context, skip_publish=True)
+                _record_local_drain_start(context, command, now=now)
+                local.start(command, timeout_seconds=context.daemon_config["local_drain_timeout_seconds"])
+            return {"ok": True, "decision": "idle"}
         result = _run_local_drain(context, skip_publish=True, child_runner=child_runner, now=now)
         return {"ok": result.get("ok", False), "decision": "local_drain", "result": result}
     return {"ok": True, "decision": "idle"}
@@ -1112,7 +1214,9 @@ def _resident_loop(
     from robert_agent.runtime.control import ControlLane, recover
 
     if not recover(
-        context.db_path, scope_key=_daemon_resource_key(context.runtime_config), current_owner=context.daemon_run_id
+        context.db_path,
+        scope_key=_daemon_resource_key(context.runtime_config),
+        current_owner=context.daemon_run_id,
     ):
         _finish_context(
             context,
@@ -1123,9 +1227,13 @@ def _resident_loop(
             },
         )
         return {"ok": False, "status": "attention", "safe_error": "Previous control child ownership needs inspection"}
-    context.background_lanes = {
-        name: ControlLane(context.db_path, name, context.daemon_run_id) for name in ("scan", "publish")
-    }
+    names = ["scan", "publish", native_sources.SCAN, native_sources.MODEL]
+    if not context.dry_run and (
+        native_sources.scan_due(context.db_path, context.runtime_config)
+        or native_sources.model_due(context.db_path, context.runtime_config, owner=None, local_only=False)
+    ):
+        names.append("local")
+    context.background_lanes = {name: ControlLane(context.db_path, name, context.daemon_run_id) for name in names}
     try:
         try:
             listener = listener_factory(context.db_path)
@@ -1179,6 +1287,56 @@ def _resident_loop(
     return {"ok": cleanup_proven, "status": status, "daemon_run_id": context.daemon_run_id}
 
 
+def _publish_native_once(context, *, local_only=False):
+    if (
+        _STOP_REQUESTED
+        or _control_blocked(context, "publish")
+        or any(
+            item.get("cause_status") == "blocked_result_contract_cutover" for item in context.control_attention.values()
+        )
+    ):
+        return {}
+    with closing(daemon_state.connect(context.db_path)) as conn:
+        tapd_due = publication_lane.source_ready(conn, context.runtime_config, source_owner=context.daemon_run_id)
+        github_due = context.runtime_config.get("tapd", {}).get("enabled") is True and publication_lane.source_ready(
+            conn,
+            context.runtime_config,
+            source_owner=context.daemon_run_id,
+            provider="github",
+            recover=False,
+            reconcile_only=local_only,
+        )
+        if not (tapd_due or github_due):
+            return {}
+    from robert_agent.runtime.control import recover
+
+    if not recover(
+        context.db_path, scope_key=_daemon_resource_key(context.runtime_config), current_owner=context.daemon_run_id
+    ):
+        return {"ok": False, "status": "attention"}
+    command = [
+        sys.executable,
+        "-B",
+        _script_path("runtime/scan.py"),
+        "--config",
+        context.config_path,
+        "--publish",
+        "--native-only" if github_due else "--source-only",
+    ]
+    if local_only:
+        command.append("--source-reconcile-only")
+    with native_sources.stop_signals(lambda: _STOP_REQUESTED) as stop:
+        return native_sources.run_control_child(
+            context.db_path,
+            "publish",
+            context.daemon_run_id,
+            command,
+            timeout_seconds=context.daemon_config["local_drain_timeout_seconds"],
+            stop=stop,
+            heartbeat=lambda: _heartbeat(context),
+        )
+
+
 def run_daemon(
     config_path,
     workflow_path=None,
@@ -1222,7 +1380,27 @@ def run_daemon(
                 child_runner=child_runner,
                 rate_limit_runner=rate_limit_runner,
             )
-            _finish_context(context, "stopped", summary=result, now=now)
+            native = {}
+            if not dry_run:
+                native = native_sources.run_once(
+                    config_path,
+                    context.runtime_config,
+                    daemon_owner=context.daemon_run_id,
+                    local_only=result.get("decision") == "control_attention",
+                    stop_requested=lambda: _STOP_REQUESTED,
+                    heartbeat=lambda: _heartbeat(context),
+                )
+                if native:
+                    result["native_sources"] = native
+                publication = _publish_native_once(context, local_only=result.get("decision") == "control_attention")
+                if publication:
+                    result["source_publication"] = publication
+                    native = {**native, "publish": publication}
+            failed = native_sources.failed(native)
+            _finish_context(context, "failed" if failed else "stopped", summary=result, now=now)
+            if failed:
+                status = "attention" if native_sources.needs_attention(native) else "failed_source_control"
+                return {**result, "ok": False, "status": status, "daemon_run_id": context.daemon_run_id}
             return {**result, "status": "stopped", "daemon_run_id": context.daemon_run_id}
         return _resident_loop(context)
     except Exception as exc:

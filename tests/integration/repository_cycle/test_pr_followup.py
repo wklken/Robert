@@ -140,7 +140,7 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
                 """
                 SELECT te.relationship, ge.event_fingerprint
                 FROM task_events te
-                JOIN github_events ge ON ge.event_id = te.event_id
+                JOIN source_events ge ON ge.event_id = te.event_id
                 ORDER BY te.relationship, ge.event_fingerprint
                 """
             ).fetchall()
@@ -212,8 +212,8 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
             )
             conn.execute(
                 """
-                INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, title, state, author_login)
-                VALUES ('source:github:example/backend!2886', 'repo:example/backend', 'github:example/backend!2886', 'pull_request', 2886, 'fix(operator): improve release log context', 'open', 'robert-bot')
+                INSERT INTO sources(source_id, repo_id, source_key, source_type, number, title, state, author_login, provider, host, project_key, external_id)
+                VALUES ('source:github:example/backend!2886', 'repo:example/backend', 'github:example/backend!2886', 'pull_request', 2886, 'fix(operator): improve release log context', 'open', 'robert-bot', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), '2886')
                 """
             )
             conn.execute(
@@ -324,7 +324,7 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
                 """
                 SELECT te.relationship, ge.event_fingerprint
                 FROM task_events te
-                JOIN github_events ge ON ge.event_id = te.event_id
+                JOIN source_events ge ON ge.event_id = te.event_id
                 WHERE te.task_id = ?
                 ORDER BY te.relationship, ge.event_fingerprint
                 """,
@@ -384,8 +384,8 @@ class PreparedPRFollowupTests(RepositoryCycleFixture):
             )
             conn.execute(
                 """
-                INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, title, state, author_login)
-                VALUES ('source:github:example/backend!2886', 'repo:example/backend', 'github:example/backend!2886', 'pull_request', 2886, 'fix(operator): improve release log context', 'open', 'robert-bot')
+                INSERT INTO sources(source_id, repo_id, source_key, source_type, number, title, state, author_login, provider, host, project_key, external_id)
+                VALUES ('source:github:example/backend!2886', 'repo:example/backend', 'github:example/backend!2886', 'pull_request', 2886, 'fix(operator): improve release log context', 'open', 'robert-bot', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), '2886')
                 """
             )
             conn.execute(

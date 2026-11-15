@@ -38,24 +38,34 @@ CREATE TABLE IF NOT EXISTS actor_permissions (
   UNIQUE(repo_id, actor_id, source)
 );
 
-CREATE TABLE IF NOT EXISTS github_sources (
+CREATE TABLE IF NOT EXISTS sources (
   source_id TEXT PRIMARY KEY,
-  repo_id TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
+  repo_id TEXT REFERENCES repos(repo_id) ON DELETE CASCADE,
   source_key TEXT NOT NULL UNIQUE,
-  source_type TEXT NOT NULL CHECK (source_type IN ('issue', 'pull_request')),
-  number INTEGER NOT NULL,
+  source_type TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  host TEXT NOT NULL CHECK (length(trim(host)) > 0),
+  project_key TEXT NOT NULL CHECK (length(trim(project_key)) > 0),
+  external_id TEXT NOT NULL CHECK (length(trim(external_id)) > 0),
+  number INTEGER,
   html_url TEXT,
   title TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL DEFAULT 'open',
   author_login TEXT,
   source_updated_at TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}'
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(provider, host, project_key, source_type, external_id),
+  CHECK (
+    (provider = 'github' AND source_type IN ('issue', 'pull_request') AND repo_id IS NOT NULL
+      AND typeof(number) = 'integer' AND number > 0 AND external_id = CAST(number AS TEXT))
+    OR (provider = 'tapd' AND source_type IN ('story', 'bug') AND number IS NULL)
+  )
 );
 
-CREATE TABLE IF NOT EXISTS github_events (
+CREATE TABLE IF NOT EXISTS source_events (
   event_id TEXT PRIMARY KEY,
-  repo_id TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
-  source_id TEXT NOT NULL REFERENCES github_sources(source_id) ON DELETE CASCADE,
+  repo_id TEXT REFERENCES repos(repo_id) ON DELETE CASCADE,
+  source_id TEXT NOT NULL REFERENCES sources(source_id) ON DELETE CASCADE,
   event_fingerprint TEXT NOT NULL UNIQUE,
   event_type TEXT NOT NULL,
   actor_kind TEXT NOT NULL DEFAULT 'github_user',
@@ -69,7 +79,7 @@ CREATE TABLE IF NOT EXISTS github_events (
 CREATE TABLE IF NOT EXISTS workstreams (
   workstream_id TEXT PRIMARY KEY,
   repo_id TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
-  primary_source_id TEXT REFERENCES github_sources(source_id) ON DELETE SET NULL,
+  primary_source_id TEXT REFERENCES sources(source_id) ON DELETE SET NULL,
   origin_workstream_id TEXT REFERENCES workstreams(workstream_id) ON DELETE SET NULL,
   lifecycle TEXT NOT NULL DEFAULT 'active' CHECK (lifecycle IN ('active', 'completed', 'waiting_for_user', 'failed', 'canceled')),
   active_task_id TEXT,
@@ -80,7 +90,7 @@ CREATE TABLE IF NOT EXISTS workstreams (
 
 CREATE TABLE IF NOT EXISTS workstream_sources (
   workstream_id TEXT NOT NULL REFERENCES workstreams(workstream_id) ON DELETE CASCADE,
-  source_id TEXT NOT NULL REFERENCES github_sources(source_id) ON DELETE CASCADE,
+  source_id TEXT NOT NULL REFERENCES sources(source_id) ON DELETE CASCADE,
   relationship TEXT NOT NULL CHECK (relationship IN ('primary', 'derived_pr', 'origin_issue', 'related')),
   created_at TEXT NOT NULL,
   PRIMARY KEY(workstream_id, source_id)
@@ -117,7 +127,6 @@ CREATE TABLE IF NOT EXISTS pr_remediation_episodes (
   observed_base_sha TEXT NOT NULL,
   result_head_sha TEXT,
   status TEXT NOT NULL CHECK (status IN ('open', 'queued', 'remediating', 'waiting_for_signal', 'resolved', 'exhausted', 'superseded', 'canceled')),
-  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   failure_signature TEXT,
   first_seen_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -129,6 +138,59 @@ CREATE TABLE IF NOT EXISTS pr_remediation_episodes (
 
 CREATE INDEX IF NOT EXISTS idx_pr_remediation_episodes_status
 ON pr_remediation_episodes(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS repair_cycles (
+  cycle_id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL CHECK (scope IN ('github','tapd')),
+  episode_id TEXT UNIQUE REFERENCES pr_remediation_episodes(episode_id) ON DELETE CASCADE,
+  source_id TEXT REFERENCES sources(source_id),
+  pr_source_id TEXT REFERENCES sources(source_id),
+  policy_version INTEGER,
+  policy_json TEXT,
+  policy_cap_json TEXT,
+  authorized_base_ref TEXT,
+  started_at TEXT,
+  status TEXT NOT NULL CHECK (status IN ('active','paused','closed')),
+  close_reason TEXT,
+  observed_at TEXT,
+  observation_digest TEXT,
+  legacy_attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (legacy_attempt_count >= 0),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (
+    (scope = 'github' AND episode_id IS NOT NULL AND source_id IS NULL AND pr_source_id IS NULL)
+    OR (scope = 'tapd' AND episode_id IS NULL AND source_id IS NOT NULL AND pr_source_id IS NOT NULL
+        AND policy_version IS NOT NULL AND policy_json IS NOT NULL AND authorized_base_ref IS NOT NULL
+        AND legacy_attempt_count = 0)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_cycles_native_open
+ON repair_cycles(source_id,pr_source_id) WHERE scope='tapd' AND status IN ('active','paused');
+
+CREATE TABLE IF NOT EXISTS repair_cycle_claims (
+  cycle_id TEXT NOT NULL REFERENCES repair_cycles(cycle_id) ON DELETE CASCADE,
+  request_key TEXT NOT NULL,
+  episode_id TEXT NOT NULL REFERENCES pr_remediation_episodes(episode_id) ON DELETE CASCADE,
+  task_id TEXT REFERENCES tasks(task_id) ON DELETE SET NULL,
+  round_id TEXT REFERENCES source_rounds(round_id),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(cycle_id,request_key)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_cycle_claims_native_request
+ON repair_cycle_claims(request_key) WHERE round_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_cycle_claims_native_task
+ON repair_cycle_claims(task_id) WHERE round_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS repair_cycle_usage (
+  attempt_id TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE CASCADE,
+  cycle_id TEXT NOT NULL REFERENCES repair_cycles(cycle_id) ON DELETE CASCADE,
+  tokens INTEGER CHECK (tokens >= 0),
+  cost_usd REAL CHECK (cost_usd >= 0),
+  observed_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS pr_ci_observations (
   observation_id TEXT PRIMARY KEY,
@@ -155,8 +217,8 @@ CREATE TABLE IF NOT EXISTS work_items (
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   priority TEXT NOT NULL DEFAULT 'P2' CHECK (priority IN ('P0', 'P1', 'P2', 'P3')),
-  origin_type TEXT NOT NULL CHECK (origin_type IN ('web', 'github')),
-  origin_source_id TEXT REFERENCES github_sources(source_id) ON DELETE SET NULL,
+  origin_type TEXT NOT NULL CHECK (origin_type IN ('web', 'github', 'tapd')),
+  origin_source_id TEXT REFERENCES sources(source_id) ON DELETE SET NULL,
   routing_mode TEXT NOT NULL DEFAULT 'auto' CHECK (routing_mode IN ('auto', 'manual')),
   requested_worker TEXT,
   workstream_id TEXT REFERENCES workstreams(workstream_id) ON DELETE SET NULL,
@@ -174,7 +236,10 @@ CREATE TABLE IF NOT EXISTS work_items (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_origin_source
-ON work_items(origin_source_id) WHERE origin_source_id IS NOT NULL;
+ON work_items(origin_source_id) WHERE origin_source_id IS NOT NULL AND origin_type != 'tapd';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_tapd_origin_repo
+ON work_items(origin_source_id, repo_id) WHERE origin_source_id IS NOT NULL AND origin_type = 'tapd';
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_workstream
 ON work_items(workstream_id) WHERE workstream_id IS NOT NULL;
@@ -209,11 +274,78 @@ ON work_item_events(resolves_event_id) WHERE resolves_event_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS task_events (
   task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
-  event_id TEXT NOT NULL REFERENCES github_events(event_id) ON DELETE CASCADE,
-  relationship TEXT NOT NULL CHECK (relationship IN ('trigger', 'pending', 'consumed', 'context')),
+  event_id TEXT NOT NULL REFERENCES source_events(event_id) ON DELETE CASCADE,
+  relationship TEXT NOT NULL CHECK (relationship IN ('trigger', 'context')),
   created_at TEXT NOT NULL,
   PRIMARY KEY(task_id, event_id)
 );
+
+CREATE TABLE IF NOT EXISTS ingress_requests (
+  request_id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(source_id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('github', 'tapd')),
+  auth_type TEXT NOT NULL CHECK (length(trim(auth_type)) > 0),
+  authorization_json TEXT NOT NULL,
+  content_snapshot_json TEXT NOT NULL,
+  content_version TEXT NOT NULL CHECK (length(trim(content_version)) > 0),
+  phase TEXT NOT NULL DEFAULT 'pending' CHECK (length(trim(phase)) > 0),
+  repo_id TEXT REFERENCES repos(repo_id) ON DELETE SET NULL,
+  task_id TEXT REFERENCES tasks(task_id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_github_ingress (
+  event_id TEXT NOT NULL PRIMARY KEY REFERENCES source_events(event_id),
+  request_id TEXT UNIQUE REFERENCES ingress_requests(request_id),
+  repo_id TEXT NOT NULL REFERENCES repos(repo_id),
+  pr_source_id TEXT NOT NULL REFERENCES sources(source_id),
+  tapd_source_id TEXT REFERENCES sources(source_id),
+  pr_workstream_id TEXT REFERENCES workstreams(workstream_id),
+  target_json TEXT,
+  first_observation_json TEXT,
+  latest_observation_json TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  CHECK (request_id IS NULL OR (tapd_source_id IS NOT NULL AND pr_workstream_id IS NOT NULL AND target_json IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_github_ingress_source
+ON source_github_ingress(tapd_source_id, repo_id, created_at, event_id);
+
+CREATE TABLE IF NOT EXISTS source_github_observations (
+  request_id TEXT NOT NULL PRIMARY KEY REFERENCES source_github_ingress(request_id),
+  operation_id TEXT NOT NULL,
+  scope_digest TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('present', 'absent', 'unavailable')),
+  evidence_json TEXT NOT NULL,
+  proof_digest TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS request_events (
+  row_id INTEGER PRIMARY KEY,
+  task_id TEXT,
+  request_id TEXT REFERENCES ingress_requests(request_id) ON DELETE CASCADE,
+  event_id TEXT NOT NULL REFERENCES source_events(event_id) ON DELETE CASCADE,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'consumed', 'revoked')),
+  created_at TEXT NOT NULL,
+  consumed_at TEXT,
+  result_id TEXT REFERENCES worker_results(result_id) ON DELETE SET NULL,
+  source_result_id TEXT REFERENCES source_results(source_result_id) CHECK (
+    source_result_id IS NULL OR (request_id IS NOT NULL AND state = 'consumed' AND consumed_at IS NOT NULL AND result_id IS NULL)
+  ),
+  FOREIGN KEY (task_id, event_id) REFERENCES task_events(task_id, event_id) ON DELETE CASCADE,
+  CHECK ((task_id IS NOT NULL) != (request_id IS NOT NULL)),
+  CHECK (state = 'consumed' OR (consumed_at IS NULL AND result_id IS NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_request_events_task
+ON request_events(task_id, event_id) WHERE task_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_request_events_request
+ON request_events(request_id, event_id) WHERE request_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS route_decisions (
   route_decision_id TEXT PRIMARY KEY,
@@ -272,14 +404,19 @@ CREATE TABLE IF NOT EXISTS worker_results (
 CREATE TABLE IF NOT EXISTS github_actions (
   action_id TEXT PRIMARY KEY,
   result_id TEXT REFERENCES worker_results(result_id) ON DELETE SET NULL,
-  task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+  task_id TEXT REFERENCES tasks(task_id) ON DELETE CASCADE,
+  source_result_id TEXT REFERENCES source_results(source_result_id),
   action_type TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'github' CHECK (provider IN ('github', 'tapd') AND (provider = 'github' OR target_json IS NOT NULL)),
+  target_json TEXT,
   target_url TEXT,
   external_id TEXT,
   audit_status TEXT NOT NULL DEFAULT 'pending' CHECK (audit_status IN ('pending', 'accepted', 'policy_violation', 'failed')),
   publish_status TEXT NOT NULL DEFAULT 'not_published' CHECK (publish_status IN ('not_published', 'published', 'skipped')),
   created_at TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}'
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  CHECK ((task_id IS NOT NULL) != (source_result_id IS NOT NULL)),
+  CHECK (task_id IS NOT NULL OR (result_id IS NULL AND target_json IS NOT NULL AND ((provider = 'tapd' AND action_type = 'comment') OR (provider = 'github' AND action_type = 'source_feedback'))))
 );
 
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -726,4 +863,354 @@ CREATE INDEX IF NOT EXISTS idx_tasks_recent ON tasks(updated_at DESC, task_id DE
 CREATE INDEX IF NOT EXISTS idx_github_actions_recent ON github_actions(created_at DESC, action_id DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_recent ON notifications(created_at DESC, notification_id DESC);
 CREATE INDEX IF NOT EXISTS idx_worker_results_recent ON worker_results(created_at DESC, result_id DESC);
-CREATE INDEX IF NOT EXISTS idx_github_events_recent ON github_events(event_at DESC, event_id DESC);
+CREATE INDEX IF NOT EXISTS idx_source_events_recent ON source_events(event_at DESC, event_id DESC);
+
+CREATE TABLE IF NOT EXISTS source_sessions (
+  source_id TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  token INTEGER NOT NULL,
+  lease_until TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (source_id),
+  CHECK (token > 0),
+  FOREIGN KEY(source_id) REFERENCES sources (source_id)
+);
+
+CREATE TABLE IF NOT EXISTS source_rounds (
+  round_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  capability TEXT NOT NULL,
+  repo_ids_json TEXT NOT NULL,
+  publication_scope_json TEXT NOT NULL,
+  input_version TEXT NOT NULL,
+  input_snapshot_json TEXT NOT NULL,
+  input_sha256 TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  finished_at TEXT,
+  PRIMARY KEY (round_id),
+  CHECK (status IN ('active','execution_finished','waiting_for_user','failed','canceled')),
+  CHECK (capability IN ('readonly','development')),
+  CHECK ((status = 'active') = (finished_at IS NULL)),
+  FOREIGN KEY(source_id) REFERENCES source_sessions (source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_rounds_source ON source_rounds(source_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_rounds_active ON source_rounds (source_id) WHERE status='active';
+
+CREATE TABLE IF NOT EXISTS source_pr_selections (
+  round_id TEXT NOT NULL REFERENCES source_rounds(round_id),
+  repo_id TEXT NOT NULL REFERENCES repos(repo_id),
+  observed_at TEXT NOT NULL,
+  decision_json TEXT NOT NULL,
+  PRIMARY KEY (round_id, repo_id)
+);
+
+CREATE TABLE IF NOT EXISTS source_round_requests (
+  round_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  content_version TEXT NOT NULL,
+  content_snapshot_json TEXT NOT NULL,
+  PRIMARY KEY (round_id, request_id),
+  FOREIGN KEY(round_id) REFERENCES source_rounds (round_id),
+  FOREIGN KEY(request_id) REFERENCES ingress_requests (request_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_round_requests_request ON source_round_requests (request_id);
+
+CREATE TABLE IF NOT EXISTS source_round_tasks (
+  task_id TEXT NOT NULL,
+  round_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  repo_id TEXT NOT NULL,
+  capability TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (task_id),
+  FOREIGN KEY(round_id, request_id) REFERENCES source_round_requests (round_id, request_id),
+  CHECK (capability IN ('readonly','development')),
+  FOREIGN KEY(task_id) REFERENCES tasks (task_id),
+  FOREIGN KEY(repo_id) REFERENCES repos (repo_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_round_tasks_round ON source_round_tasks (round_id, created_at, task_id);
+
+CREATE TABLE IF NOT EXISTS source_model_runs (
+  run_id TEXT NOT NULL,
+  round_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  worker_id TEXT NOT NULL,
+  input_version TEXT NOT NULL,
+  prompt_sha256 TEXT NOT NULL,
+  input_packet_json TEXT,
+  status TEXT NOT NULL,
+  slot_reserved INTEGER DEFAULT 0 NOT NULL,
+  launch_id TEXT,
+  launch_token INTEGER,
+  dispatch_json TEXT,
+  output_json TEXT,
+  error TEXT,
+  exit_json TEXT,
+  started_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (run_id),
+  FOREIGN KEY(round_id, request_id) REFERENCES source_round_requests (round_id, request_id),
+  CHECK (stage IN ('identify','synthesis')),
+  CHECK (status IN ('waiting','starting','running','succeeded','failed','interrupted')),
+  CHECK (slot_reserved IN (0,1)),
+  CHECK (slot_reserved = (status IN ('starting','running'))),
+  CHECK ((launch_id IS NULL) = (launch_token IS NULL)),
+  CHECK (dispatch_json IS NULL OR launch_id IS NOT NULL),
+  CHECK (status <> 'running' OR dispatch_json IS NOT NULL),
+  CHECK ((status IN ('succeeded','failed','interrupted')) = (exit_json IS NOT NULL)),
+  CHECK ((status = 'succeeded') = (output_json IS NOT NULL)),
+  UNIQUE (launch_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_model_runs_active ON source_model_runs (round_id) WHERE status IN ('waiting','starting','running');
+
+CREATE INDEX IF NOT EXISTS idx_source_model_runs_reserved ON source_model_runs (slot_reserved) WHERE slot_reserved=1;
+
+CREATE INDEX IF NOT EXISTS idx_source_model_runs_round ON source_model_runs (round_id, created_at, run_id);
+
+CREATE TABLE IF NOT EXISTS tapd_discovery_progress (
+  probe_key TEXT NOT NULL PRIMARY KEY,
+  attempted_at TEXT NOT NULL,
+  completed_at TEXT,
+  attention_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tapd_observation_progress (
+  source_id TEXT NOT NULL PRIMARY KEY REFERENCES sources(source_id) ON DELETE CASCADE,
+  attempted_at TEXT NOT NULL,
+  completed_at TEXT,
+  attention_reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_tapd_observation_progress_attempted
+ON tapd_observation_progress (attempted_at, source_id);
+
+CREATE TABLE IF NOT EXISTS tapd_project_intake (
+  host TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  activated_after TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (host, workspace_id)
+);
+
+CREATE TABLE IF NOT EXISTS source_round_cancellations (
+  round_id TEXT NOT NULL PRIMARY KEY REFERENCES source_rounds(round_id),
+  reason TEXT NOT NULL,
+  requested_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_results (
+  source_result_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  round_id TEXT,
+  kind TEXT NOT NULL,
+  input_version TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  worker_result_id TEXT,
+  model_run_id TEXT,
+  evidence_json TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  accepted_at TEXT NOT NULL,
+  PRIMARY KEY (source_result_id),
+  CHECK (kind IN ('answer','question','control_notice')),
+  CHECK ((kind = 'control_notice' AND round_id IS NULL AND worker_result_id IS NULL AND model_run_id IS NULL) OR (kind != 'control_notice' AND round_id IS NOT NULL AND (worker_result_id IS NOT NULL) != (model_run_id IS NOT NULL))),
+  FOREIGN KEY(source_id) REFERENCES sources (source_id),
+  UNIQUE (round_id),
+  FOREIGN KEY(round_id) REFERENCES source_rounds (round_id),
+  UNIQUE (idempotency_key),
+  UNIQUE (worker_result_id),
+  FOREIGN KEY(worker_result_id) REFERENCES worker_results (result_id),
+  UNIQUE (model_run_id),
+  FOREIGN KEY(model_run_id) REFERENCES source_model_runs (run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_results_source ON source_results (source_id, accepted_at, source_result_id);
+
+CREATE TABLE IF NOT EXISTS source_result_retirements (
+  source_result_id TEXT NOT NULL PRIMARY KEY REFERENCES source_results(source_result_id),
+  observation_revision TEXT NOT NULL,
+  proof_json TEXT NOT NULL,
+  retired_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_required_actions (
+  action_id TEXT NOT NULL,
+  source_result_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  PRIMARY KEY (action_id),
+  UNIQUE (source_result_id, position),
+  CHECK (position >= 0),
+  FOREIGN KEY(action_id) REFERENCES github_actions (action_id),
+  FOREIGN KEY(source_result_id) REFERENCES source_results (source_result_id)
+);
+
+CREATE TABLE IF NOT EXISTS tapd_publication_preparations (
+  publication_id TEXT PRIMARY KEY NOT NULL
+    REFERENCES publication_intents(publication_id),
+  prepared_evidence_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS github_publication_preparations (
+  publication_id TEXT PRIMARY KEY NOT NULL
+    REFERENCES publication_intents(publication_id),
+  prepared_evidence_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tapd_coordination (
+  source_id TEXT PRIMARY KEY NOT NULL REFERENCES sources(source_id) ON DELETE CASCADE,
+  updated_at TEXT NOT NULL,
+  next_due_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  reason TEXT,
+  round_id TEXT REFERENCES source_rounds(round_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tapd_coordination_updated ON tapd_coordination(updated_at, source_id);
+
+CREATE TABLE IF NOT EXISTS source_attentions (
+  notification_id TEXT NOT NULL PRIMARY KEY REFERENCES notifications(notification_id),
+  source_id TEXT NOT NULL REFERENCES source_sessions(source_id),
+  round_id TEXT NOT NULL REFERENCES source_rounds(round_id),
+  kind TEXT NOT NULL,
+  cause TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  repo_id TEXT REFERENCES repos(repo_id),
+  repo_basis TEXT,
+  task_id TEXT REFERENCES source_round_tasks(task_id),
+  attempt_id TEXT REFERENCES attempts(attempt_id),
+  model_run_id TEXT REFERENCES source_model_runs(run_id),
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  CHECK ((repo_id IS NULL) = (repo_basis IS NULL)),
+  CHECK (repo_basis IN ('task', 'children', 'round', 'selection')),
+  CHECK ((task_id IS NOT NULL) = (COALESCE(repo_basis, '') = 'task')),
+  CHECK (attempt_id IS NULL OR task_id IS NOT NULL),
+  CHECK (model_run_id IS NULL OR task_id IS NULL),
+  UNIQUE (source_id, kind, version)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_attentions_open_coordination
+ON source_attentions(source_id) WHERE kind = 'coordination' AND resolved_at IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_attentions_open_recovery
+ON source_attentions(source_id) WHERE kind = 'delivery_recovery' AND resolved_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS source_question_attentions (
+  notification_id TEXT NOT NULL PRIMARY KEY REFERENCES source_attentions(notification_id),
+  source_result_id TEXT NOT NULL UNIQUE REFERENCES source_results(source_result_id),
+  publication_id TEXT NOT NULL UNIQUE REFERENCES publication_intents(publication_id),
+  body TEXT NOT NULL,
+  result_evidence_json TEXT NOT NULL,
+  prepared_evidence_json TEXT NOT NULL,
+  remote_evidence_json TEXT NOT NULL,
+  intent_fingerprint TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_recovery_attentions (
+  notification_id TEXT NOT NULL PRIMARY KEY REFERENCES source_attentions(notification_id),
+  source_result_id TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  pause_proof_json TEXT NOT NULL,
+  FOREIGN KEY (source_result_id, generation) REFERENCES source_delivery_pauses(source_result_id, generation)
+);
+
+CREATE TABLE IF NOT EXISTS source_publication_attentions (
+  notification_id TEXT NOT NULL PRIMARY KEY REFERENCES notifications(notification_id),
+  source_id TEXT NOT NULL REFERENCES source_sessions(source_id),
+  source_result_id TEXT NOT NULL REFERENCES source_results(source_result_id),
+  action_id TEXT NOT NULL REFERENCES github_actions(action_id),
+  publication_id TEXT NOT NULL REFERENCES publication_intents(publication_id),
+  request_fingerprint TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('tapd', 'github')),
+  cause TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  UNIQUE (publication_id, version)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_publication_attentions_open
+ON source_publication_attentions(publication_id) WHERE resolved_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS source_confirmation_questions (
+  question_id TEXT NOT NULL PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(source_id),
+  version INTEGER NOT NULL CHECK (version > 0),
+  scope_json TEXT NOT NULL,
+  scope_digest TEXT NOT NULL,
+  source_result_id TEXT NOT NULL UNIQUE REFERENCES source_results(source_result_id),
+  action_id TEXT NOT NULL UNIQUE REFERENCES github_actions(action_id),
+  created_at TEXT NOT NULL,
+  superseded_at TEXT,
+  UNIQUE (source_id, version)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_confirmation_current
+ON source_confirmation_questions(source_id) WHERE superseded_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS source_confirmation_answers (
+  question_id TEXT NOT NULL PRIMARY KEY REFERENCES source_confirmation_questions(question_id),
+  event_id TEXT NOT NULL UNIQUE REFERENCES source_events(event_id),
+  publication_id TEXT NOT NULL REFERENCES publication_intents(publication_id),
+  comment_id TEXT NOT NULL,
+  proof_json TEXT NOT NULL,
+  accepted_at TEXT NOT NULL,
+  revoked_at TEXT,
+  consumer_id TEXT,
+  claimed_at TEXT,
+  CHECK ((consumer_id IS NULL) = (claimed_at IS NULL))
+);
+
+
+CREATE TABLE IF NOT EXISTS source_resume_transitions (
+  transition_id TEXT NOT NULL PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(source_id),
+  question_id TEXT NOT NULL UNIQUE REFERENCES source_confirmation_answers(question_id),
+  binding_request_id TEXT NOT NULL REFERENCES ingress_requests(request_id),
+  paused_binding_json TEXT NOT NULL,
+  receipt_json TEXT NOT NULL,
+  repository_json TEXT NOT NULL,
+  request_ids_json TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);
+
+
+CREATE TABLE IF NOT EXISTS source_delivery_pauses (
+  source_result_id TEXT NOT NULL REFERENCES source_results(source_result_id),
+  generation INTEGER NOT NULL CHECK (generation > 0),
+  source_id TEXT NOT NULL REFERENCES sources(source_id),
+  round_id TEXT NOT NULL REFERENCES source_round_cancellations(round_id),
+  observation_revision TEXT NOT NULL,
+  proof_json TEXT NOT NULL,
+  paused_at TEXT NOT NULL,
+  PRIMARY KEY (source_result_id, generation)
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_delivery_pauses_source
+ON source_delivery_pauses(source_id, round_id);
+
+
+CREATE TABLE IF NOT EXISTS source_delivery_recoveries (
+  source_result_id TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources(source_id),
+  question_id TEXT NOT NULL UNIQUE REFERENCES source_confirmation_questions(question_id),
+  transition_id TEXT NOT NULL UNIQUE,
+  binding_sha256 TEXT NOT NULL,
+  evidence_json TEXT NOT NULL,
+  claimed_at TEXT NOT NULL,
+  completed_at TEXT,
+  suspended_at TEXT,
+  PRIMARY KEY (source_result_id, generation),
+  FOREIGN KEY (source_result_id, generation) REFERENCES source_delivery_pauses(source_result_id, generation)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_delivery_recovery_active
+ON source_delivery_recoveries(source_id) WHERE completed_at IS NULL AND suspended_at IS NULL;

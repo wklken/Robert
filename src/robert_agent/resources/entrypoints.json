@@ -26,6 +26,7 @@
   "robert_agent.runtime.cycle",
   "robert_agent.runtime.daemon",
   "robert_agent.runtime.loop",
+  "robert_agent.runtime.native_sources",
   "robert_agent.runtime.paused_monitor",
   "robert_agent.runtime.scan",
   "robert_agent.runtime.supervisor",

@@ -74,7 +74,7 @@ class BoardReadModelTests(BoardReadModelFixture):
                 (item["workstream_id"],),
             )
             conn.execute(
-                "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, html_url, title, state) VALUES ('pr-closed', 'repo-1', 'github:example/repo!44', 'pull_request', 44, 'https://github.com/example/repo/pull/44', 'Closed PR', 'closed')"
+                "INSERT INTO sources(source_id, repo_id, source_key, source_type, number, html_url, title, state, provider, host, project_key, external_id) VALUES ('pr-closed', 'repo-1', 'github:example/repo!44', 'pull_request', 44, 'https://github.com/example/repo/pull/44', 'Closed PR', 'closed', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '44')"
             )
             conn.execute(
                 "INSERT INTO workstreams(workstream_id, repo_id, primary_source_id, origin_workstream_id, lifecycle, created_at, updated_at) VALUES ('github:example/repo!44', 'repo-1', 'pr-closed', ?, 'completed', ?, ?)",
@@ -103,7 +103,7 @@ class BoardReadModelTests(BoardReadModelFixture):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             conn.execute(
-                "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, html_url, title, state) VALUES ('pr-direct', 'repo-1', ?, 'pull_request', 3353, 'https://github.com/example/repo/pull/3353', 'Direct PR', 'open')",
+                "INSERT INTO sources(source_id, repo_id, source_key, source_type, number, html_url, title, state, provider, host, project_key, external_id) VALUES ('pr-direct', 'repo-1', ?, 'pull_request', 3353, 'https://github.com/example/repo/pull/3353', 'Direct PR', 'open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '3353')",
                 (source_key,),
             )
             conn.execute(
@@ -170,7 +170,7 @@ class BoardReadModelTests(BoardReadModelFixture):
         item = self._seed_six_columns()["review"]
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, html_url, title, state) VALUES ('issue-origin', 'repo-1', 'github:example/repo#11', 'issue', 11, 'https://github.com/example/repo/issues/11', 'Original issue', 'open')"
+                "INSERT INTO sources(source_id, repo_id, source_key, source_type, number, html_url, title, state, provider, host, project_key, external_id) VALUES ('issue-origin', 'repo-1', 'github:example/repo#11', 'issue', 11, 'https://github.com/example/repo/issues/11', 'Original issue', 'open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '11')"
             )
             conn.execute(
                 "UPDATE work_items SET origin_source_id = 'issue-origin' WHERE work_item_id = ?",
@@ -188,7 +188,7 @@ class BoardReadModelTests(BoardReadModelFixture):
         )
         self.assertEqual(detail["pr"]["number"], 12)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute("UPDATE github_sources SET html_url = 'javascript:alert(1)' WHERE source_id = 'issue-origin'")
+            conn.execute("UPDATE sources SET html_url = 'javascript:alert(1)' WHERE source_id = 'issue-origin'")
         self.assertIsNone(board.get_work_item_detail(self.db_path, item["work_item_id"])["source"]["url"])
 
     def test_projection_does_not_expose_non_http_pull_request_urls(self):
@@ -196,7 +196,7 @@ class BoardReadModelTests(BoardReadModelFixture):
 
         items = self._seed_six_columns()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute("UPDATE github_sources SET html_url = 'javascript:alert(1)' WHERE source_id = 'pr-review'")
+            conn.execute("UPDATE sources SET html_url = 'javascript:alert(1)' WHERE source_id = 'pr-review'")
 
         detail = board.get_work_item_detail(
             self.db_path,

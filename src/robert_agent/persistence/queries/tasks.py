@@ -26,6 +26,7 @@ from sqlalchemy import (
 
 
 from robert_agent.persistence.catalog import tables
+from robert_agent.persistence.queries.request_events import task_relationship
 from robert_agent.persistence import statements
 
 
@@ -503,7 +504,7 @@ def find_for_verified(conn, child, task_id, value_3):
                         [sql_constant(TaskLifecycle.CANCELED.value), sql_constant(TaskLifecycle.IGNORED.value)]
                     )
                 ),
-                table2.c["relationship"] == sql_constant("trigger"),
+                task_relationship(table2) == sql_constant("trigger"),
             )
         )
         .limit(sql_constant(1))
@@ -737,6 +738,7 @@ def find_for_retrigger_failed_github_task(conn, task_id):
     table1 = tables["tasks"].alias("t")
     table2 = tables["workstreams"].alias("w")
     table3 = tables["repos"].alias("r")
+    source = tables["sources"].alias("gs")
     query4 = (
         select(
             table1.c["metadata_json"],
@@ -749,10 +751,12 @@ def find_for_retrigger_failed_github_task(conn, task_id):
                 table2,
                 (table2.c["workstream_id"] == table1.c["workstream_id"]),
                 isouter=False,
-            ).join(table3, (table3.c["repo_id"] == table2.c["repo_id"]), isouter=False)
+            )
+            .join(table3, (table3.c["repo_id"] == table2.c["repo_id"]), isouter=False)
+            .join(source, source.c.source_id == table2.c.primary_source_id)
         )
-        .where((table1.c["task_id"] == bindparam("p0")))
-        .correlate_except(table1, table2, table3)
+        .where(table1.c.task_id == bindparam("p0"), source.c.provider == "github")
+        .correlate_except(table1, table2, table3, source)
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query4, {"p0": task_id})
@@ -761,7 +765,7 @@ def find_for_retrigger_failed_github_task(conn, task_id):
 def find_for_retrigger_failed_github_task_2(conn, task_id):
     table1 = tables["tasks"].alias("t")
     table2 = tables["workstreams"].alias("w")
-    table3 = tables["github_sources"].alias("gs")
+    table3 = tables["sources"].alias("gs")
     query4 = (
         select(
             table1.c["task_id"],
@@ -784,7 +788,7 @@ def find_for_retrigger_failed_github_task_2(conn, task_id):
                 isouter=False,
             )
         )
-        .where((table1.c["task_id"] == bindparam("p0")))
+        .where(table1.c.task_id == bindparam("p0"), table3.c.provider == "github")
         .correlate_except(table1, table2, table3)
         .set_label_style(LABEL_STYLE_NONE)
     )
@@ -808,7 +812,7 @@ def find_for_pending_handoff_current(conn, task_id, workstream_id):
     table1 = tables["tasks"].alias("t")
     table2 = tables["workstreams"].alias("w")
     table3 = tables["work_items"].alias("wi")
-    table4 = tables["github_sources"].alias("gs")
+    table4 = tables["sources"].alias("gs")
     table6 = tables["tasks"].alias("child")
     query7 = (
         select(sql_constant(1))
@@ -1308,7 +1312,7 @@ def find_for_task(conn, task_id):
     table1 = tables["tasks"].alias("t")
     table2 = tables["workstreams"].alias("w")
     table3 = tables["repos"].alias("r")
-    table4 = tables["github_sources"].alias("s")
+    table4 = tables["sources"].alias("s")
     query7 = (
         select(table1.c["workstream_id"].label("id"), sql_constant(0).label("depth"))
         .where(table1.c.task_id == bindparam("p0"))
@@ -1476,7 +1480,7 @@ def _ready_rows_filtered_statement():
         .correlate_except(table6)
         .set_label_style(LABEL_STYLE_NONE)
     )
-    table8 = tables["github_sources"].alias("gs")
+    table8 = tables["sources"].alias("gs")
     query9 = (
         select(sql_constant(1))
         .select_from(table8)
@@ -1496,7 +1500,7 @@ def _ready_rows_filtered_statement():
         .where(
             and_(
                 (table10.c["task_id"] == table1.c["task_id"]),
-                table10.c["relationship"].in_([sql_constant("context"), sql_constant("pending")]),
+                task_relationship(table10).in_([sql_constant("context"), sql_constant("pending")]),
             )
         )
         .correlate_except(table10)

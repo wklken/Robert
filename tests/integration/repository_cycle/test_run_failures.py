@@ -124,7 +124,7 @@ class CycleRunFailureTests(RepositoryCycleFixture):
         self.assertEqual(prepared_numbers, [22, 23])
         self.assertEqual(len(result["prompt_paths"]), 1)
         with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn:
-            stored = {row[0] for row in conn.execute("SELECT event_fingerprint FROM github_events")}
+            stored = {row[0] for row in conn.execute("SELECT event_fingerprint FROM source_events")}
             tasks = conn.execute("SELECT workstream_id, route_id FROM tasks").fetchall()
             route_error = json.loads(
                 conn.execute("SELECT error_json FROM run_repo_steps WHERE step_key = 'route'").fetchone()[0]

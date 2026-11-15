@@ -178,7 +178,7 @@ class StatusTests(SummaryFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
                 """
-                UPDATE github_sources
+                UPDATE sources
                 SET state = 'closed', metadata_json = ?
                 WHERE source_id = 'source-1'
                 """,

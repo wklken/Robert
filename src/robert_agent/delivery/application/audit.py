@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
-from robert_agent.delivery import policies
+from robert_agent.delivery import contract, native_contract, policies
 from robert_agent.foundation.commands import emit
 from robert_agent.security import redaction
 from robert_agent.workflows.review import publish as review_publish
@@ -569,6 +569,103 @@ def _audit_public_text(actions):
     return needs_redaction
 
 
+def _audit_native(
+    result,
+    native,
+    *,
+    native_tapd,
+    required_skills,
+    verification_policy,
+    action_scope,
+    final,
+    task_kind,
+    remediation_context,
+    remediation_attestation,
+):
+    try:
+        native_contract.validate_bound_result(result, native)
+    except contract.InvalidSubmission as exc:
+        return {
+            "ok": False,
+            "status": AuditStatus.POLICY_VIOLATION.value,
+            "violations": [exc.code],
+            "field_path": exc.field,
+            "safe_error": str(exc),
+        }
+
+    actions = result["planned_actions"]
+    github_types = [action["type"] for action in actions if action["provider"] == "github"]
+    error = (
+        _validate_used_skills(result.get("used_skills"))[1]
+        or _audit_required_skills_coverage(result["used_skills"], required_skills)
+        or _audit_verification_contract(result, verification_policy, github_types)
+    )
+    if error:
+        return {"ok": False, "status": AuditStatus.FAILED.value, "safe_error": error}
+    violations = _audit_public_text(actions)
+    if violations:
+        return {
+            "ok": False,
+            "status": AuditStatus.POLICY_VIOLATION.value,
+            **violations,
+            "field_path": violations["field_path"].replace("planned_github_actions", "planned_actions", 1),
+        }
+    if final and any(action["provider"] == "tapd" for action in actions) and native_tapd is None:
+        return {
+            "ok": False,
+            "status": AuditStatus.POLICY_VIOLATION.value,
+            "violations": ["unmapped_tapd_text"],
+            "safe_error": "TAPD reply references unavailable evidence or contains unsafe text.",
+        }
+    if github_types:
+        targets = [action["target"] for action in actions if action["provider"] == "github"]
+        scope = action_scope or {}
+        if any(target["repository"] != scope.get("repo") for target in targets) or any(
+            not scope.get(field) for field in ("worktree_path", "branch_name", "base_branch", "remote")
+        ):
+            return {
+                "ok": False,
+                "status": AuditStatus.POLICY_VIOLATION.value,
+                "violations": ["action_scope"],
+                "safe_error": "Assigned GitHub workspace is unavailable.",
+            }
+        if final and (
+            not result.get("submission_head_sha")
+            or result["submission_head_sha"] != scope.get("result_head_sha")
+            or scope.get("worktree_status") != "clean"
+        ):
+            return {
+                "ok": False,
+                "status": AuditStatus.POLICY_VIOLATION.value,
+                "violations": ["submission_head_changed"],
+                "safe_error": "Final Git head or workspace cannot be verified.",
+            }
+        if final and not scope.get("native_github"):
+            return {
+                "ok": False,
+                "status": AuditStatus.POLICY_VIOLATION.value,
+                "violations": ["unverified_native_git"],
+                "safe_error": "Native commit ancestry, public metadata or Git identity could not be verified.",
+            }
+    remediation = _audit_remediation_evidence(
+        result,
+        task_kind=task_kind,
+        remediation_context=remediation_context,
+        remediation_attestation=remediation_attestation,
+        require_attestation=final,
+    )
+    if remediation:
+        return {"ok": False, "status": AuditStatus.POLICY_VIOLATION.value, "violations": remediation}
+    return {
+        "ok": True,
+        "status": AuditStatus.ACCEPTED.value,
+        "planned_actions": [{key: action[key] for key in ("provider", "type", "target_id")} for action in actions],
+        **({"action_scope": dict(action_scope)} if github_types else {}),
+        **({"native_tapd": native_tapd} if native_tapd is not None else {}),
+        **({"remediation_attestation": remediation_attestation} if remediation_attestation else {}),
+    }
+
+
 def audit_result(
     result,
     allowed_github_actions,
@@ -584,7 +681,22 @@ def audit_result(
     review_input_policy="required",
     final=True,
     dispatch_issue_url=None,
+    native=None,
+    native_tapd=None,
 ):
+    if native is not None:
+        return _audit_native(
+            result,
+            native,
+            native_tapd=native_tapd,
+            required_skills=required_skills,
+            verification_policy=verification_policy,
+            action_scope=action_scope,
+            final=final,
+            task_kind=task_kind,
+            remediation_context=remediation_context,
+            remediation_attestation=remediation_attestation,
+        )
     if dispatch_issue_url:
         kind = result.get("output_type")
         if kind == "classification_result" and result.get("recommended_route") not in {

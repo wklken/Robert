@@ -34,9 +34,9 @@ class LocalClassificationWaitingTests(BoardControlIntegrationFixture):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("UPDATE workstreams SET lifecycle='completed', active_task_id=NULL")
             conn.execute(
-                """INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,title,state)
+                """INSERT INTO sources(source_id,repo_id,source_key,source_type,number,html_url,title,state, provider, host, project_key, external_id)
                    VALUES (?, ?, ?, 'pull_request', 81, 'https://github.com/example/repo/pull/81',
-                           'Repository setting', 'open')""",
+                           'Repository setting', 'open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id=?2), '81')""",
                 (source, self.repo_id, pr_stream),
             )
             conn.execute(

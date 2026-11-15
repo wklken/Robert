@@ -298,3 +298,20 @@ def cancel_execution_filtered(conn, items, value_1):
         .where(tables["workstreams"].c["workstream_id"].in_(bindparam("items", expanding=True)))
     )
     return statements.write(conn, stmt, {"p0": value_1, "items": items})
+
+
+def set_tapd_control_lifecycle(conn, *, workstream_id, source_id, repo_id, lifecycle, now):
+    """Change only the native control stream, never a derived GitHub PR stream."""
+    stream = tables["workstreams"]
+    return statements.write(
+        conn,
+        update(stream)
+        .where(
+            stream.c.workstream_id == workstream_id,
+            stream.c.primary_source_id == source_id,
+            stream.c.repo_id == repo_id,
+            stream.c.origin_workstream_id.is_(None),
+            stream.c.lifecycle != WorkstreamLifecycle.CANCELED.value,
+        )
+        .values(lifecycle=lifecycle, active_task_id=None, updated_at=now),
+    )

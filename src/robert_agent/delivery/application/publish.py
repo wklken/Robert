@@ -1,39 +1,90 @@
 """application delivery publish responsibilities."""
 
-from robert_agent.foundation.commands import ControlDeadlineExceeded
-from robert_agent.foundation.contracts.delivery import GitHubActionType, PublicationStatus, PublishStatus
+import argparse
+import os
+import subprocess
+import time
+from contextlib import closing
+
+from robert_agent.adapters.github import budget as github_budget
+from robert_agent.adapters.github import read as github_read
+from robert_agent.delivery import intents as intent_facts
+from robert_agent.delivery import queries as publication_queries
+from robert_agent.delivery import values as publication_values
+from robert_agent.delivery.application import effects as publication_effects
+from robert_agent.delivery.application import intents as publication_intents
+from robert_agent.delivery.application import outcomes as publication_outcomes
+from robert_agent.delivery.application import receipts as publication_receipts
+from robert_agent.delivery.application import reconcile as publication_reconcile
+from robert_agent.delivery.application import scope as publication_scope
+from robert_agent.delivery.application import (
+    source_feedback_publication,
+    source_github_publication,
+    source_publication,
+    source_publication_queue,
+)
+from robert_agent.delivery.lock import task_publication_lock
+from robert_agent.execution import operations as execution_operations
+from robert_agent.execution import source_controller
+from robert_agent.foundation.commands import ControlDeadlineExceeded, emit
+from robert_agent.foundation.commands import run_command as control_command
+from robert_agent.foundation.contracts.delivery import (
+    GitHubActionType,
+    PublicationStatus,
+    PublishStatus,
+    SourceControllerAction,
+)
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
-
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import errors as db_errors
-
+from robert_agent.persistence import execution_control as execution_store
 from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import dispatch_requests
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.stores import github_actions as db_write_github_actions
 from robert_agent.persistence.stores import wakeups as db_write_wakeups
-import argparse
-from contextlib import closing
-import subprocess
-from robert_agent.delivery.application import reconcile as publication_reconcile
-from robert_agent.execution import operations as execution_operations
-from robert_agent.persistence import execution_control as execution_store
 from robert_agent.supervision.application import publication as supervision_publication
-from robert_agent.foundation.commands import emit, run_command as control_command
-from robert_agent.delivery.lock import task_publication_lock
-
-from robert_agent.delivery.application import effects as publication_effects
-from robert_agent.delivery.application import scope as publication_scope
-from robert_agent.delivery.application import intents as publication_intents
-from robert_agent.delivery.application import outcomes as publication_outcomes
-from robert_agent.delivery.application import receipts as publication_receipts
-from robert_agent.delivery import intents as intent_facts
-from robert_agent.delivery import queries as publication_queries
-from robert_agent.delivery import values as publication_values
-from robert_agent.persistence.queries import dispatch_requests
 
 PUBLISH_COMMAND_TIMEOUT_SECONDS = 60
+
+
+def github_publication_budget(db_path, config, *, host="github.com", stop=None, run_command=subprocess.run):
+    """Return a per-invocation configured account budget probe for this host."""
+    accounts = {}
+
+    def command(args, **kwargs):
+        if stop is not None and stop.is_set():
+            raise ControlDeadlineExceeded(args[:2], 0)
+        deadline = getattr(stop, "deadline", float("inf"))
+        cap = max(0.001, min(20, deadline - time.monotonic()))
+        env = {key: value for key, value in os.environ.items() if key not in {"GH_HOST", "GH_REPO"}}
+        env.update(GH_HOST=host, GH_PROMPT_DISABLED="1")
+        cap = min(cap, kwargs.pop("timeout", None) or cap)
+        return control_command(args, runner=run_command, timeout=cap, env=env, **kwargs)
+
+    def check(account):
+        if account not in accounts:
+            session = github_read.GitHubReadSession(db_path, account=account, host=host, runner=command)
+            try:
+                accounts[account] = (
+                    None
+                    if github_budget.budget(session, config)
+                    else {
+                        "ok": False,
+                        "status": "core_rate_limit_floor",
+                        "failure_scope": "repository",
+                        "retry_after_seconds": session.poll_interval_seconds or 60,
+                    }
+                )
+            except ControlDeadlineExceeded:
+                raise
+            except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError, AttributeError):
+                accounts[account] = {"ok": False, "status": "rate_limit_check_failed", "failure_scope": "repository"}
+        return accounts[account]
+
+    return check
 
 
 def publish_ready_actions(
@@ -46,7 +97,23 @@ def publish_ready_actions(
     *,
     action_ids=None,
     config=None,
+    provider=None,
+    source_owner=None,
+    tapd_client_factory=None,
+    tapd_observation_provider=None,
+    github_feedback_runner=None,
+    github_discussion_runner=None,
+    tapd_identity_provider=None,
+    stop=None,
+    source_reconcile_only=False,
+    recover_sources=True,
+    github_budget_check=None,
+    include_legacy=True,
 ):
+    """Service one age-ordered effect budget and a separate bounded local recovery page."""
+    if provider not in (None, "github", "tapd"):
+        raise ValueError("Unsupported publication provider")
+
     def bounded_command(*args, **kwargs):
         kwargs["timeout"] = min(
             kwargs.get("timeout") or PUBLISH_COMMAND_TIMEOUT_SECONDS, PUBLISH_COMMAND_TIMEOUT_SECONDS
@@ -66,9 +133,43 @@ def publish_ready_actions(
                 "skipped_count": 0,
                 "failed_count": 0,
             }
-        actions = publication_queries.ready_actions(
-            conn, limit, repo_id=repo_id, task_ids=task_ids, action_ids=action_ids
+        scope = {"repo_id": repo_id, "task_ids": task_ids, "action_ids": action_ids}
+        actions = (
+            publication_queries.ready_actions(conn, limit, **scope) if provider != "tapd" and include_legacy else []
         )
+        native, completions = source_publication_queue.source_publication_page(
+            conn,
+            config,
+            source_owner=source_owner,
+            limit=limit,
+            **scope,
+            tapd_observation_provider=tapd_observation_provider,
+            tapd_identity_provider=tapd_identity_provider,
+            provider=provider,
+            reconcile_only=source_reconcile_only,
+            recover=recover_sources,
+        )
+    if native:
+        native_rows = [dict(row) for row in native]
+        actions = sorted([*actions, *native_rows], key=lambda row: (row["created_at"], row["action_id"]))
+        if limit >= 0:
+            # A full native page may have older unseen entries. Execute only
+            # the provable globally ordered prefix and resume on the next pass.
+            effect_limit = min(limit, len(native)) if len(native) == source_publication_queue.MAX_NATIVE_PAGE else limit
+            actions = actions[:effect_limit]
+    native_counts = (
+        {
+            "native_published_count": 0,
+            "native_deduplicated_count": 0,
+            "native_deferred_count": 0,
+            "native_unknown_count": 0,
+            "native_invalid_count": 0,
+            "native_completed_count": 0,
+            "native_completion_held_count": 0,
+        }
+        if native or completions or source_owner is not None or provider == "tapd"
+        else {}
+    )
     if dry_run:
         return {
             "ok": True,
@@ -78,6 +179,7 @@ def publish_ready_actions(
             "deduplicated_count": 0,
             "skipped_count": 0,
             "failed_count": 0,
+            **native_counts,
         }
     deferred_count = 0
     published_count = 0
@@ -85,10 +187,117 @@ def publish_ready_actions(
     skipped_count = 0
     failed_count = 0
     failures = []
+    budget_failure = None
+    budget_refused = 0
     failed_result_ids = set()
     failed_remediation_result_ids = set()
     busy_task_ids = set()
+    for candidate in completions:
+        if stop is not None and stop.is_set():
+            break
+        outcome = source_publication_queue.recover_source_completion(
+            db_path,
+            config,
+            candidate,
+            source_owner=source_owner,
+            tapd_client_factory=tapd_client_factory,
+            tapd_observation_provider=tapd_observation_provider,
+            github_discussion_runner=github_discussion_runner,
+            stop=stop,
+            reconcile_only=source_reconcile_only,
+            **scope,
+        )
+        key = "native_completed_count" if outcome.status == "completed" else "native_completion_held_count"
+        if outcome.status not in {"already_completed", "lineage_recovered"}:
+            native_counts[key] += 1
     for action in actions:
+        if stop is not None and stop.is_set():
+            break
+        if root_id := action.get("native_source_result_id"):
+            native_options = {
+                "source_result_id": root_id,
+                "action_id": action["action_id"],
+                "owner": source_owner,
+                "observation_provider": tapd_observation_provider,
+                "stop": stop,
+                "respect_backoff": True,
+            }
+            if action["provider"] == "github":
+                if github_budget_check is not None:
+                    repo_accounts = [
+                        repo.get("github_account")
+                        for repo in config.get("repos", ())
+                        if repo.get("full_name") == action["native_repository"]
+                    ]
+                    refusal = (
+                        github_budget_check(repo_accounts[0])
+                        if len(repo_accounts) == 1 and isinstance(repo_accounts[0], str) and repo_accounts[0]
+                        else {"ok": False, "status": "rate_limit_check_failed", "failure_scope": "repository"}
+                    )
+                    if refusal:
+                        budget_failure = budget_failure or refusal
+                        budget_refused += 1
+                        continue
+                client = {"tapd_client_factory": tapd_client_factory} if tapd_client_factory is not None else {}
+                discussion = (
+                    {"github_discussion_runner": github_discussion_runner}
+                    if github_discussion_runner is not None
+                    else {}
+                )
+                if action["action_type"] == SourceControllerAction.GITHUB_FEEDBACK:
+                    outcome = source_feedback_publication.publish_feedback_action(
+                        db_path,
+                        config,
+                        runner=github_feedback_runner,
+                        reconcile_only=source_reconcile_only,
+                        **native_options,
+                        **client,
+                        **discussion,
+                    )
+                else:
+                    outcome = source_github_publication.publish_github_action(
+                        db_path,
+                        config,
+                        run_command=run_command,
+                        reconcile_only=source_reconcile_only,
+                        **native_options,
+                        **client,
+                        **discussion,
+                    )
+                completion = None
+            else:
+                client = {"client_factory": tapd_client_factory} if tapd_client_factory is not None else {}
+                github_reads = {}
+                if github_discussion_runner is not None:
+                    github_reads["github_discussion_runner"] = github_discussion_runner
+                if run_command is not subprocess.run:
+                    github_reads["github_runner"] = run_command
+                outcome = source_publication.publish_tapd_action(
+                    db_path,
+                    config,
+                    identity_provider=None if source_reconcile_only else tapd_identity_provider,
+                    **native_options,
+                    **client,
+                    **github_reads,
+                )
+                completion = outcome.completion
+            native_counts[f"native_{outcome.status}_count"] += 1
+            if outcome.status == "published":
+                published_count += 1
+            elif outcome.status == "deduplicated":
+                published_count += 1
+                deduplicated_count += 1
+            elif outcome.status == "deferred":
+                deferred_count += 1
+            else:
+                failed_count += 1
+                failures.append({"action_id": action["action_id"], "safe_error": outcome.reason, "command": []})
+            if completion is not None:
+                if completion.status == "completed":
+                    native_counts["native_completed_count"] += 1
+                elif completion.status in {"held", "ineligible"}:
+                    native_counts["native_completion_held_count"] += 1
+            continue
         if action["task_id"] in busy_task_ids:
             continue
         with task_publication_lock(db_path, action["task_id"]) as acquired:
@@ -734,17 +943,19 @@ def publish_ready_actions(
     return {
         "ok": failed_count == 0,
         "status": "published" if failed_count == 0 else "publish_failed",
-        "pending_count": len(actions),
+        "pending_count": len(actions) - budget_refused,
         "published_count": published_count,
         "deferred_count": deferred_count,
         "deduplicated_count": deduplicated_count,
         "skipped_count": skipped_count,
         "failed_count": failed_count,
         "failures": failures,
+        **native_counts,
+        **(budget_failure or {}),
     }
 
 
-def main(argv=None):
+def main(argv=None, *, tapd_client_factory=None, tapd_observation_provider=None, tapd_identity_provider=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", required=True)
     parser.add_argument("--dry-run", action="store_true")
@@ -761,7 +972,42 @@ def main(argv=None):
             },
             3,
         )
-    result = publish_ready_actions(args.db, dry_run=args.dry_run, limit=args.limit, config=config)
+    native = (config or {}).get("tapd", {}).get("enabled") is True and not args.dry_run
+    if native:
+        with source_controller.publication(args.db, args.config, seconds=120) as (owner, stop, status):
+            if owner is None and status != "skipped_active_daemon":
+                result = {"ok": False, "status": status, "pending_count": 0}
+            else:
+                options = {
+                    "config": config,
+                    "source_owner": owner,
+                    "stop": stop if owner else None,
+                    "tapd_client_factory": tapd_client_factory,
+                    "tapd_observation_provider": tapd_observation_provider,
+                    "tapd_identity_provider": tapd_identity_provider,
+                }
+                native = publish_ready_actions(args.db, limit=args.limit, provider="tapd", **options) if owner else {}
+                remaining = max(0, args.limit - native.get("pending_count", 0))
+                if remaining:
+                    result = publish_ready_actions(
+                        args.db,
+                        limit=remaining,
+                        provider="github",
+                        recover_sources=False,
+                        github_budget_check=github_publication_budget(args.db, config, stop=options["stop"]),
+                        **options,
+                    )
+                    for key, count in native.items():
+                        if key.endswith("_count") and type(count) is int:
+                            result[key] = result.get(key, 0) + count
+                    if not native.get("ok", True) and result.get("ok"):
+                        result.update(ok=False, status=native["status"])
+                    if native.get("failures"):
+                        result["failures"] = [*native["failures"], *result.get("failures", [])]
+                else:
+                    result = native or {"ok": True, "status": "published", "pending_count": 0}
+    else:
+        result = publish_ready_actions(args.db, dry_run=args.dry_run, limit=args.limit, config=config)
     return emit(result, 0 if result.get("ok") else 3)
 
 

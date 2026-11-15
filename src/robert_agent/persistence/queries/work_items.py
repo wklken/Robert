@@ -20,6 +20,7 @@ from sqlalchemy import (
 
 
 from robert_agent.persistence.catalog import tables
+from robert_agent.persistence.queries.request_events import task_relationship
 from robert_agent.persistence import statements
 
 
@@ -119,6 +120,59 @@ def find_record_by_work_item_id(conn, work_item_id):
     return statements.read(conn, query1, {"p0": work_item_id})
 
 
+def has_native_command_scope(conn, *, origin_source_id, workstream_id):
+    """Detect durable native ownership of the item or an affected workstream."""
+    source, stream, link, item, task, member = (
+        tables[name]
+        for name in ("sources", "workstreams", "workstream_sources", "work_items", "tasks", "source_round_tasks")
+    )
+    native_source = select(source.c.source_id).where(source.c.provider == "tapd")
+    if workstream_id is None:
+        return origin_source_id is not None and bool(
+            statements.read(conn, native_source.where(source.c.source_id == origin_source_id))
+        )
+
+    # Legacy lifecycle commands can act on the item's stream and direct
+    # children. Also check the origin of an adopted native PR workstream.
+    affected = (
+        select(stream.c.workstream_id, stream.c.origin_workstream_id)
+        .where(or_(stream.c.workstream_id == workstream_id, stream.c.origin_workstream_id == workstream_id))
+        .cte("legacy_command_workstreams")
+    )
+    owned = (
+        select(stream.c.workstream_id, stream.c.primary_source_id)
+        .where(
+            or_(
+                stream.c.workstream_id.in_(select(affected.c.workstream_id)),
+                stream.c.workstream_id.in_(select(affected.c.origin_workstream_id)),
+            )
+        )
+        .cte("legacy_command_origins")
+    )
+    linked_sources = select(link.c.source_id).where(
+        link.c.workstream_id.in_(select(owned.c.workstream_id)),
+        link.c.relationship.in_(("primary", "origin_issue", "derived_pr")),
+    )
+    native_origin = native_source.where(
+        or_(
+            source.c.source_id == origin_source_id if origin_source_id is not None else False,
+            source.c.source_id.in_(select(owned.c.primary_source_id)),
+            source.c.source_id.in_(linked_sources),
+        )
+    )
+    native_item = select(item.c.work_item_id).where(
+        item.c.workstream_id.in_(select(owned.c.workstream_id)), item.c.origin_type == "tapd"
+    )
+    native_task = (
+        select(member.c.task_id)
+        .select_from(member.join(task, task.c.task_id == member.c.task_id))
+        .where(task.c.workstream_id.in_(select(affected.c.workstream_id)))
+    )
+    return bool(
+        statements.read(conn, select(1).where(or_(native_origin.exists(), native_item.exists(), native_task.exists())))
+    )
+
+
 def find_record_by_origin_source_id(conn, root_source_id):
     query1 = (
         select(tables["work_items"])
@@ -170,7 +224,7 @@ def find_record_by_workstream_id(conn, current):
 
 def find_for_complete_published_analysis_items(conn, repo_id):
     table1 = tables["work_items"].alias("wi")
-    table2 = tables["github_sources"].alias("gs")
+    table2 = tables["sources"].alias("gs")
     table3 = tables["workstreams"].alias("w")
     table4 = tables["tasks"].alias("t")
     table5 = tables["worker_results"].alias("wr")
@@ -208,7 +262,7 @@ def find_for_complete_published_analysis_items(conn, repo_id):
         .set_label_style(LABEL_STYLE_NONE)
     )
     table11 = tables["workstreams"].alias("related")
-    table12 = tables["github_sources"].alias("pr")
+    table12 = tables["sources"].alias("pr")
     query13 = (
         select(sql_constant(1))
         .select_from(
@@ -255,7 +309,7 @@ def find_for_complete_published_analysis_items(conn, repo_id):
         .where(
             and_(
                 (table16.c["task_id"] == table4.c["task_id"]),
-                table16.c["relationship"].in_([sql_constant("pending"), sql_constant("context")]),
+                task_relationship(table16).in_([sql_constant("pending"), sql_constant("context")]),
             )
         )
         .correlate_except(table16)
@@ -411,3 +465,29 @@ def find_for_propose(conn, idempotency):
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query1, {"p0": idempotency})
+
+
+def tapd_work_item_origin(conn, *, source_id, repo_id):
+    """Return origin title only for a real TAPD ticket and enabled repository."""
+    source, repo = tables["sources"], tables["repos"]
+    return statements.read(
+        conn,
+        select(source.c.title)
+        .select_from(source.join(repo, repo.c.repo_id == repo_id))
+        .where(source.c.source_id == source_id, source.c.provider == "tapd", repo.c.enabled == 1),
+    )
+
+
+def find_tapd_work_item(conn, *, source_id, repo_id):
+    item = tables["work_items"]
+    return statements.read(
+        conn,
+        select(item).where(
+            item.c.origin_type == "tapd", item.c.origin_source_id == source_id, item.c.repo_id == repo_id
+        ),
+    )
+
+
+def find_tapd_work_item_stream(conn, workstream_id):
+    stream = tables["workstreams"]
+    return statements.read(conn, select(stream).where(stream.c.workstream_id == workstream_id))

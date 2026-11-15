@@ -2,7 +2,12 @@
 
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
 
-from robert_agent.adapters.git import workspace as worktree
+from pathlib import Path
+import subprocess
+
+from robert_agent.foundation import commands
+
+from robert_agent.adapters.git import native_publication, workspace as worktree
 
 
 def prepare_worktree(repo, event, route_result, dry_run):
@@ -44,3 +49,68 @@ def prepare_worktree(repo, event, route_result, dry_run):
         },
         dry_run,
     )
+
+
+def native_repository_paths(repo):
+    """Resolve configured aliases at preparation and pin their canonical paths."""
+    root = Path(repo["repo_root"]).resolve(strict=True)
+    worktree_root = Path(repo["worktree_root"]).resolve()
+    if not root.is_dir():
+        raise ValueError("native repository root is unavailable")
+    return str(root), str(worktree_root)
+
+
+def prepare_source_worktree(repo, purpose, *, pr=None):
+    """Materialize only the exact controller-owned workspace purpose."""
+    if purpose["mode"] == "readonly":
+        return {"ok": True, "worktree_path": repo["repo_root"], "branch_name": None}
+    if purpose["mode"] == "new_branch":
+        return worktree.plan_worktree(
+            repo["repo_root"],
+            repo["worktree_root"],
+            purpose["workspace_key"],
+            "source-work",
+            repo["default_base_branch"],
+            dry_run=False,
+        )
+    if purpose["mode"] != "existing_pr" or not pr:
+        raise ValueError("invalid native workspace purpose")
+    return worktree.prepare_existing_pr_worktree(
+        repo["repo_root"],
+        repo["worktree_root"],
+        source_number=pr["number"],
+        head_branch=pr["branch_name"],
+        head_sha=pr["head_sha"],
+        base_branch=pr["base_branch"],
+        base_sha=pr["base_sha"],
+        dry_run=False,
+    )
+
+
+def validate_source_workspace(repo, purpose, worktree_result, *, require_git_pin=True):
+    """A prepared source workspace cannot fall back to a GitHub event lookup."""
+    if not isinstance(purpose, dict) or not worktree_result:
+        return False
+    try:
+        roots = native_repository_paths(repo)
+        if roots != (purpose.get("repo_root"), purpose.get("worktree_root")):
+            return False
+        path = Path(worktree_result["worktree_path"])
+        branch = worktree_result.get("branch_name")
+        if purpose.get("mode") == "readonly":
+            return str(path) == roots[0] and branch is None
+        if (
+            purpose.get("mode") not in {"new_branch", "existing_pr"}
+            or not branch
+            or branch != purpose.get("branch_name")
+            or not path.resolve(strict=True).is_relative_to(roots[1])
+            or worktree.check_worktree_reuse(roots[0], roots[1], path, branch_name=branch)
+        ):
+            return False
+        if require_git_pin:
+            return native_publication.verify_pin(path, purpose, repo["full_name"])
+        return True
+    except commands.ControlDeadlineExceeded:
+        raise
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError):
+        return False

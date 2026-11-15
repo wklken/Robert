@@ -12,11 +12,13 @@ from robert_agent.adapters.github import discovery as discover
 from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.persistence.schema import database as storage
 from robert_agent.application import repository_cycle
+from robert_agent.delivery.application import lane as publication_lane
+from robert_agent.runtime import native_sources
 from robert_agent.foundation import errors as run_errors
 from robert_agent.execution import journal as run_journal
 from robert_agent.execution.application import cutover as result_cutover
 from robert_agent.configuration import command as validate_config
-from robert_agent.execution import capacity
+from robert_agent.execution import capacity, source_controller
 from robert_agent.foundation import values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.foundation.commands import emit
@@ -44,6 +46,10 @@ def run_once(
     max_dispatches=None,
     max_publish_actions=None,
     consume_observations=False,
+    manage_sources=True,
+    tapd_client_factory=None,
+    tapd_observation_provider=None,
+    tapd_identity_provider=None,
 ):
     config_result = validate_config.validate_config(config_path, skip_external=skip_external)
     if not config_result["ok"]:
@@ -66,6 +72,54 @@ def run_once(
 
     if not dry_run:
         replay_pending_results(db_path, config=config_result)
+    source_runnable = (
+        manage_sources
+        and not (dry_run or fixture_path)
+        and native_sources.runnable(db_path, config_result, local_only=skip_external)
+    )
+    publish_limit = None if max_publish_actions is None else max(0, int(max_publish_actions))
+    source_publish = (
+        publication_lane.publish_sources(
+            db_path,
+            config_result,
+            limit=publish_limit,
+            local_only=skip_external,
+            tapd_client_factory=tapd_client_factory,
+            tapd_observation_provider=tapd_observation_provider,
+            tapd_identity_provider=tapd_identity_provider,
+        )
+        if manage_sources and not (dry_run or fixture_path or skip_publish)
+        else {}
+    )
+    publish_budget = {
+        "remaining": None if publish_limit is None else max(0, publish_limit - source_publish.get("pending_count", 0))
+    }
+    if source_publish:
+        source_status = "completed" if source_publish.get("ok") else source_publish.get("status", "publish_failed")
+    else:
+        source_status = "no_runnable_work"
+    native_github = (
+        manage_sources
+        and not (dry_run or skip_external or skip_publish or fixture_path)
+        and publish_budget["remaining"] != 0
+        and config_result.get("tapd", {}).get("enabled") is True
+    )
+
+    def native_repo_due(conn, repo_id):
+        return (
+            native_github
+            and publish_budget["remaining"] != 0
+            and publication_lane.source_ready(
+                conn,
+                config_result,
+                source_owner=source_controller.standalone_owner(db_path),
+                provider="github",
+                repo_id=repo_id,
+                recover=False,
+                tapd_observation_provider=tapd_observation_provider,
+            )
+        )
+
     # A daemon drain can lose its work to another consumer before this child
     # starts. Check again before creating any diagnostic run or step records.
     if consume_observations and not fixture_path:
@@ -76,23 +130,41 @@ def run_once(
                 context = synchronization.context_digest(
                     repo, work_queries.load_known_workstreams(conn, repo_id), config=config_result
                 )
-                if scan_batches.has_pending(conn, [repo_id], contexts={repo_id: context}) or readiness.has_local_work(
-                    conn,
-                    [repo_id],
-                    config_result=config_result,
-                    include_publication=not skip_publish,
-                    capacity_repo_ids=capacity_repo_ids,
+                if (
+                    native_repo_due(conn, repo_id)
+                    or scan_batches.has_pending(conn, [repo_id], contexts={repo_id: context})
+                    or readiness.has_local_work(
+                        conn,
+                        [repo_id],
+                        config_result=config_result,
+                        include_publication=not skip_publish,
+                        capacity_repo_ids=capacity_repo_ids,
+                    )
                 ):
                     runnable = True
-            if not runnable:
-                return {
-                    "ok": True,
-                    "status": "no_runnable_work",
-                    "db_path": str(db_path),
-                    "prompt_paths": [],
-                    "dispatch_count": 0,
-                    "repo_summaries": [],
-                }
+        if not runnable:
+            source_result = (
+                native_sources.run_once(config_path, config_result, local_only=skip_external) if source_runnable else {}
+            )
+            return {
+                "ok": not native_sources.failed(source_result) and source_publish.get("ok", True),
+                **({"failure_scope": "task"} if not source_publish.get("ok", True) else {}),
+                "status": (
+                    "attention"
+                    if native_sources.needs_attention(source_result)
+                    else "failed_source_control"
+                    if native_sources.failed(source_result)
+                    else "completed"
+                    if source_result and source_publish.get("ok", True)
+                    else source_status
+                ),
+                **({"native_sources": source_result} if source_result else {}),
+                **({"publish_result": source_publish} if source_publish else {}),
+                "db_path": str(db_path),
+                "prompt_paths": [],
+                "dispatch_count": 0,
+                "repo_summaries": [],
+            }
     run_id = values.new_id("run")
     try:
         executor_identity = worker_identity.capture_process_identity(os.getpid())
@@ -206,7 +278,6 @@ def run_once(
                 for rid, repo in repos
             },
         }
-        publish_budget = {"remaining": (None if max_publish_actions is None else max(0, int(max_publish_actions)))}
 
         run_journal.mark_run_step(conn, run_id, "repo_pipelines", "running", run_now)
         repo_summaries = []
@@ -233,15 +304,29 @@ def run_once(
                     conn.commit()
                 if observation is not None:
                     repo_discovery_runner = github_recording.ReplayRunner(observation["responses"])
-                elif not fixture_path and not readiness.has_local_work(
-                    conn,
-                    [repo_id],
-                    config_result=config_result,
-                    include_publication=not skip_publish,
-                    capacity_repo_ids=repo_ids,
+                elif (
+                    not fixture_path
+                    and not native_repo_due(conn, repo_id)
+                    and not readiness.has_local_work(
+                        conn,
+                        [repo_id],
+                        config_result=config_result,
+                        include_publication=not skip_publish,
+                        capacity_repo_ids=repo_ids,
+                    )
                 ):
                     continue
             run_journal.init_repo_steps(conn, run_id, repo_id)
+            source_options = (
+                {
+                    "source_publication": {
+                        "tapd_client_factory": tapd_client_factory,
+                        "tapd_observation_provider": tapd_observation_provider,
+                    }
+                }
+                if native_repo_due(conn, repo_id)
+                else {}
+            )
             summary = repository_cycle.run_repo_pipeline(
                 conn,
                 data_dir=data_dir,
@@ -264,6 +349,7 @@ def run_once(
                 prompt_paths=prompt_paths,
                 observation=observation,
                 finalize_external=consume_observations,
+                **source_options,
             )
             conn.commit()
             if consume_observations and observation is not None:
@@ -321,6 +407,7 @@ def run_once(
             len(dispatch_queue),
             dry_run=dry_run,
             skip_publish=skip_publish,
+            source_publish=source_publish,
         )
 
         if overall_status == "skipped_active_lease":
@@ -336,14 +423,26 @@ def run_once(
                 )
             summary = {
                 "overall_status": overall_status,
+                **({"publish_result": publish_result} if source_publish else {}),
                 "repo_summaries": repo_summaries,
                 "prompt_count": len(prompt_paths),
                 "dispatch_count": 0,
             }
-            run_journal.finish_run(conn, run_id, "skipped", finished_at, summary)
+            run_journal.finish_run(
+                conn,
+                run_id,
+                "completed"
+                if source_publish and source_publish.get("ok")
+                else "failed"
+                if source_publish
+                else "skipped",
+                finished_at,
+                summary,
+            )
             return {
-                "ok": True,
-                "status": "skipped_active_lease",
+                "ok": source_publish.get("ok", True),
+                "status": "skipped_active_lease" if source_publish.get("ok", True) else source_status,
+                **({"publish_result": publish_result} if source_publish else {}),
                 "run_id": run_id,
                 "db_path": str(db_path),
                 "prompt_paths": [],
@@ -378,12 +477,16 @@ def run_once(
                 aggregate_counts,
                 publish_result,
             )
+    source_result = (
+        native_sources.run_once(config_path, config_result, local_only=skip_external) if source_runnable else {}
+    )
     dispatch_failure = run_journal.dispatch_failure_for(dispatch_results, dispatch_error)
     if dispatch_failure:
         return {
             "ok": False,
             "status": dispatch_failure.get("status", "failed_dispatch"),
             "failure_scope": "task",
+            **({"native_sources": source_result} if source_result else {}),
             "run_id": run_id,
             "db_path": str(db_path),
             "prompt_paths": prompt_paths,
@@ -400,6 +503,7 @@ def run_once(
                 if any(item.get("failure_status") == "repository_pipeline_failed" for item in repo_summaries)
                 else "repository"
             ),
+            **({"native_sources": source_result} if source_result else {}),
             "run_id": run_id,
             "db_path": str(db_path),
             "prompt_paths": prompt_paths,
@@ -423,6 +527,7 @@ def run_once(
                 if any(item.get("failure_status") == "repository_pipeline_failed" for item in repo_summaries)
                 else "repository"
             ),
+            **({"native_sources": source_result} if source_result else {}),
             "run_id": run_id,
             "db_path": str(db_path),
             "prompt_paths": prompt_paths,
@@ -432,8 +537,18 @@ def run_once(
             "safe_error": failure_summary.get("safe_error") if failure_summary else None,
         }
     return {
-        "ok": True,
-        "status": "completed",
+        "ok": not native_sources.failed(source_result) and source_publish.get("ok", True),
+        **({"failure_scope": "task"} if not source_publish.get("ok", True) else {}),
+        "status": (
+            "attention"
+            if native_sources.needs_attention(source_result)
+            else "failed_source_control"
+            if native_sources.failed(source_result)
+            else source_status
+            if not source_publish.get("ok", True)
+            else "completed"
+        ),
+        **({"native_sources": source_result} if source_result else {}),
         "run_id": run_id,
         "db_path": str(db_path),
         "prompt_paths": prompt_paths,
@@ -452,6 +567,7 @@ def main(argv=None):
     parser.add_argument("--skip-external", action="store_true")
     parser.add_argument("--skip-publish", action="store_true")
     parser.add_argument("--consume-observations", action="store_true")
+    parser.add_argument("--repository-only", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--max-dispatches", type=int)
     parser.add_argument("--max-publish-actions", type=int)
     args = parser.parse_args(argv)
@@ -465,6 +581,7 @@ def main(argv=None):
         max_dispatches=args.max_dispatches,
         max_publish_actions=args.max_publish_actions,
         consume_observations=args.consume_observations,
+        manage_sources=not args.repository_only,
     )
     return emit(result, 0 if result.get("ok") else 3)
 

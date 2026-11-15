@@ -68,7 +68,14 @@ class TimeoutIsolationTests(unittest.TestCase):
                 )
                 conn.execute("UPDATE tasks SET lifecycle='running'")
             events = json.loads(fixture.fixture_path.read_text())["events"]
-            events.append({**events[0], "id": "independent-comment", "number": 124})
+            events.append(
+                {
+                    **events[0],
+                    "id": "independent-comment",
+                    "number": 124,
+                    "url": "https://github.com/example/backend/issues/124",
+                }
+            )
             fixture.fixture_path.write_text(json.dumps({"events": events}))
             with (
                 mock.patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}),

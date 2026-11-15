@@ -1,6 +1,7 @@
 from contextlib import closing
 import json
 import sqlite3
+from tests.support.source_cycle import SourceCycleFixture
 from tests.support.summary_database import SummaryFixture
 from tests.support.acceptance import AcceptanceFixture
 
@@ -61,6 +62,108 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
                 conn.execute("SELECT status FROM wakeups WHERE task_id = ?", (payload["task_id"],)).fetchone()[0],
                 "pending",
             )
+
+    def test_web_command_refuses_native_cancel_and_replay_in_same_repo_as_backlog(self):
+        import http.client
+        import threading
+
+        from robert_agent.foundation.values import utc_now
+        from robert_agent.interfaces.web import server as web
+        from robert_agent.persistence import database, transactions
+        from robert_agent.persistence.schema.database import init_database
+        from robert_agent.work.application.commands import ensure_tapd_work_item, record_system_event
+        from robert_agent.work.tapd_authority import TicketIdentity
+
+        db_path = self.root / "native-command-api.sqlite3"
+        init_database(db_path)
+        ticket = TicketIdentity("tapd.example", "001", "bug", "002")
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root)"
+                " VALUES('repo-1','example/repo','bot','main','/repo','/worktrees')"
+            )
+            conn.execute(
+                "INSERT INTO sources(source_id,source_key,provider,host,project_key,source_type,external_id,title)"
+                " VALUES(?,?,'tapd',?,?,?,?,'Private TAPD title')",
+                (ticket.source_id, ticket.source_id, *ticket.key),
+            )
+        with closing(database.connect(db_path, foreign_keys=True)) as conn, conn:
+            transactions.begin_immediate(conn)
+            native = ensure_tapd_work_item(conn, repo_id="repo-1", source_id=ticket.source_id, now=utc_now())
+            record_system_event(
+                conn,
+                native["work_item_id"],
+                event_type="canceled",
+                idempotency_key="native-old-result",
+                metadata={"command_result": {"ok": True, "item": native, "task_id": None}},
+            )
+
+        server = web.ThreadingHTTPServer(("127.0.0.1", 0), None)
+        self.addCleanup(server.server_close)
+        host = f"127.0.0.1:{server.server_port}"
+        context = web.ControlContext(
+            db_path=str(db_path),
+            operator_identity="repo-operator",
+            allowed_repo_ids=frozenset({"repo-1"}),
+            allowed_workers=frozenset({"default"}),
+            allowed_origins=frozenset({f"http://{host}"}),
+            csrf_token="native-test-token",
+            writes_enabled=True,
+            write_error=None,
+        )
+        server.RequestHandlerClass = web.make_handler(db_path, context)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        self.addCleanup(connection.close)
+        headers = {
+            "Host": host,
+            "Origin": f"http://{host}",
+            "Content-Type": "application/json",
+            "X-Robert-CSRF-Token": "native-test-token",
+        }
+
+        def post(path, payload, key):
+            connection.request("POST", path, body=json.dumps(payload), headers={**headers, "X-Idempotency-Key": key})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+
+        native_path = f"/api/work-items/{native['work_item_id']}/commands"
+        for key, version in (("native-old-result", native["version"] + 1), ("native-new-cancel", native["version"])):
+            with self.subTest(key=key):
+                self.assertEqual(
+                    post(native_path, {"command": "cancel", "expected_version": version}, key),
+                    (404, {"ok": False, "status": "not_found"}),
+                )
+
+        status, legacy = post(
+            "/api/work-items", {"repo_id": "repo-1", "title": "Ordinary backlog", "mode": "backlog"}, "legacy-create"
+        )
+        self.assertEqual(status, 201, legacy)
+        status, canceled = post(
+            f"/api/work-items/{legacy['work_item_id']}/commands",
+            {"command": "cancel", "expected_version": legacy["version"]},
+            "legacy-cancel",
+        )
+        self.assertEqual(status, 200, canceled)
+        self.assertIsNotNone(canceled["canceled_at"])
+        with closing(sqlite3.connect(db_path)) as conn:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT version,canceled_at FROM work_items WHERE work_item_id=?", (native["work_item_id"],)
+                ).fetchone(),
+                (native["version"], None),
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT idempotency_key FROM work_item_events WHERE work_item_id=? AND actor_kind='operator'",
+                    (native["work_item_id"],),
+                ).fetchall(),
+                [],
+            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone(), (0,))
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM wakeups").fetchone(), (0,))
 
     def test_board_api_session_create_read_and_conflict_contract(self):
         from robert_agent.interfaces.web import server as web
@@ -342,3 +445,61 @@ class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
         response.read()
         self.assertEqual(response.status, 413)
         connection.close()
+
+
+class NativeTaskRetriggerHTTPTests(SourceCycleFixture):
+    def test_web_retrigger_refuses_failed_native_task_without_wakeup(self):
+        import http.client
+        import threading
+
+        from robert_agent.interfaces.web import server as web
+
+        self.config(development=True)
+        self.tick("admitted", ticket=self.ticket)
+        task_id = self.tick("prepared", ticket=self.ticket).identity
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("UPDATE tasks SET lifecycle='failed' WHERE task_id=?", (task_id,))
+            conn.execute("UPDATE attempts SET status='failed' WHERE task_id=?", (task_id,))
+            conn.execute(
+                "UPDATE workstreams SET lifecycle='failed', active_task_id=NULL WHERE active_task_id=?",
+                (task_id,),
+            )
+        native_task = self.read("SELECT * FROM tasks WHERE task_id=?", (task_id,))
+        on_failure = self.read("SELECT * FROM execution_subjects WHERE subject_id=?", (task_id,))
+
+        server = web.ThreadingHTTPServer(("127.0.0.1", 0), None)
+        self.addCleanup(server.server_close)
+        host = f"127.0.0.1:{server.server_port}"
+        context = web.ControlContext(
+            db_path=str(self.db),
+            operator_identity="repo-operator",
+            allowed_repo_ids=frozenset({"repo:org/alpha"}),
+            allowed_workers=frozenset({"mock-worker"}),
+            allowed_origins=frozenset({f"http://{host}"}),
+            csrf_token="retrigger-test-token",
+            writes_enabled=True,
+            write_error=None,
+        )
+        server.RequestHandlerClass = web.make_handler(self.db, context)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        self.addCleanup(connection.close)
+        connection.request(
+            "POST",
+            f"/api/tasks/{task_id}/retrigger",
+            body="{}",
+            headers={
+                "Host": host,
+                "Origin": f"http://{host}",
+                "Content-Type": "application/json",
+                "X-Robert-CSRF-Token": "retrigger-test-token",
+                "X-Idempotency-Key": "native-retrigger",
+            },
+        )
+        response = connection.getresponse()
+        self.assertEqual((response.status, json.loads(response.read())), (404, {"ok": False, "status": "not_found"}))
+        self.assertEqual(self.read("SELECT * FROM tasks WHERE task_id=?", (task_id,)), native_task)
+        self.assertEqual(self.read("SELECT * FROM execution_subjects WHERE subject_id=?", (task_id,)), on_failure)
+        self.assertEqual(self.read("SELECT task_id FROM tasks WHERE parent_task_id=?", (task_id,)), [])
+        self.assertEqual(self.read("SELECT wakeup_id FROM wakeups WHERE task_id=?", (task_id,)), [])

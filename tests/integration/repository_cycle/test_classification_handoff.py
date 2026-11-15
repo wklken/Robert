@@ -568,7 +568,7 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
                 "UPDATE worker_results SET metadata_json = json_set(metadata_json, '$.audit.status', 'accepted', '$.audit.ok', json('true'))"
             )
             conn.execute(
-                "UPDATE task_events SET relationship = 'consumed' WHERE task_id = ?",
+                "INSERT INTO request_events(task_id,event_id,state,created_at) SELECT task_id,event_id,'consumed',created_at FROM task_events WHERE task_id=?",
                 (task_id,),
             )
             conn.execute(
@@ -610,7 +610,7 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
                 """
                 SELECT te.relationship
                 FROM task_events te
-                JOIN github_events ge ON ge.event_id = te.event_id
+                JOIN source_events ge ON ge.event_id = te.event_id
                 WHERE te.task_id = ?
                   AND ge.event_fingerprint = 'assigned:assign-16'
                 """,
@@ -686,7 +686,7 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             context_event_id = conn.execute(
-                "SELECT event_id FROM github_events WHERE event_fingerprint = 'comment:context-old'"
+                "SELECT event_id FROM source_events WHERE event_fingerprint = 'comment:context-old'"
             ).fetchone()[0]
             conn.execute(
                 "INSERT INTO task_events (task_id, event_id, relationship, created_at) VALUES (?, ?, 'context', datetime('now'))",
@@ -715,7 +715,7 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
                 "UPDATE worker_results SET metadata_json = json_set(metadata_json, '$.audit.status', 'accepted', '$.audit.ok', json('true'))"
             )
             conn.execute(
-                "UPDATE task_events SET relationship = 'consumed' WHERE task_id = ?",
+                "INSERT INTO request_events(task_id,event_id,state,created_at) SELECT task_id,event_id,'consumed',created_at FROM task_events WHERE task_id=?",
                 (task_id,),
             )
             conn.execute(

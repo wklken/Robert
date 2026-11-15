@@ -10,7 +10,7 @@ def linked_workstreams(conn, source_ids):
     streams, links, sources = (
         tables["workstreams"],
         tables["workstream_sources"],
-        tables["github_sources"],
+        tables["sources"],
     )
     stream = streams.c
     query = (
@@ -85,7 +85,7 @@ def tasks_with_latest_attempt(conn, workstream_ids, limit):
 
 
 def recent_events(conn, source_ids, limit):
-    event = tables["github_events"].c
+    event = tables["source_events"].c
     query = (
         select(
             event.event_fingerprint,

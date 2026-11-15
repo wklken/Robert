@@ -24,7 +24,7 @@ def insert_source_and_event(
     value_10,
     value_11,
 ):
-    stmt = insert(tables["github_events"]).values(
+    stmt = insert(tables["source_events"]).values(
         {
             "event_id": bindparam("p0"),
             "repo_id": bindparam("p1"),
@@ -44,7 +44,7 @@ def insert_source_and_event(
         set_={
             "authorization_status": case(
                 (
-                    tables["github_events"]
+                    tables["source_events"]
                     .c["authorization_status"]
                     .in_(
                         [
@@ -52,13 +52,13 @@ def insert_source_and_event(
                             sql_constant("authorized_system_trigger"),
                         ]
                     ),
-                    tables["github_events"].c["authorization_status"],
+                    tables["source_events"].c["authorization_status"],
                 ),
                 else_=stmt.excluded["authorization_status"],
             ),
             "actor_kind": case(
                 (
-                    tables["github_events"]
+                    tables["source_events"]
                     .c["authorization_status"]
                     .in_(
                         [
@@ -66,14 +66,14 @@ def insert_source_and_event(
                             sql_constant("authorized_system_trigger"),
                         ]
                     ),
-                    tables["github_events"].c["actor_kind"],
+                    tables["source_events"].c["actor_kind"],
                 ),
                 else_=stmt.excluded["actor_kind"],
             ),
             "author_association": case(
                 (
                     and_(
-                        tables["github_events"]
+                        tables["source_events"]
                         .c["authorization_status"]
                         .in_(
                             [
@@ -90,14 +90,14 @@ def insert_source_and_event(
                             )
                         ),
                     ),
-                    tables["github_events"].c["author_association"],
+                    tables["source_events"].c["author_association"],
                 ),
                 else_=stmt.excluded["author_association"],
             ),
             "payload_json": case(
                 (
                     and_(
-                        tables["github_events"]
+                        tables["source_events"]
                         .c["authorization_status"]
                         .in_(
                             [
@@ -114,7 +114,7 @@ def insert_source_and_event(
                             )
                         ),
                     ),
-                    tables["github_events"].c["payload_json"],
+                    tables["source_events"].c["payload_json"],
                 ),
                 else_=stmt.excluded["payload_json"],
             ),
@@ -141,8 +141,8 @@ def insert_source_and_event(
 
 def record_current_state_closed_source(conn, event_id):
     stmt = (
-        update(tables["github_events"])
+        update(tables["source_events"])
         .values({"authorization_status": sql_constant("ignored_current_state_closed")})
-        .where((tables["github_events"].c["event_id"] == bindparam("p0")))
+        .where((tables["source_events"].c["event_id"] == bindparam("p0")))
     )
     return statements.write(conn, stmt, {"p0": event_id})

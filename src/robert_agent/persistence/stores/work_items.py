@@ -1,8 +1,9 @@
 """Shared stores operations for work_items."""
 
+from robert_agent.foundation.contracts.work import SourceRoundStatus
 from robert_agent.persistence.expressions import sql_constant
 
-from sqlalchemy import update, bindparam, and_, not_, null, func
+from sqlalchemy import update, bindparam, and_, not_, null, func, select
 from sqlalchemy.dialects.sqlite import insert
 
 
@@ -364,4 +365,123 @@ def mark_remote_terminal(conn, work_item_id, terminal_column, terminal_at, now):
                 "version": item.c.version + 1,
             }
         ),
+    )
+
+
+def lock_tapd_work_item_origin(conn, source_id):
+    """Serialize repository-item creation with source and repo validation."""
+    if not conn.in_transaction:
+        raise ValueError("native work item creation requires a caller-owned transaction")
+    source = tables["sources"]
+    statements.write(conn, update(source).where(source.c.source_id == source_id).values(title=source.c.title))
+
+
+def insert_tapd_work_item_stream(conn, *, workstream_id, repo_id, source_id, now):
+    table = tables["workstreams"]
+    return statements.write(
+        conn,
+        insert(table)
+        .values(
+            workstream_id=workstream_id,
+            repo_id=repo_id,
+            primary_source_id=source_id,
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing(index_elements=[table.c.workstream_id]),
+    )
+
+
+def insert_tapd_work_item(conn, *, work_item_id, repo_id, source_id, workstream_id, idempotency_key, title, now):
+    item = tables["work_items"]
+    return statements.write(
+        conn,
+        insert(item).values(
+            work_item_id=work_item_id,
+            repo_id=repo_id,
+            title=title,
+            origin_type="tapd",
+            origin_source_id=source_id,
+            workstream_id=workstream_id,
+            creation_idempotency_key=idempotency_key,
+            created_by="system:tapd",
+            activated_at=now,
+            created_at=now,
+            updated_at=now,
+        ),
+    )
+
+
+def mark_tapd_delivery(conn, *, work_item_id, source_id, repo_id, completed, now):
+    """Advance only the exact native item, leaving a canceled/finished item untouched."""
+    item = tables["work_items"]
+    return statements.write(
+        conn,
+        update(item)
+        .where(
+            item.c.work_item_id == work_item_id,
+            item.c.origin_type == "tapd",
+            item.c.origin_source_id == source_id,
+            item.c.repo_id == repo_id,
+            item.c.canceled_at.is_(None),
+            item.c.completed_at.is_(None),
+        )
+        .values(completed_at=now if completed else None, updated_at=now, version=item.c.version + 1),
+    )
+
+
+def reactivate_tapd_work_item(conn, *, work_item_id, source_id, repo_id, now):
+    """Clear the previous receipt-complete projection during authorized preparation."""
+    item = tables["work_items"]
+    return statements.write(
+        conn,
+        update(item)
+        .where(
+            item.c.work_item_id == work_item_id,
+            item.c.origin_type == "tapd",
+            item.c.origin_source_id == source_id,
+            item.c.repo_id == repo_id,
+            item.c.canceled_at.is_(None),
+            item.c.completed_at.is_not(None),
+        )
+        .values(completed_at=None, updated_at=now, version=item.c.version + 1),
+    )
+
+
+def claim_tapd_projection(conn, *, work_item_id, source_id, repo_id, round_id, task_id, now):
+    """Bind the WorkItem projection to an actually prepared native task, not candidate repositories."""
+    item, round_, member = (tables[name] for name in ("work_items", "source_rounds", "source_round_tasks"))
+    owned_task = (
+        select(member.c.task_id)
+        .select_from(member.join(round_, round_.c.round_id == member.c.round_id))
+        .where(
+            member.c.task_id == task_id,
+            member.c.repo_id == repo_id,
+            round_.c.round_id == round_id,
+            round_.c.source_id == source_id,
+            round_.c.status == SourceRoundStatus.ACTIVE.value,
+        )
+        .exists()
+    )
+    return (
+        statements.write(
+            conn,
+            update(item)
+            .where(
+                item.c.work_item_id == work_item_id,
+                item.c.origin_type == "tapd",
+                item.c.origin_source_id == source_id,
+                item.c.repo_id == repo_id,
+                item.c.canceled_at.is_(None),
+                func.json_valid(item.c.metadata_json) == 1,
+                func.json_type(item.c.metadata_json) == "object",
+                owned_task,
+            )
+            .values(
+                metadata_json=func.json_set(item.c.metadata_json, "$.native_projection_round_id", round_id),
+                updated_at=now,
+                version=item.c.version + 1,
+            ),
+        )
+        == 1
     )

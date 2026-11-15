@@ -60,21 +60,21 @@ class SummaryFixture(TemporaryWorkspace):
             )
             conn.execute(
                 """
-                INSERT INTO github_sources(
+                INSERT INTO sources(
                   source_id, repo_id, source_key, source_type, number, html_url,
                   title, state, author_login
-                )
+                , provider, host, project_key, external_id)
                 VALUES (
                   'source-1', 'repo-1',
                   'github:example/backend#1',
                   'issue', 1, 'https://github.com/x/y/issues/1',
                   'Question', 'open', 'wklken'
-                )
+                , 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '1')
                 """
             )
             conn.execute(
                 """
-                INSERT INTO github_events(
+                INSERT INTO source_events(
                   event_id, repo_id, source_id, event_fingerprint, event_type,
                   actor_login, author_association, authorization_status,
                   event_at, payload_json
@@ -88,7 +88,7 @@ class SummaryFixture(TemporaryWorkspace):
             )
             conn.executemany(
                 """
-                INSERT INTO github_events(
+                INSERT INTO source_events(
                   event_id, repo_id, source_id, event_fingerprint, event_type,
                   actor_login, author_association, authorization_status,
                   event_at, payload_json

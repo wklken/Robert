@@ -28,7 +28,7 @@ class ReconcileIsolationFixture(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             task_id = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
             conn.execute(
-                "UPDATE github_sources SET source_key='github:example/backend!123',source_type='pull_request',state='open'"
+                "UPDATE sources SET source_key='github:example/backend!123',source_type='pull_request',state='open'"
             )
             conn.execute("UPDATE tasks SET lifecycle='completed'")
             conn.execute("UPDATE attempts SET status='completed',metadata_json='{}'")

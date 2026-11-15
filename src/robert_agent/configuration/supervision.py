@@ -40,6 +40,7 @@ _DENIED_ENV_PREFIXES = (
     "GITHUB_",
     "GIT_",
     "OPENCLAW_",
+    "TAPD_",
     "CODEX_",
     "CLAUDE_",
     "ROBERT_",

@@ -1,7 +1,12 @@
 """Deterministic read models for the DD repository task board."""
 
 from robert_agent.foundation.contracts.execution import BindingStatus
-from robert_agent.foundation.contracts.work import ACTIVE_TASK_LIFECYCLES, TaskLifecycle, WorkCommand
+from robert_agent.foundation.contracts.work import (
+    ACTIVE_TASK_LIFECYCLES,
+    TaskLifecycle,
+    WorkCommand,
+    WorkstreamLifecycle,
+)
 
 import base64
 import json
@@ -196,6 +201,13 @@ def _waiting_github_context(conn, task_id):
     return bool(task and not github_operator.source_read(conn, task)[0])
 
 
+def _tapd_waiting_for_user(conn, workstream_id):
+    stream = db_records.first(
+        db_read_workstreams.find_lifecycle_and_active_task_id_by_workstream_id(conn, workstream_id)
+    )
+    return bool(stream and stream[0] == WorkstreamLifecycle.WAITING_FOR_USER)
+
+
 def _project_item(conn, row, *, controls=None, facts=None):
     work_item_id = row["work_item_id"]
     workstream_id = row["workstream_id"]
@@ -329,6 +341,8 @@ def _project_item(conn, row, *, controls=None, facts=None):
         )
     elif task and task["lifecycle"] in ACTIVE_TASK_LIFECYCLES:
         column, reason_code, reason_summary = "todo", task["lifecycle"], "Runnable work is queued"
+    elif row["origin_type"] == "tapd" and _tapd_waiting_for_user(conn, workstream_id):
+        column, reason_code, reason_summary = "waiting", "waiting_for_user", "The TAPD question is awaiting a response."
     elif pr and (pr["state"] or "open").lower() == "open":
         column, reason_code, reason_summary = "review", "open_pr", f"PR #{pr['number']} is open"
     elif not row["activated_at"]:

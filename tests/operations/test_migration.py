@@ -45,7 +45,7 @@ class MigrationTests(unittest.TestCase):
         storage.init_database(db_path, schema_path=schema_path)
 
         with sqlite3.connect(db_path) as conn:
-            event_columns = {row[1]: row[4] for row in conn.execute("PRAGMA table_info(github_events)")}
+            event_columns = {row[1]: row[4] for row in conn.execute("PRAGMA table_info(source_events)")}
             task_columns = {row[1]: row[4] for row in conn.execute("PRAGMA table_info(tasks)")}
         self.assertEqual(event_columns["actor_kind"], "'github_user'")
         self.assertEqual(task_columns["task_kind"], "'human_request'")
@@ -71,13 +71,17 @@ class MigrationTests(unittest.TestCase):
             markers = conn.execute("SELECT version, name, checksum FROM schema_migrations ORDER BY version").fetchall()
         self.assertEqual(markers[1], (2, "dd-github-agent-work-item-control-v1", "legacy-checksum"))
         self.assertEqual(markers[2][0], 3)
-        self.assertEqual(len(markers), 6)
+        self.assertEqual(len(markers), 9)
         self.assertEqual(
             {row[1] for row in markers[3:]},
             {
                 storage.PR_MAINLINE_MIGRATION_NAME,
                 storage.RECOMMENDED_SKILLS_MIGRATION_NAME,
                 storage.SUPERVISION_MIGRATION_NAME,
+                storage.native_sources.NAME,
+                storage.request_events.NAME,
+                storage.repair_cycles.NAME,
             },
         )
-        self.assertEqual(markers[-1][1:], (storage.SUPERVISION_MIGRATION_NAME, storage.SUPERVISION_MIGRATION_CHECKSUM))
+        self.assertEqual(markers[-4][1:], (storage.SUPERVISION_MIGRATION_NAME, storage.SUPERVISION_MIGRATION_CHECKSUM))
+        self.assertEqual(markers[-3][1:], (storage.native_sources.NAME, storage.native_sources.CHECKSUM))

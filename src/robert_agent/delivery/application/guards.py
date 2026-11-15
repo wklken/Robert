@@ -1,6 +1,10 @@
 """application delivery guards responsibilities."""
 
+from dataclasses import dataclass
+
 from robert_agent.delivery.application import scope as publication_scope
+from robert_agent.delivery.application.source_delivery_observation import AcceptedDeliveryObservation
+from robert_agent.delivery.application.source_results import current_started_github_delivery
 from robert_agent.delivery.application import audit as audit_result
 from robert_agent.execution import operations as execution_operations
 from robert_agent.supervision import git as supervision_git
@@ -8,7 +12,14 @@ from robert_agent.supervision import git as supervision_git
 from robert_agent.delivery.application import outcomes as publication_outcomes
 from robert_agent.delivery import intents as intent_facts
 from robert_agent.delivery import values as publication_values
-from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.delivery import OutputType, PublicationStatus
+from robert_agent.foundation.values import utc_now
+from robert_agent.persistence import database, transactions
+from robert_agent.persistence.stores.source_sessions import SourceClaim
+from robert_agent.work.tapd_authority import TicketIdentity
+from contextlib import closing
+from robert_agent.persistence.queries import source_github_publication, source_pr_selection
+from robert_agent.persistence.rounds.source_evidence import context_digest
 
 
 def publish_scope_violation(conn, action):
@@ -23,9 +34,78 @@ def publish_scope_violation(conn, action):
     return audit_result.action_scope_violation([payload], action_scope)
 
 
-def publication_scope_guard(conn, action, recovery_guard=None):
+@dataclass(frozen=True, slots=True)
+class NativeGitHubWriteScope:
+    """Exact started effect and current durable source-authorization collaborator."""
+
+    source_result_id: str
+    publication_id: str
+    request_fingerprint: str
+    database_path: str
+    config: dict
+    ticket: TicketIdentity
+    claim: SourceClaim
+    revision: str
+    recovery_observation: object = None
+    mixed_observation: AcceptedDeliveryObservation | None = None
+
+
+def _native_scope_current(conn, action, native):
+    if conn is None or not isinstance(native, NativeGitHubWriteScope):
+        return False
+    with closing(database.connect(native.database_path, foreign_keys=True)) as writer, writer:
+        transactions.begin_immediate(writer)
+        row = source_github_publication.required_action(writer, native.source_result_id, action["action_id"])
+        if (
+            row is None
+            or any(action.get(key) != row[key] for key in ("task_id", "result_id", "action_type", "target_json"))
+            or row["publication_id"] != native.publication_id
+            or row["request_fingerprint"] != native.request_fingerprint
+            or row["intent_status"] != PublicationStatus.EXECUTING
+        ):
+            return False
+        packet = source_github_publication.prepared_request(row)
+        audit_scope = publication_scope.trusted_action_scope(writer, action, include_output_type=True)
+        return (
+            packet is not None
+            and isinstance(audit_scope, dict)
+            and packet.get("audit_scope_sha256") == context_digest(audit_scope)
+            and source_pr_selection.effect_selection(writer, row)[0]
+            and publication_values.decode_json(action["metadata_json"]) == packet["effect"]
+            and current_started_github_delivery(
+                writer,
+                native.config,
+                native.ticket,
+                native.claim,
+                source_result_id=native.source_result_id,
+                action_id=row["action_id"],
+                publication_id=native.publication_id,
+                revision=native.revision,
+                now=utc_now(),
+                recovery_observation=native.recovery_observation,
+                mixed_observation=native.mixed_observation,
+            )
+            is not None
+        )
+
+
+def publication_scope_guard(conn, action, recovery_guard=None, *, native_scope=None):
     """Recheck the durable binding immediately before an external write."""
 
+    if native_scope is not None:
+        if _native_scope_current(conn, action, native_scope):
+            return None
+        return {
+            "ok": False,
+            "status": "native_scope_rejected",
+            "safe_error": "Native GitHub publication scope is unavailable.",
+        }
+    if action.get("target_json") is not None:
+        return {
+            "ok": False,
+            "status": "native_scope_rejected",
+            "safe_error": "A native GitHub action requires its exact source publication scope.",
+        }
     if recovery_guard and not recovery_guard():
         return {
             "ok": False,
@@ -64,7 +144,7 @@ def publication_scope_guard(conn, action, recovery_guard=None):
     }
 
 
-def push_target(scope, run_command, *, reconcile=False):
+def push_target(scope, run_command, *, reconcile=False, pinned_head_repository=None):
     """Validate the output's push destination for both reads and the write."""
     from robert_agent.adapters.github import client
     from robert_agent.adapters.git.remotes import github_repository
@@ -73,7 +153,7 @@ def push_target(scope, run_command, *, reconcile=False):
 
     sources = [source for source in scope.get("sources", ()) if source.get("source_type") == "pull_request"]
     new_pr = scope.get("output_type") == OutputType.NEW_PR
-    if scope.get("supervision_repair") or (not new_pr and not sources):
+    if scope.get("supervision_repair") or (not new_pr and not sources and not pinned_head_repository):
         return None
     error = {
         "ok": False,
@@ -86,7 +166,7 @@ def push_target(scope, run_command, *, reconcile=False):
     try:
         if new_pr:
             owner, repository = scope["repo"].split("/", 1)
-            head_repo = f"{scope.get('head_owner') or owner}/{repository}"
+            head_repo = pinned_head_repository or f"{scope.get('head_owner') or owner}/{repository}"
         else:
             details = client.try_read_json(
                 ["gh", "api", f"repos/{scope['repo']}/pulls/{sources[0]['number']}"], runner=run_command
@@ -95,6 +175,7 @@ def push_target(scope, run_command, *, reconcile=False):
             head_repo = (head.get("repo") or {}).get("full_name")
             if (
                 not head_repo
+                or (pinned_head_repository and head_repo.casefold() != pinned_head_repository.casefold())
                 or (
                     not reconcile
                     and (details.get("state") != "open" or details.get("merged") or details.get("merged_at"))

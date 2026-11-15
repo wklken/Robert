@@ -5,7 +5,7 @@ import shlex
 import sys
 
 from robert_agent.context.prompt_contract import ContextItem, OutputContract, PromptInput
-from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
+from robert_agent.foundation.contracts.delivery import GitHubActionType, NATIVE_RESULT_CONTRACT, OutputType
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskKind
 
 
@@ -272,8 +272,16 @@ def worker_prompt_input(
     restricted = transport == "stdout_compact_submission"
     task_kind = task.get("task_kind", TaskKind.HUMAN_REQUEST.value)
     stage = _worker_stage(expected_output, task_kind, restricted)
+    native = context.get("native_result")
+    if native is not None:
+        if restricted:
+            raise ValueError("native Worker results require the bound result helper")
+        if expected_output == OutputType.CLASSIFICATION_RESULT:
+            stage = "task.classify_source"
+        elif native["role"] == "evidence":
+            stage = "task.source_evidence"
     origin = context.get("origin_type", "github")
-    web = origin == "web"
+    web = native is None and origin == "web"
     attempt_id = task["attempt_id"]
     item_key = "work_item_event_id" if web else "event_fingerprint"
     event_ids = [event[item_key] for event in events if event.get(item_key)]
@@ -295,11 +303,35 @@ def worker_prompt_input(
         identity["routing_block_reason"] = route_result["routing_block_reason"]
 
     authority: dict[str, object] = {"allowed_github_actions": allowed}
-    items = list(
-        _web_items(context, events, attempt_id, restricted=restricted)
-        if web
-        else _github_items({} if restricted else context, events, attempt_id)
-    )
+    if native is not None:
+        identity.update(origin_type="tapd", result_contract=NATIVE_RESULT_CONTRACT)
+        authority = {
+            "allowed_actions": native["allowed_actions"],
+            "repo_id": native["repo_id"],
+            "capability": native["capability"],
+            "role": native["role"],
+            "admitted_triggers": events,
+        }
+        if native["role"] == "classification":
+            authority["allowed_routes"] = context["native_classification_routes"]
+        if context.get("native_commit_message"):
+            authority["approved_commit_message"] = context["native_commit_message"]
+        items = [
+            ContextItem(
+                "request",
+                "Frozen TAPD request and discussion",
+                native["round_id"],
+                content=context.get("native_source_snapshot", events),
+                requirement="required",
+                revision=context["native_input_revision"],
+            )
+        ]
+    else:
+        items = list(
+            _web_items(context, events, attempt_id, restricted=restricted)
+            if web
+            else _github_items({} if restricted else context, events, attempt_id)
+        )
     if context.get("worktree_path"):
         authority["worktree_path"] = context["worktree_path"]
         items.append(
@@ -352,7 +384,8 @@ def worker_prompt_input(
     }
     input_policy = task.get("review_input_policy", "required")
     if (
-        task_kind not in REMEDIATION_TASK_KINDS
+        native is None
+        and task_kind not in REMEDIATION_TASK_KINDS
         and input_policy != "none"
         and expected_output in {OutputType.REVIEW_COMMENT, OutputType.UPDATE_EXISTING_PR}
     ):
@@ -435,7 +468,21 @@ def worker_prompt_input(
         )
         result["used_memory_ids"] = []
 
-    guidance += _publication_fragments(expected_output, allowed, context, values)
+    if native is None:
+        guidance += _publication_fragments(expected_output, allowed, context, values)
+    else:
+        result.pop("planned_github_actions")
+        result.pop("branch_slug", None)
+        result["planned_actions"] = [
+            {**action, **({"body": "<reply for the TAPD ticket>"} if action["provider"] == "tapd" else {})}
+            for kind in (GitHubActionType.PUSH_EXISTING_PR, GitHubActionType.OPEN_PR, GitHubActionType.COMMENT)
+            for action in native["allowed_actions"]
+            if action["type"] == kind
+        ]
+        if native["role"] == "evidence":
+            result["evidence"] = [
+                {"repo_id": native["repo_id"], "path": "<repository-relative path>", "revision": "sha256:<byte digest>"}
+            ]
     output = OutputContract(
         "stdout-json" if restricted else "helper",
         expected_output,

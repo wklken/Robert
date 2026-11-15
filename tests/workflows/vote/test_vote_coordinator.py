@@ -179,6 +179,14 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         next_driver.run()
         with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1)
+            self.assertEqual(
+                conn.execute(
+                    "SELECT re.state FROM request_events re JOIN source_events se ON se.event_id=re.event_id"
+                    " WHERE re.task_id=? AND json_extract(se.payload_json, '$.id')='reply'",
+                    (driver.task_id,),
+                ).fetchone()[0],
+                "consumed",
+            )
 
     def test_repeated_or_historical_reply_cannot_answer_a_new_clarification(self):
         self.clarify = True

@@ -140,7 +140,7 @@ def workstream_sources(conn, workstream_ids):
     streams, repos, sources = (
         tables["workstreams"],
         tables["repos"],
-        tables["github_sources"],
+        tables["sources"],
     )
     workstream, source = streams.c, sources.c
     query = select(
@@ -267,7 +267,7 @@ def terminal_board_page(
             .correlate(current)
             .scalar_subquery()
         )
-        source = tables["github_sources"]
+        source = tables["sources"]
         pr = (
             select(source.c.number)
             .select_from(stream.join(source, source.c.source_id == stream.c.primary_source_id))

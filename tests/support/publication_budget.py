@@ -66,7 +66,7 @@ class PublicationBudgetFixture(unittest.TestCase):
                 ),
             )
             c.execute(
-                "INSERT INTO github_actions VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO github_actions(action_id,result_id,task_id,action_type,target_url,external_id,audit_status,publish_status,created_at,metadata_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     "push",
                     "r",

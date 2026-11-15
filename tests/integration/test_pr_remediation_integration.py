@@ -26,7 +26,7 @@ class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
             event_rows = conn.execute(
                 """
                 SELECT actor_kind, authorization_status, event_type
-                FROM github_events
+                FROM source_events
                 ORDER BY event_type
                 """
             ).fetchall()
@@ -66,7 +66,7 @@ class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
             )
             counts = (
                 conn.execute("SELECT COUNT(*) FROM pr_remediation_episodes").fetchone()[0],
-                conn.execute("SELECT COUNT(*) FROM github_events").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM source_events").fetchone()[0],
             )
 
         self.assertEqual(len(first), 2)
@@ -198,7 +198,7 @@ class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
                 """
                 SELECT ge.event_fingerprint
                 FROM task_events te
-                JOIN github_events ge ON ge.event_id = te.event_id
+                JOIN source_events ge ON ge.event_id = te.event_id
                 WHERE te.task_id = ?
                   AND te.relationship = 'trigger'
                 """,

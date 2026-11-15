@@ -3,6 +3,12 @@
 from robert_agent.foundation.contracts.execution import AttemptStatus, RoundStatus
 
 from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import source_tasks
+from robert_agent.persistence.stores import source_sessions
+from robert_agent.foundation.timestamps import utc_timestamp
+from robert_agent.work.application import source_observation, tapd_intake
+from robert_agent.work.tapd_authority import TicketIdentity
+from hashlib import sha256
 
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import transactions as db_transactions
@@ -17,6 +23,7 @@ from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from robert_agent.supervision import store as supervision_store
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from robert_agent.adapters.git import workspace as git_workspace
 from robert_agent.adapters.processes import worker as dispatch
@@ -354,8 +361,81 @@ def _model_for_dispatch(
     return primary_model
 
 
+def _blocked_source(task_info, reason):
+    return {
+        "ok": False,
+        "status": "source_dispatch_blocked",
+        "reason_code": reason,
+        **{key: task_info[key] for key in ("task_id", "attempt_id")},
+    }
+
+
+def _refresh_source_dispatch(db_path, config, source_refresh, task_info, repo_id, repo):
+    if not source_refresh or (config or {}).get("tapd", {}).get("enabled") is not True:
+        return None, None, "native_refresh_unavailable"
+    with closing(db_database.connect(db_path)) as conn:
+        bound = work_admission.native_dispatch_binding(conn, task_info["task_id"], task_info["attempt_id"])
+    if bound is None or bound[1]["repo_id"] != repo_id:
+        return None, None, "native_attempt_unavailable"
+    _, member, _ = bound
+    ticket = TicketIdentity(member["host"], member["project_key"], member["source_type"], member["external_id"])
+    started = utc_timestamp(values.utc_now())
+    try:
+        refresh = source_refresh(ticket, task_id=task_info["task_id"], attempt_id=task_info["attempt_id"])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None, None, "native_refresh_unavailable"
+    observed_at = (
+        utc_timestamp(refresh.observation.observed_at)
+        if isinstance(refresh, work_admission.SourceDispatchObservation)
+        else None
+    )
+    now = values.utc_now()
+    if (
+        observed_at is None
+        or not started <= observed_at <= utc_timestamp(now)
+        or refresh.claim.source_id != ticket.source_id
+        or refresh.observation.facts.identity != ticket
+        or refresh.publication.ticket != ticket
+    ):
+        return None, None, "native_refresh_unavailable"
+    with closing(db_database.connect(db_path, foreign_keys=True)) as conn, conn:
+        db_transactions.begin_immediate(conn)
+        if not source_sessions.lock_round(conn, refresh.claim, member["round_id"], now=now):
+            return None, None, "native_authorization_unavailable"
+        current_proof = source_observation.publication_facts(conn, ticket)
+        if refresh.mixed is not None and refresh.publication != current_proof:
+            return None, None, "native_publication_evidence_changed"
+        refresh = replace(refresh, publication=current_proof)
+        processed = tapd_intake.observe_ticket(conn, config["tapd"], refresh.observation, current_proof, now=now)
+        if processed.revision is None:
+            return None, None, "native_refresh_unavailable"
+        rejection = work_admission.verify_source_dispatch(
+            conn, config, refresh, processed.revision, task_info, repo_id, repo, now=now
+        )
+    return refresh, processed.revision, rejection
+
+
+def _frozen_prompt_matches(task_info, metadata):
+    try:
+        data = task_info["prompt_path"].read_bytes()
+    except OSError:
+        return False
+    contract = metadata.get("prompt_contract")
+    expected = contract.get("prompt_sha256") if isinstance(contract, dict) else None
+    return sha256(data).hexdigest() == expected
+
+
 def dispatch_queued(
-    db_path, repo_ids, dispatch_queue, dry_run, max_concurrency, workers=None, default_worker=None, config_result=None
+    db_path,
+    repo_ids,
+    dispatch_queue,
+    dry_run,
+    max_concurrency,
+    workers=None,
+    default_worker=None,
+    config_result=None,
+    *,
+    source_refresh=None,
 ):
     # The process-owned task lock covers target validation, spawn and PID
     # persistence. Cancellation/publication take this same lock.
@@ -374,7 +454,15 @@ def dispatch_queued(
                 if acquired:
                     results.extend(
                         dispatch_queued_locked(
-                            db_path, repo_ids, [item], dry_run, max_concurrency, workers, default_worker, config_result
+                            db_path,
+                            repo_ids,
+                            [item],
+                            dry_run,
+                            max_concurrency,
+                            workers,
+                            default_worker,
+                            config_result,
+                            source_refresh=source_refresh,
                         )
                     )
         return results
@@ -389,6 +477,8 @@ def dispatch_queued_locked(
     workers=None,
     default_worker=None,
     config_result=None,
+    *,
+    source_refresh=None,
 ):
     cutover = result_cutover.check(db_path)
     if not cutover["ok"]:
@@ -401,6 +491,12 @@ def dispatch_queued_locked(
         worktree_result = item["worktree_result"]
         repo_id = item["repo_id"]
         repo = item["repo"]
+        with closing(db_database.connect(db_path)) as conn:
+            native_source = source_tasks.has_native_origin(conn, task_info["task_id"])
+        if native_source and dry_run:
+            results.append(_blocked_source(task_info, "native_preview_unavailable"))
+            continue
+        refreshed_source = source_revision = source_metadata = None
         if not dry_run:
             with closing(db_database.connect(db_path)) as conn, conn:
                 db_sqlite.configure(conn, foreign_keys=True)
@@ -415,8 +511,31 @@ def dispatch_queued_locked(
                 current_target = current_dispatch_target(conn, task_info["attempt_id"])
                 if current_target is None:
                     continue
+                if current_target[0]["task_id"] != task_info["task_id"]:
+                    continue
                 task_info, worktree_result = current_target
-            worktree_result = ensure_dispatch_worktree(db_path, repo, task_info, worktree_result)
+            if native_source:
+                refreshed_source, source_revision, rejection = _refresh_source_dispatch(
+                    db_path, config_result, source_refresh, task_info, repo_id, repo
+                )
+                if rejection:
+                    results.append(_blocked_source(task_info, rejection))
+                    continue
+                with closing(db_database.connect(db_path)) as conn:
+                    bound = work_admission.native_dispatch_binding(conn, task_info["task_id"], task_info["attempt_id"])
+                if bound is None:
+                    results.append(_blocked_source(task_info, "native_attempt_unavailable"))
+                    continue
+                source_metadata = bound[2]
+                if not _frozen_prompt_matches(
+                    task_info, source_metadata
+                ) or not assigned_workspace.validate_source_workspace(
+                    repo, source_metadata.get("native_workspace"), worktree_result
+                ):
+                    results.append(_blocked_source(task_info, "native_frozen_workspace_or_prompt_unavailable"))
+                    continue
+            else:
+                worktree_result = ensure_dispatch_worktree(db_path, repo, task_info, worktree_result)
             with closing(db_database.connect(db_path)) as conn, conn:
                 db_sqlite.configure(conn, foreign_keys=True)
                 db_sqlite.configure(conn, busy_timeout_ms=5000)
@@ -488,9 +607,9 @@ def dispatch_queued_locked(
             "dry_run": dry_run,
         }
         with closing(db_database.connect(db_path)) as conn:
-            native_review = native_rounds.session(conn, task_id=task_info["task_id"])
+            native_review = None if native_source else native_rounds.session(conn, task_id=task_info["task_id"])
             dispatch_bound = dispatch_queries.for_task(conn, task_info["task_id"]) is not None
-        if not native_review and (config_result or dispatch_bound):
+        if not native_source and not native_review and (config_result or dispatch_bound):
             with closing(db_database.connect(db_path)) as conn, conn:
                 if not work_admission.ordinary_dispatch_allowed(conn, task_info["task_id"], repo, config_result):
                     now = values.utc_now()
@@ -547,7 +666,7 @@ def dispatch_queued_locked(
                         },
                     )
             continue
-        if config_result and not native_review:
+        if config_result and not native_source and not native_review:
             from robert_agent.workflows.maintenance import repair as supervision_repair
 
             with closing(db_database.connect(db_path)) as conn, conn:
@@ -614,7 +733,43 @@ def dispatch_queued_locked(
                 target = current_dispatch_target(conn, task_info["attempt_id"])
                 if target is None:
                     continue
+                if target[0]["task_id"] != task_info["task_id"] or target[0]["prompt_path"] != task_info["prompt_path"]:
+                    continue
                 task_info, current_workspace = target
+                remains_native = source_tasks.has_native_origin(conn, task_info["task_id"])
+                if remains_native or native_source:
+                    reason = "native_binding_changed"
+                    if remains_native and refreshed_source is not None:
+                        rebound = work_admission.native_dispatch_binding(
+                            conn, task_info["task_id"], task_info["attempt_id"]
+                        )
+                        if (
+                            rebound is not None
+                            and rebound[2] == source_metadata
+                            and current_workspace == worktree_result
+                        ):
+                            if not _frozen_prompt_matches(task_info, source_metadata):
+                                results.append(
+                                    _blocked_source(task_info, "native_frozen_workspace_or_prompt_unavailable")
+                                )
+                                continue
+                            proof = source_observation.publication_facts(conn, refreshed_source.publication.ticket)
+                            if proof != refreshed_source.publication:
+                                results.append(_blocked_source(task_info, "native_publication_evidence_changed"))
+                                continue
+                            reason = work_admission.verify_source_dispatch(
+                                conn,
+                                config_result,
+                                refreshed_source,
+                                source_revision,
+                                task_info,
+                                repo_id,
+                                repo,
+                                now=values.utc_now(),
+                            )
+                    if reason:
+                        results.append(_blocked_source(task_info, reason))
+                        continue
                 if any(
                     (current_workspace or {}).get(key) != (worktree_result or {}).get(key)
                     for key in ("worktree_path", "branch_name")
@@ -633,6 +788,11 @@ def dispatch_queued_locked(
                         )
                     continue
                 if binding:
+                    if native_source:
+                        attempt_metadata = {**source_metadata, "native_launch_checkpoint": values.utc_now()}
+                        db_write_attempts.set_metadata_json_by_attempt_id(
+                            conn, json.dumps(attempt_metadata, sort_keys=True), task_info["attempt_id"]
+                        )
                     metadata["dispatch_inflight"] = task_info["attempt_id"]
                     db_write_execution_subjects.update_for_dispatch_queued_locked(
                         conn, json.dumps(metadata), subject_type, subject_id

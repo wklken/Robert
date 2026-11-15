@@ -3,7 +3,9 @@
 from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
+    REAL,
     Integer,
     Text,
     text,
@@ -80,14 +82,18 @@ class ActorPermission(Base):
     )
 
 
-class GitHubSource(Base):
-    __tablename__ = "github_sources"
+class Source(Base):
+    __tablename__ = "sources"
 
     source_id: Mapped[str | None] = mapped_column(Text, primary_key=True, nullable=True)
-    repo_id: Mapped[str] = mapped_column(Text, ForeignKey("repos.repo_id", ondelete="CASCADE"))
+    repo_id: Mapped[str | None] = mapped_column(Text, ForeignKey("repos.repo_id", ondelete="CASCADE"))
     source_key: Mapped[str] = mapped_column(Text, unique=True)
     source_type: Mapped[str] = mapped_column(Text)
-    number: Mapped[int] = mapped_column(Integer)
+    provider: Mapped[str] = mapped_column(Text)
+    host: Mapped[str] = mapped_column(Text)
+    project_key: Mapped[str] = mapped_column(Text)
+    external_id: Mapped[str] = mapped_column(Text)
+    number: Mapped[int | None] = mapped_column(Integer)
     html_url: Mapped[str | None] = mapped_column(Text)
     title: Mapped[str] = mapped_column(Text, server_default="")
     state: Mapped[str] = mapped_column(Text, server_default="open")
@@ -95,17 +101,27 @@ class GitHubSource(Base):
     source_updated_at: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column(Text, server_default="{}")
 
-    __table_args__ = (CheckConstraint("source_type IN ('issue', 'pull_request')"),)
+    __table_args__ = (
+        UniqueConstraint("provider", "host", "project_key", "source_type", "external_id"),
+        CheckConstraint("length(trim(host)) > 0"),
+        CheckConstraint("length(trim(project_key)) > 0"),
+        CheckConstraint("length(trim(external_id)) > 0"),
+        CheckConstraint(
+            "(provider = 'github' AND source_type IN ('issue', 'pull_request') AND repo_id IS NOT NULL"
+            " AND typeof(number) = 'integer' AND number > 0 AND external_id = CAST(number AS TEXT))"
+            " OR (provider = 'tapd' AND source_type IN ('story', 'bug') AND number IS NULL)"
+        ),
+    )
 
 
-class GitHubEvent(Base):
-    __tablename__ = "github_events"
+class SourceEvent(Base):
+    __tablename__ = "source_events"
 
     event_id: Mapped[str | None] = mapped_column(Text, primary_key=True, nullable=True)
-    repo_id: Mapped[str] = mapped_column(Text, ForeignKey("repos.repo_id", ondelete="CASCADE"))
+    repo_id: Mapped[str | None] = mapped_column(Text, ForeignKey("repos.repo_id", ondelete="CASCADE"))
     source_id: Mapped[str] = mapped_column(
         Text,
-        ForeignKey("github_sources.source_id", ondelete="CASCADE"),
+        ForeignKey("sources.source_id", ondelete="CASCADE"),
     )
     event_fingerprint: Mapped[str] = mapped_column(Text, unique=True)
     event_type: Mapped[str] = mapped_column(Text)
@@ -116,7 +132,7 @@ class GitHubEvent(Base):
     event_at: Mapped[str] = mapped_column(Text)
     payload_json: Mapped[str] = mapped_column(Text, server_default="{}")
 
-    __table_args__ = (Index("idx_github_events_recent", text("event_at DESC"), text("event_id DESC")),)
+    __table_args__ = (Index("idx_source_events_recent", text("event_at DESC"), text("event_id DESC")),)
 
 
 class Workstream(Base):
@@ -126,7 +142,7 @@ class Workstream(Base):
     repo_id: Mapped[str] = mapped_column(Text, ForeignKey("repos.repo_id", ondelete="CASCADE"))
     primary_source_id: Mapped[str | None] = mapped_column(
         Text,
-        ForeignKey("github_sources.source_id", ondelete="SET NULL"),
+        ForeignKey("sources.source_id", ondelete="SET NULL"),
     )
     origin_workstream_id: Mapped[str | None] = mapped_column(
         Text,
@@ -153,7 +169,7 @@ class WorkstreamSource(Base):
     )
     source_id: Mapped[str] = mapped_column(
         Text,
-        ForeignKey("github_sources.source_id", ondelete="CASCADE"),
+        ForeignKey("sources.source_id", ondelete="CASCADE"),
         primary_key=True,
     )
     relationship: Mapped[str] = mapped_column(Text)
@@ -216,13 +232,111 @@ class TaskEvent(Base):
     )
     event_id: Mapped[str] = mapped_column(
         Text,
-        ForeignKey("github_events.event_id", ondelete="CASCADE"),
+        ForeignKey("source_events.event_id", ondelete="CASCADE"),
         primary_key=True,
     )
     relationship: Mapped[str] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(Text)
 
-    __table_args__ = (CheckConstraint("relationship IN ('trigger', 'pending', 'consumed', 'context')"),)
+    __table_args__ = (CheckConstraint("relationship IN ('trigger', 'context')"),)
+
+
+class IngressRequest(Base):
+    __tablename__ = "ingress_requests"
+
+    request_id: Mapped[str | None] = mapped_column(Text, primary_key=True, nullable=True)
+    source_id: Mapped[str] = mapped_column(Text, ForeignKey("sources.source_id", ondelete="CASCADE"))
+    provider: Mapped[str] = mapped_column(Text)
+    auth_type: Mapped[str] = mapped_column(Text)
+    authorization_json: Mapped[str] = mapped_column(Text)
+    content_snapshot_json: Mapped[str] = mapped_column(Text)
+    content_version: Mapped[str] = mapped_column(Text)
+    phase: Mapped[str] = mapped_column(Text, server_default="pending")
+    repo_id: Mapped[str | None] = mapped_column(Text, ForeignKey("repos.repo_id", ondelete="SET NULL"))
+    task_id: Mapped[str | None] = mapped_column(Text, ForeignKey("tasks.task_id", ondelete="SET NULL"))
+    created_at: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("provider IN ('github', 'tapd')"),
+        CheckConstraint("length(trim(auth_type)) > 0"),
+        CheckConstraint("length(trim(content_version)) > 0"),
+        CheckConstraint("length(trim(phase)) > 0"),
+    )
+
+
+class SourceGitHubIngress(Base):
+    __tablename__ = "source_github_ingress"
+
+    event_id: Mapped[str] = mapped_column(Text, ForeignKey("source_events.event_id"), primary_key=True)
+    request_id: Mapped[str | None] = mapped_column(Text, ForeignKey("ingress_requests.request_id"), unique=True)
+    repo_id: Mapped[str] = mapped_column(Text, ForeignKey("repos.repo_id"))
+    pr_source_id: Mapped[str] = mapped_column(Text, ForeignKey("sources.source_id"))
+    tapd_source_id: Mapped[str | None] = mapped_column(Text, ForeignKey("sources.source_id"))
+    pr_workstream_id: Mapped[str | None] = mapped_column(Text, ForeignKey("workstreams.workstream_id"))
+    target_json: Mapped[str | None] = mapped_column(Text)
+    first_observation_json: Mapped[str | None] = mapped_column(Text)
+    latest_observation_json: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+    observed_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "request_id IS NULL OR (tapd_source_id IS NOT NULL AND pr_workstream_id IS NOT NULL "
+            "AND target_json IS NOT NULL)"
+        ),
+        Index("idx_source_github_ingress_source", "tapd_source_id", "repo_id", "created_at", "event_id"),
+    )
+
+
+class SourceGitHubObservation(Base):
+    __tablename__ = "source_github_observations"
+
+    request_id: Mapped[str] = mapped_column(Text, ForeignKey("source_github_ingress.request_id"), primary_key=True)
+    operation_id: Mapped[str] = mapped_column(Text)
+    scope_digest: Mapped[str] = mapped_column(Text)
+    observed_at: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    evidence_json: Mapped[str] = mapped_column(Text)
+    proof_digest: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (CheckConstraint("status IN ('present', 'absent', 'unavailable')"),)
+
+
+class RequestEvent(Base):
+    __tablename__ = "request_events"
+
+    row_id: Mapped[int] = mapped_column(Integer, primary_key=True, nullable=True)
+    task_id: Mapped[str | None] = mapped_column(Text)
+    request_id: Mapped[str | None] = mapped_column(Text, ForeignKey("ingress_requests.request_id", ondelete="CASCADE"))
+    event_id: Mapped[str] = mapped_column(Text, ForeignKey("source_events.event_id", ondelete="CASCADE"))
+    state: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+    consumed_at: Mapped[str | None] = mapped_column(Text)
+    result_id: Mapped[str | None] = mapped_column(Text, ForeignKey("worker_results.result_id", ondelete="SET NULL"))
+    source_result_id: Mapped[str | None] = mapped_column(Text, ForeignKey("source_results.source_result_id"))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["task_id", "event_id"], ["task_events.task_id", "task_events.event_id"], ondelete="CASCADE"
+        ),
+        CheckConstraint("state IN ('pending', 'consumed', 'revoked')"),
+        CheckConstraint("(task_id IS NOT NULL) != (request_id IS NOT NULL)"),
+        CheckConstraint("state = 'consumed' OR (consumed_at IS NULL AND result_id IS NULL)"),
+        CheckConstraint(
+            "source_result_id IS NULL OR (request_id IS NOT NULL AND state = 'consumed' "
+            "AND consumed_at IS NOT NULL AND result_id IS NULL)"
+        ),
+        Index("idx_request_events_task", "task_id", "event_id", unique=True, sqlite_where=text("task_id IS NOT NULL")),
+        Index(
+            "idx_request_events_request",
+            "request_id",
+            "event_id",
+            unique=True,
+            sqlite_where=text("request_id IS NOT NULL"),
+        ),
+    )
 
 
 class RouteDecision(Base):
@@ -252,7 +366,7 @@ class WorkItem(Base):
     origin_type: Mapped[str] = mapped_column(Text)
     origin_source_id: Mapped[str | None] = mapped_column(
         Text,
-        ForeignKey("github_sources.source_id", ondelete="SET NULL"),
+        ForeignKey("sources.source_id", ondelete="SET NULL"),
     )
     routing_mode: Mapped[str] = mapped_column(Text, server_default="auto")
     requested_worker: Mapped[str | None] = mapped_column(Text)
@@ -272,7 +386,7 @@ class WorkItem(Base):
 
     __table_args__ = (
         CheckConstraint("priority IN ('P0', 'P1', 'P2', 'P3')"),
-        CheckConstraint("origin_type IN ('web', 'github')"),
+        CheckConstraint("origin_type IN ('web', 'github', 'tapd')"),
         CheckConstraint("routing_mode IN ('auto', 'manual')"),
         CheckConstraint("version >= 1"),
         CheckConstraint(
@@ -288,7 +402,14 @@ class WorkItem(Base):
             "idx_work_items_origin_source",
             "origin_source_id",
             unique=True,
-            sqlite_where=text("origin_source_id IS NOT NULL"),
+            sqlite_where=text("origin_source_id IS NOT NULL AND origin_type != 'tapd'"),
+        ),
+        Index(
+            "idx_work_items_tapd_origin_repo",
+            "origin_source_id",
+            "repo_id",
+            unique=True,
+            sqlite_where=text("origin_source_id IS NOT NULL AND origin_type = 'tapd'"),
         ),
         Index(
             "idx_work_items_repo_updated",
@@ -360,7 +481,6 @@ class PrRemediationEpisode(Base):
     observed_base_sha: Mapped[str] = mapped_column(Text)
     result_head_sha: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text)
-    attempt_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     failure_signature: Mapped[str | None] = mapped_column(Text)
     first_seen_at: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[str] = mapped_column(Text)
@@ -377,10 +497,94 @@ class PrRemediationEpisode(Base):
             "status IN ('open', 'queued', 'remediating', 'waiting_for_signal', 'resolved', "
             "'exhausted', 'superseded', 'canceled')"
         ),
-        CheckConstraint("attempt_count >= 0"),
         UniqueConstraint("workstream_id", "episode_kind", "subject_key"),
         Index("idx_pr_remediation_episodes_status", "status", "updated_at"),
     )
+
+
+class RepairCycle(Base):
+    __tablename__ = "repair_cycles"
+
+    cycle_id: Mapped[str | None] = mapped_column(Text, primary_key=True, nullable=True)
+    scope: Mapped[str] = mapped_column(Text)
+    episode_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("pr_remediation_episodes.episode_id", ondelete="CASCADE"), unique=True
+    )
+    source_id: Mapped[str | None] = mapped_column(Text, ForeignKey("sources.source_id"))
+    pr_source_id: Mapped[str | None] = mapped_column(Text, ForeignKey("sources.source_id"))
+    policy_version: Mapped[int | None] = mapped_column(Integer)
+    policy_json: Mapped[str | None] = mapped_column(Text)
+    policy_cap_json: Mapped[str | None] = mapped_column(Text)
+    authorized_base_ref: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    close_reason: Mapped[str | None] = mapped_column(Text)
+    observed_at: Mapped[str | None] = mapped_column(Text)
+    observation_digest: Mapped[str | None] = mapped_column(Text)
+    legacy_attempt_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    created_at: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("scope IN ('github','tapd')"),
+        CheckConstraint("status IN ('active','paused','closed')"),
+        CheckConstraint("legacy_attempt_count >= 0"),
+        CheckConstraint(
+            "(scope = 'github' AND episode_id IS NOT NULL AND source_id IS NULL AND pr_source_id IS NULL)"
+            " OR (scope = 'tapd' AND episode_id IS NULL AND source_id IS NOT NULL AND pr_source_id IS NOT NULL"
+            " AND policy_version IS NOT NULL AND policy_json IS NOT NULL AND authorized_base_ref IS NOT NULL"
+            " AND legacy_attempt_count = 0)"
+        ),
+        Index(
+            "idx_repair_cycles_native_open",
+            "source_id",
+            "pr_source_id",
+            unique=True,
+            sqlite_where=text("scope='tapd' AND status IN ('active','paused')"),
+        ),
+    )
+
+
+class RepairCycleClaim(Base):
+    __tablename__ = "repair_cycle_claims"
+
+    cycle_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("repair_cycles.cycle_id", ondelete="CASCADE"), primary_key=True
+    )
+    request_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    episode_id: Mapped[str] = mapped_column(Text, ForeignKey("pr_remediation_episodes.episode_id", ondelete="CASCADE"))
+    task_id: Mapped[str | None] = mapped_column(Text, ForeignKey("tasks.task_id", ondelete="SET NULL"))
+    round_id: Mapped[str | None] = mapped_column(Text, ForeignKey("source_rounds.round_id"))
+    created_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        Index(
+            "idx_repair_cycle_claims_native_task",
+            "task_id",
+            unique=True,
+            sqlite_where=text("round_id IS NOT NULL"),
+        ),
+        Index(
+            "idx_repair_cycle_claims_native_request",
+            "request_key",
+            unique=True,
+            sqlite_where=text("round_id IS NOT NULL"),
+        ),
+    )
+
+
+class RepairCycleUsage(Base):
+    __tablename__ = "repair_cycle_usage"
+
+    attempt_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("attempts.attempt_id", ondelete="CASCADE"), primary_key=True, nullable=True
+    )
+    cycle_id: Mapped[str] = mapped_column(Text, ForeignKey("repair_cycles.cycle_id", ondelete="CASCADE"))
+    tokens: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[float | None] = mapped_column(REAL)
+    observed_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (CheckConstraint("tokens >= 0"), CheckConstraint("cost_usd >= 0"))
 
 
 class PrCiObservation(Base):
@@ -408,3 +612,95 @@ class PrCiObservation(Base):
         UniqueConstraint("source_kind", "external_id", "attempt_no"),
         Index("idx_pr_ci_observations_episode", "episode_id", "completed_at"),
     )
+
+
+class SourceSession(Base):
+    __tablename__ = "source_sessions"
+
+    source_id: Mapped[str] = mapped_column(Text, ForeignKey("sources.source_id"), primary_key=True)
+    owner: Mapped[str] = mapped_column(Text)
+    token: Mapped[int] = mapped_column(Integer)
+    lease_until: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (CheckConstraint("token > 0"),)
+
+
+class SourceRound(Base):
+    __tablename__ = "source_rounds"
+
+    round_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    source_id: Mapped[str] = mapped_column(Text, ForeignKey("source_sessions.source_id"))
+    status: Mapped[str] = mapped_column(Text)
+    capability: Mapped[str] = mapped_column(Text)
+    repo_ids_json: Mapped[str] = mapped_column(Text)
+    publication_scope_json: Mapped[str] = mapped_column(Text)
+    input_version: Mapped[str] = mapped_column(Text)
+    input_snapshot_json: Mapped[str] = mapped_column(Text)
+    input_sha256: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+    finished_at: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('active','execution_finished','waiting_for_user','failed','canceled')"),
+        CheckConstraint("capability IN ('readonly','development')"),
+        CheckConstraint("(status = 'active') = (finished_at IS NULL)"),
+        Index("idx_source_rounds_source", "source_id"),
+        Index("idx_source_rounds_active", "source_id", unique=True, sqlite_where=text("status='active'")),
+    )
+
+
+class SourcePRSelection(Base):
+    __tablename__ = "source_pr_selections"
+
+    round_id: Mapped[str] = mapped_column(Text, ForeignKey("source_rounds.round_id"), primary_key=True)
+    repo_id: Mapped[str] = mapped_column(Text, ForeignKey("repos.repo_id"), primary_key=True)
+    observed_at: Mapped[str] = mapped_column(Text)
+    decision_json: Mapped[str] = mapped_column(Text)
+
+
+class SourceRoundRequest(Base):
+    __tablename__ = "source_round_requests"
+
+    round_id: Mapped[str] = mapped_column(Text, ForeignKey("source_rounds.round_id"), primary_key=True)
+    request_id: Mapped[str] = mapped_column(Text, ForeignKey("ingress_requests.request_id"), primary_key=True)
+    content_version: Mapped[str] = mapped_column(Text)
+    content_snapshot_json: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (Index("idx_source_round_requests_request", "request_id"),)
+
+
+class SourceRoundTask(Base):
+    __tablename__ = "source_round_tasks"
+
+    task_id: Mapped[str] = mapped_column(Text, ForeignKey("tasks.task_id"), primary_key=True)
+    round_id: Mapped[str] = mapped_column(Text)
+    request_id: Mapped[str] = mapped_column(Text)
+    repo_id: Mapped[str] = mapped_column(Text, ForeignKey("repos.repo_id"))
+    capability: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["round_id", "request_id"], ["source_round_requests.round_id", "source_round_requests.request_id"]
+        ),
+        CheckConstraint("capability IN ('readonly','development')"),
+        Index("idx_source_round_tasks_round", "round_id", "created_at", "task_id"),
+    )
+
+
+class TapdProjectIntake(Base):
+    __tablename__ = "tapd_project_intake"
+
+    host: Mapped[str] = mapped_column(Text, primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    activated_after: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+
+
+class SourceRoundCancellation(Base):
+    __tablename__ = "source_round_cancellations"
+
+    round_id: Mapped[str] = mapped_column(Text, ForeignKey("source_rounds.round_id"), primary_key=True)
+    reason: Mapped[str] = mapped_column(Text)
+    requested_at: Mapped[str] = mapped_column(Text)

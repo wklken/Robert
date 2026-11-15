@@ -183,10 +183,10 @@ class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
 
     def test_notification_does_not_reuse_old_trust_boolean(self):
         with closing(sqlite3.connect(self.db)) as c, c:
-            for event_id, raw in c.execute("SELECT event_id,payload_json FROM github_events").fetchall():
+            for event_id, raw in c.execute("SELECT event_id,payload_json FROM source_events").fetchall():
                 event = json.loads(raw)
                 event.update(event_type="notification", trusted_trigger_found=True)
-                c.execute("UPDATE github_events SET payload_json=? WHERE event_id=?", (json.dumps(event), event_id))
+                c.execute("UPDATE source_events SET payload_json=? WHERE event_id=?", (json.dumps(event), event_id))
         self.test_changed_trust_stops_operator_request()
 
     def test_reopen_and_request_changes_prepare_github_tasks(self):

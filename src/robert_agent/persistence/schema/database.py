@@ -1,6 +1,9 @@
 """SQLite storage helpers for the rewritten DD GitHub agent."""
 
 from robert_agent.persistence.schema import execution_control as execution_schema
+from robert_agent.persistence.schema import native_sources
+from robert_agent.persistence.schema import request_events, work_item_origins
+from robert_agent.persistence.schema import repair_cycles, source_results, source_rounds
 
 from robert_agent.persistence.schema import review_rounds as review_schema
 from robert_agent.persistence.schema import vote_rounds as vote_schema
@@ -115,8 +118,8 @@ def _migrate_pr_mainline_workstreams(conn):
         SELECT DISTINCT t.task_id, t.lifecycle, gs.repo_id, gs.source_id, gs.source_key, ge.payload_json
         FROM tasks t
         JOIN task_events te ON te.task_id = t.task_id
-        JOIN github_events ge ON ge.event_id = te.event_id
-        JOIN github_sources gs ON gs.source_id = ge.source_id
+        JOIN source_events ge ON ge.event_id = te.event_id
+        JOIN sources gs ON gs.source_id = ge.source_id
         WHERE gs.source_type = 'pull_request'
           AND t.workstream_id != gs.source_key
         """
@@ -235,7 +238,7 @@ def _migrate_project_memory_fts(conn):
 def _migrate_pr_remediation(conn):
     _ensure_column(
         conn,
-        "github_events",
+        "source_events",
         "actor_kind",
         "actor_kind TEXT NOT NULL DEFAULT 'github_user'",
     )
@@ -265,7 +268,6 @@ def _migrate_pr_remediation(conn):
               'open', 'queued', 'remediating', 'waiting_for_signal',
               'resolved', 'exhausted', 'superseded', 'canceled'
             )),
-          attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
           failure_signature TEXT,
           first_seen_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
@@ -335,7 +337,7 @@ def _backfill_work_items(conn):
             'P2'
           ) AS priority
         FROM workstreams w
-        LEFT JOIN github_sources gs ON gs.source_id = w.primary_source_id
+        LEFT JOIN sources gs ON gs.source_id = w.primary_source_id
         WHERE w.origin_workstream_id IS NULL
         ORDER BY w.created_at, w.workstream_id
         """
@@ -471,11 +473,47 @@ def init_database(db_path, schema_path=None):
         schema = schema_path.read_text(encoding="utf-8")
 
     with closing(sqlite3.connect(db_path)) as conn, conn:
-        conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA journal_mode = WAL")
+        # SQLite ignores FK mode changes within a transaction. This connection
+        # is private to initialization and closes on both success and failure.
+        rebuild_allowed = (
+            native_sources.has_legacy_tables(conn)
+            or request_events.has_legacy_bindings(conn)
+            or source_rounds.has_unique_request(conn)
+            or source_results.requires_action_owner_upgrade(conn)
+            or repair_cycles.has_global_claim_task_key(conn)
+            or not built_in_schema
+        )
+        conn.execute("PRAGMA foreign_keys = OFF" if rebuild_allowed else "PRAGMA foreign_keys = ON")
         conn.execute("BEGIN IMMEDIATE")
-        _execute_script(conn, schema)
+        if not built_in_schema:
+            _execute_script(conn, schema)
+        if native_sources.table_exists(conn, "source_delivery_recoveries"):
+            _ensure_column(conn, "source_delivery_recoveries", "suspended_at", "suspended_at TEXT")
+            index = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_source_delivery_recovery_active'"
+            ).fetchone()
+            if index is not None and "suspended_at" not in index[0]:
+                conn.execute("DROP INDEX idx_source_delivery_recovery_active")
+        cutover = native_sources.has_legacy_tables(conn)
+        if cutover:
+            native_sources.migrate(conn, schema if built_in_schema else schema_sql())
+        consumption_cutover = request_events.has_legacy_bindings(conn)
+        repair_cutover = repair_cycles.has_legacy_counters(conn)
+        if built_in_schema or cutover or consumption_cutover or repair_cutover:
+            schema = schema if built_in_schema else schema_sql()
+            _execute_script(conn, schema)
+        if consumption_cutover:
+            if not cutover:
+                native_sources.check_quiescent(conn)
+            request_events.migrate(conn, schema, _execute_script)
+        if source_rounds.has_unique_request(conn):
+            if not cutover and not consumption_cutover:
+                native_sources.check_quiescent(conn)
+            source_rounds.allow_historical_membership(conn, schema_sql())
+        if native_sources.table_exists(conn, "source_model_runs"):
+            _ensure_column(conn, "source_model_runs", "input_packet_json", "input_packet_json TEXT")
         _ensure_column(
             conn,
             "github_scan_batches",
@@ -500,6 +538,15 @@ def init_database(db_path, schema_path=None):
                 )
             )
         _migrate_github_action_publish_status(conn)
+        _ensure_column(conn, "github_actions", "target_json", "target_json TEXT")
+        _ensure_column(
+            conn,
+            "github_actions",
+            "provider",
+            "provider TEXT NOT NULL DEFAULT 'github' CHECK (provider IN ('github', 'tapd') AND (provider = 'github' OR target_json IS NOT NULL))",
+        )
+        if native_sources.table_exists(conn, "source_results"):
+            source_results.upgrade(conn, schema_sql())
         if skills_pending:
             _migrate_route_recommended_skills(conn)
             pending.append(
@@ -510,6 +557,7 @@ def init_database(db_path, schema_path=None):
                 )
             )
         _migrate_work_item_control(conn)
+        work_item_origins.upgrade(conn)
         if not built_in_schema:
             execution_schema.initialize(conn)
         _migrate_project_memory_fts(conn)
@@ -526,6 +574,27 @@ def init_database(db_path, schema_path=None):
                     SUPERVISION_MIGRATION_CHECKSUM,
                 )
             )
+        if _data_migration_pending(conn, native_sources.NAME, native_sources.CHECKSUM):
+            pending.append((native_sources.VERSION, native_sources.NAME, native_sources.CHECKSUM))
+        elif cutover:
+            raise RuntimeError("Native source migration marker already exists on a legacy database")
+        if _data_migration_pending(conn, request_events.NAME, request_events.CHECKSUM):
+            pending.append((request_events.VERSION, request_events.NAME, request_events.CHECKSUM))
+        elif consumption_cutover:
+            raise RuntimeError("Request event migration marker already exists on a legacy database")
+        repair_pending = _data_migration_pending(conn, repair_cycles.NAME, repair_cycles.CHECKSUM)
+        if repair_cutover:
+            if not repair_pending:
+                raise RuntimeError("Repair cycle migration marker already exists on a legacy database")
+            if not cutover and not consumption_cutover:
+                native_sources.check_quiescent(conn)
+            repair_cycles.migrate(conn)
+        if repair_pending:
+            pending.append((repair_cycles.VERSION, repair_cycles.NAME, repair_cycles.CHECKSUM))
+        if repair_cycles.has_global_claim_task_key(conn):
+            repair_cycles.allow_legacy_restarts(conn, schema_sql())
+        if rebuild_allowed or repair_cutover:
+            native_sources.check_foreign_keys(conn)
         # Keep data conversions before work-item backfill, but record their
         # success only after all initialization completes so failed upgrades
         # can be retried.

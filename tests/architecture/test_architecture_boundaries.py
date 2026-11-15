@@ -75,6 +75,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                     self.assertTrue(
                         dependency == "robert_agent"
                         or dependency in VALUE_CONTRACTS
+                        or dependency == "robert_agent.foundation.tapd_identity"
                         or any(dependency == prefix or dependency.startswith(prefix + ".") for prefix in allowed),
                         (name, dependency),
                     )
@@ -94,6 +95,15 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom):
                     self.assertEqual(node.module, "enum", (name, node.lineno))
                 self.assertNotIsInstance(node, (ast.Import, ast.FunctionDef, ast.AsyncFunctionDef))
+
+    def test_tapd_identity_is_a_pure_leaf(self):
+        name = "robert_agent.foundation.tapd_identity"
+        self.assert_dependencies(name, ())
+        path = PACKAGE / "foundation/tapd_identity.py"
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Import):
+                self.assertEqual([alias.name for alias in node.names], ["re"])
+            self.assertNotIsInstance(node, ast.ImportFrom)
 
     def test_shared_timestamps_are_a_standard_library_leaf(self):
         name = "robert_agent.foundation.timestamps"

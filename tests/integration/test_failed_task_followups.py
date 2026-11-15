@@ -20,7 +20,7 @@ class FailedTaskFollowupTests(unittest.TestCase):
         with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
             task, stream = conn.execute("SELECT task_id,workstream_id FROM tasks").fetchone()
             conn.execute(
-                "UPDATE task_events SET relationship='pending' WHERE event_id IN (SELECT event_id FROM github_events WHERE event_fingerprint='comment:followup')"
+                "INSERT INTO request_events(task_id,event_id,state,created_at) SELECT task_id,event_id,'pending',created_at FROM task_events WHERE event_id IN (SELECT event_id FROM source_events WHERE event_fingerprint='comment:followup')"
             )
             for _ in range(2):
                 lifecycle.finalize_failed_task(conn, task, stream, values.utc_now(), {"status": "failed_dispatch"})

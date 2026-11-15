@@ -25,19 +25,54 @@ class ConfigAndSchemaTests(unittest.TestCase):
             ).fetchall()
         self.assertIn("COVERING INDEX idx_run_repo_steps_consumer_completed", str(plan))
 
+    def test_delivery_recovery_upgrade_preserves_paused_owner_lifecycle(self):
+        from robert_agent.persistence.schema import database as storage
+
+        db_path = self.root / "recovery-upgrade.sqlite3"
+        storage.init_database(db_path)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute("DROP INDEX idx_source_delivery_recovery_active")
+            conn.execute("ALTER TABLE source_delivery_recoveries DROP COLUMN suspended_at")
+            conn.execute(
+                "CREATE UNIQUE INDEX idx_source_delivery_recovery_active ON source_delivery_recoveries(source_id) WHERE completed_at IS NULL"
+            )
+        storage.init_database(db_path)
+        storage.init_database(db_path)
+        with closing(sqlite3.connect(db_path)) as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(source_delivery_recoveries)")}
+            self.assertIn("suspended_at", columns)
+            [definition] = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE name='idx_source_delivery_recovery_active'"
+            ).fetchone()
+            self.assertIn("completed_at IS NULL AND suspended_at IS NULL", definition)
+            self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+
     expected_tables = {
         "schema_migrations",
         "repos",
         "actors",
         "actor_permissions",
-        "github_sources",
-        "github_events",
+        "sources",
+        "source_events",
         "workstreams",
         "workstream_sources",
         "work_items",
         "work_item_events",
         "tasks",
         "task_events",
+        "ingress_requests",
+        "source_github_ingress",
+        "source_github_observations",
+        "request_events",
+        "source_sessions",
+        "source_rounds",
+        "source_resume_transitions",
+        "source_delivery_pauses",
+        "source_delivery_recoveries",
+        "source_pr_selections",
+        "source_round_requests",
+        "source_round_tasks",
+        "source_model_runs",
         "route_decisions",
         "attempts",
         "worker_phases",
@@ -147,7 +182,7 @@ class ConfigAndSchemaTests(unittest.TestCase):
         db_path = self.data_dir / "dd.sqlite3"
         storage.init_database(db_path)
         with closing(sqlite3.connect(db_path)) as conn, conn:
-            event_columns = {row[1]: row[4] for row in conn.execute("PRAGMA table_info(github_events)")}
+            event_columns = {row[1]: row[4] for row in conn.execute("PRAGMA table_info(source_events)")}
             task_columns = {row[1]: row[4] for row in conn.execute("PRAGMA table_info(tasks)")}
             conn.execute(
                 """
@@ -270,3 +305,149 @@ class ConfigAndSchemaTests(unittest.TestCase):
         self.assertIn("status", candidate_columns)
         self.assertIn("scope_type", runtime_columns)
         self.assertIn("retrieval_boost_json", runtime_columns)
+
+
+class SourceResultOwnerMigrationTests(unittest.TestCase):
+    def test_action_owner_cutover_preserves_receipts_and_rolls_back_on_unproved_effect(self):
+        from robert_agent.persistence.schema.database import init_database
+
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / "action-owner.sqlite3"
+            init_database(path)
+            with closing(sqlite3.connect(path)) as conn, conn:
+                current_action_sql = conn.execute(
+                    "SELECT sql FROM sqlite_schema WHERE name='github_actions'"
+                ).fetchone()[0]
+                action_columns = tuple(
+                    entry[1]
+                    for entry in conn.execute("PRAGMA table_info(github_actions)")
+                    if entry[1] != "source_result_id"
+                )
+                old_action_sql = "\n".join(
+                    line.replace("task_id TEXT REFERENCES", "task_id TEXT NOT NULL REFERENCES")
+                    for line in current_action_sql.splitlines()
+                    if "source_result_id" not in line and "CHECK (task_id IS NOT NULL OR" not in line
+                ).replace("DEFAULT '{}',\n)", "DEFAULT '{}'\n)")
+                conn.execute("DROP TABLE github_actions")
+                conn.execute(old_action_sql)
+                conn.execute("DROP TABLE source_required_actions")
+                conn.execute("DROP TABLE source_results")
+                conn.execute("DROP TABLE tapd_publication_preparations")
+                conn.execute("ALTER TABLE request_events DROP COLUMN source_result_id")
+                conn.execute(
+                    "INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root)"
+                    " VALUES('r','org/repo','bot','main','/repo','/trees')"
+                )
+                conn.execute(
+                    "INSERT INTO workstreams(workstream_id,repo_id,created_at,updated_at) VALUES('w','r','now','now')"
+                )
+                conn.execute(
+                    "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at)"
+                    " VALUES('t','w','completed','now','now')"
+                )
+                conn.execute(
+                    "INSERT INTO github_actions(action_id,task_id,action_type,target_url,external_id,audit_status,"
+                    "publish_status,created_at,metadata_json) VALUES('a','t','comment','https://github.com/org/repo',"
+                    "'22','accepted','published','then','{ \"old\": true }')"
+                )
+                conn.execute(
+                    "INSERT INTO publication_intents(publication_id,action_id,idempotency_key,request_fingerprint,status,"
+                    "remote_evidence_json,created_at,updated_at)"
+                    " VALUES('i','a','k','f','executing','{ \"evidence\": \"old\" }','then','then')"
+                )
+                rows_before = conn.execute("SELECT * FROM github_actions").fetchall()
+                schema_before = conn.execute("SELECT name,sql FROM sqlite_schema ORDER BY name").fetchall()
+            with self.assertRaisesRegex(RuntimeError, "reconcile publication intent 'i'"):
+                init_database(path)
+            with closing(sqlite3.connect(path)) as conn, conn:
+                self.assertEqual(
+                    conn.execute("SELECT name,sql FROM sqlite_schema ORDER BY name").fetchall(), schema_before
+                )
+                conn.execute("UPDATE publication_intents SET status='published'")
+                intent_before = conn.execute("SELECT * FROM publication_intents").fetchall()
+            init_database(path)
+            init_database(path)
+            with closing(sqlite3.connect(path)) as conn:
+                self.assertEqual(
+                    conn.execute("SELECT " + ",".join(action_columns) + " FROM github_actions").fetchall(), rows_before
+                )
+                self.assertEqual(conn.execute("SELECT * FROM publication_intents").fetchall(), intent_before)
+                self.assertEqual(conn.execute("SELECT source_result_id FROM github_actions").fetchall(), [(None,)])
+                self.assertTrue(
+                    any(column[1] == "source_result_id" for column in conn.execute("PRAGMA table_info(request_events)"))
+                )
+                self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+                with self.assertRaisesRegex(sqlite3.IntegrityError, "CHECK constraint failed"):
+                    conn.execute(
+                        "INSERT INTO github_actions(action_id,action_type,created_at) VALUES('orphan','comment','now')"
+                    )
+
+    def test_prior_taskless_tapd_owner_upgrade_preserves_required_action_and_receipt(self):
+        from robert_agent.persistence.schema.database import init_database
+
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / "source-feedback.sqlite3"
+            init_database(path)
+            with closing(sqlite3.connect(path)) as conn, conn:
+                current = conn.execute("SELECT sql FROM sqlite_schema WHERE name='github_actions'").fetchone()[0]
+                lines = current.splitlines()
+                old = "\n".join(
+                    "  CHECK (task_id IS NOT NULL OR (result_id IS NULL AND provider = 'tapd' AND action_type = 'comment'))"
+                    if "CHECK (task_id IS NOT NULL OR" in line
+                    else line
+                    for line in lines
+                )
+                self.assertNotEqual(current, old)
+                conn.execute("DROP TABLE github_actions")
+                conn.execute(old)
+                conn.execute(
+                    "INSERT INTO sources(source_id,source_key,source_type,provider,host,project_key,external_id) "
+                    "VALUES('s','s','bug','tapd','tapd.example','1','2')"
+                )
+                conn.execute(
+                    "INSERT INTO source_results(source_result_id,source_id,kind,input_version,idempotency_key,"
+                    "evidence_json,payload_json,accepted_at) VALUES ('r','s','control_notice','v','k','{}','{}','now')"
+                )
+                conn.execute(
+                    "INSERT INTO github_actions(action_id,source_result_id,provider,action_type,target_json,"
+                    "audit_status,publish_status,external_id,created_at) "
+                    "VALUES('a','r','tapd','comment','{}','accepted','published','22','now')"
+                )
+                conn.execute("INSERT INTO source_required_actions VALUES('a','r',0)")
+                conn.execute(
+                    "INSERT INTO publication_intents(publication_id,action_id,idempotency_key,request_fingerprint,"
+                    "status,remote_evidence_json,created_at,updated_at) "
+                    "VALUES('i','a','k','f','published','{}','now','now')"
+                )
+                conn.execute("INSERT INTO tapd_publication_preparations VALUES('i','{}')")
+                saved = {
+                    table: conn.execute(f"SELECT * FROM {table}").fetchall()
+                    for table in (
+                        "github_actions",
+                        "source_required_actions",
+                        "publication_intents",
+                        "tapd_publication_preparations",
+                    )
+                }
+            init_database(path)
+            init_database(path)
+            with closing(sqlite3.connect(path)) as conn, conn:
+                for table, before in saved.items():
+                    self.assertEqual(conn.execute(f"SELECT * FROM {table}").fetchall(), before)
+                self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+                conn.execute(
+                    "INSERT INTO github_actions(action_id,source_result_id,provider,action_type,target_json,created_at)"
+                    " VALUES('feedback','r','github','source_feedback','{}','now')"
+                )
+                for provider, kind, target in (
+                    ("github", "comment", "{}"),
+                    ("github", "source_feedback", None),
+                    ("tapd", "source_feedback", "{}"),
+                ):
+                    with self.subTest(provider=provider, kind=kind, target=target):
+                        with self.assertRaisesRegex(sqlite3.IntegrityError, "CHECK constraint failed"):
+                            conn.execute(
+                                "INSERT INTO github_actions(action_id,source_result_id,provider,action_type,target_json,"
+                                "created_at) VALUES('unsupported','r',?,?,?,'now')",
+                                (provider, kind, target),
+                            )

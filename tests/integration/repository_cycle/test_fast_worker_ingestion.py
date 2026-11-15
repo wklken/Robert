@@ -159,7 +159,8 @@ class FastWorkerIngestionTests(RepositoryCycleFixture):
 
         original_publish = publish.publish_ready_actions
 
-        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None):
+        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None, *, provider):
+            self.assertEqual((provider, repo_id), ("github", "repo:example/backend"))
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute(
                     """
@@ -206,7 +207,7 @@ class FastWorkerIngestionTests(RepositoryCycleFixture):
                 (task_id,),
             ).fetchone()
             relationship = conn.execute(
-                "SELECT relationship FROM task_events WHERE task_id = ?",
+                "SELECT state FROM request_events WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
         self.assertEqual(task_lifecycle, "completed")
@@ -345,7 +346,8 @@ raise SystemExit(0 if record["ok"] else 1)
 
         original_publish = publish.publish_ready_actions
 
-        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None):
+        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None, *, provider):
+            self.assertEqual((provider, repo_id), ("github", "repo:example/backend"))
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute(
                     """

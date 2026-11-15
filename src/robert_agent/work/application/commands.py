@@ -18,6 +18,7 @@ from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import publication_intents as db_read_publication_intents
 from robert_agent.persistence.queries import repos as db_read_repos
+from robert_agent.persistence.queries import source_tasks as db_read_source_tasks
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import wakeups as db_read_wakeups
 from robert_agent.persistence.queries import work_item_events as db_read_work_item_events
@@ -31,6 +32,7 @@ from robert_agent.persistence.stores import work_item_events as db_write_work_it
 from robert_agent.persistence.stores import work_items as db_write_work_items
 from robert_agent.persistence.stores import worker_results as db_write_worker_results
 from robert_agent.persistence.stores import workstreams as db_write_workstreams
+from robert_agent.persistence.stores import workstream_sources as db_write_workstream_sources
 from robert_agent.work.inputs import (
     COMMANDS,
     CommandContext,
@@ -326,6 +328,70 @@ def ensure_github_work_item(
     return item_payload
 
 
+def ensure_tapd_work_item(conn, *, repo_id, source_id, now):
+    """Ensure one repository item for a controller-authorized real TAPD source.
+
+    The preparing use case proves current round/repository authority first.
+    This operation validates stored origin, repo and lineage and owns no commit.
+    """
+    db_write_work_items.lock_tapd_work_item_origin(conn, source_id)
+    origin = db_records.first(db_read_work_items.tapd_work_item_origin(conn, source_id=source_id, repo_id=repo_id))
+    if not origin:
+        raise WorkItemValidationError("native work item requires a TAPD ticket and enabled repository")
+    item = db_records.first(db_read_work_items.find_tapd_work_item(conn, source_id=source_id, repo_id=repo_id))
+    identity = hashlib.sha256(json.dumps((source_id, repo_id), separators=(",", ":")).encode()).hexdigest()
+    workstream_id = item["workstream_id"] if item else f"tapd-repo:{identity}"
+    if not workstream_id:
+        raise WorkItemConflictError("native work item has no repository workstream")
+    checkpoint = "ensure_tapd_work_item"
+    db_transactions.savepoint(conn, checkpoint)
+    try:
+        if not item:
+            db_write_work_items.insert_tapd_work_item_stream(
+                conn, workstream_id=workstream_id, repo_id=repo_id, source_id=source_id, now=now
+            )
+        stream = db_records.first(db_read_work_items.find_tapd_work_item_stream(conn, workstream_id))
+        if (
+            stream is None
+            or stream["repo_id"] != repo_id
+            or stream["primary_source_id"] != source_id
+            or stream["origin_workstream_id"] is not None
+        ):
+            raise WorkItemConflictError("native work item workstream conflicts with its TAPD origin")
+        if not item:
+            db_write_workstream_sources.insert_for_create_task_attempt_and_prompt(
+                conn, workstream_id, source_id, "primary", now
+            )
+            work_item_id = f"wi-{identity}"
+            key = f"tapd:{identity}"
+            db_write_work_items.insert_tapd_work_item(
+                conn,
+                work_item_id=work_item_id,
+                repo_id=repo_id,
+                source_id=source_id,
+                workstream_id=workstream_id,
+                idempotency_key=key,
+                title=origin["title"] or "TAPD work item",
+                now=now,
+            )
+            _insert_event(
+                conn,
+                work_item_id,
+                event_type="tapd_intake",
+                actor_kind="system",
+                actor_identity="system:tapd",
+                idempotency_key=f"tapd-intake:{identity}",
+                metadata={"source_id": source_id, "repo_id": repo_id},
+                now=now,
+            )
+            item = _load_item(conn, work_item_id)
+    except BaseException:
+        db_transactions.finish_isolation(conn, checkpoint, rollback=True)
+        raise
+    db_transactions.release(conn, checkpoint)
+    return _item_from_row(item)
+
+
 def _stored_command_result(conn, work_item_id, idempotency_key):
     row = db_records.first(db_read_work_item_events.find_for_stored_command_result(conn, work_item_id, idempotency_key))
     if not row:
@@ -472,25 +538,30 @@ def retrigger_failed_github_task(
     recovery_snapshot = None
     with closing(db_database.connect(db_path)) as reader:
         snapshot = db_records.first(db_read_tasks.find_for_retrigger_failed_github_task(reader, task_id))
-        if snapshot and snapshot["repo_id"] in context.allowed_repo_ids:
-            attention = _decode_json(snapshot["metadata_json"], {}).get("execution_attention", {})
-            if attention.get("reason_code") == "result_contract_cutover":
-                recovery_snapshot = snapshot["metadata_json"]
-                from robert_agent.adapters.github import discovery as discover
-                from robert_agent.work.queries import task_related_events
+        if (
+            not snapshot
+            or snapshot["repo_id"] not in context.allowed_repo_ids
+            or db_read_source_tasks.has_native_origin(reader, task_id)
+        ):
+            raise WorkItemNotFoundError("task not found")
+        attention = _decode_json(snapshot["metadata_json"], {}).get("execution_attention", {})
+        if attention.get("reason_code") == "result_contract_cutover":
+            recovery_snapshot = snapshot["metadata_json"]
+            from robert_agent.adapters.github import discovery as discover
+            from robert_agent.work.queries import task_related_events
 
-                refreshed_context = task_related_events(reader, task_id)
-                refreshed = []
-                for event in refreshed_context:
-                    updated, state = discover.refresh_source_metadata(event, dict(snapshot), subprocess.run)
-                    if state is None:
-                        raise WorkItemConflictError("GitHub source refresh failed; retry after access is restored")
-                    if state.lower() != "open":
-                        raise WorkItemConflictError("retrigger requires an open GitHub source")
-                    refreshed.append(updated)
-                if not refreshed:
-                    raise WorkItemConflictError("source context is unavailable; inspect the original task")
-                refreshed_context = refreshed
+            refreshed_context = task_related_events(reader, task_id)
+            refreshed = []
+            for event in refreshed_context:
+                updated, state = discover.refresh_source_metadata(event, dict(snapshot), subprocess.run)
+                if state is None:
+                    raise WorkItemConflictError("GitHub source refresh failed; retry after access is restored")
+                if state.lower() != "open":
+                    raise WorkItemConflictError("retrigger requires an open GitHub source")
+                refreshed.append(updated)
+            if not refreshed:
+                raise WorkItemConflictError("source context is unavailable; inspect the original task")
+            refreshed_context = refreshed
     from robert_agent.delivery.lock import task_publication_lock
 
     with ExitStack() as locks, closing(db_database.connect(db_path, isolation_level=None)) as conn:
@@ -504,7 +575,11 @@ def retrigger_failed_github_task(
         db_transactions.begin(conn, immediate=True)
         try:
             row = db_records.first(db_read_tasks.find_for_retrigger_failed_github_task_2(conn, task_id))
-            if not row or row["repo_id"] not in context.allowed_repo_ids:
+            if (
+                not row
+                or row["repo_id"] not in context.allowed_repo_ids
+                or db_read_source_tasks.has_native_origin(conn, task_id)
+            ):
                 raise WorkItemNotFoundError("task not found")
             from robert_agent.persistence import execution_control as execution_store
 
@@ -909,6 +984,12 @@ def execute_command(
 
             item = _load_item(conn, work_item_id)
             if item["repo_id"] not in context.allowed_repo_ids:
+                raise WorkItemNotFoundError("work item not found")
+            # Native work requires source authorization before any command,
+            # including replay of an older response from this legacy path.
+            if item["origin_type"] == "tapd" or db_read_work_items.has_native_command_scope(
+                conn, origin_source_id=item["origin_source_id"], workstream_id=item["workstream_id"]
+            ):
                 raise WorkItemNotFoundError("work item not found")
             replay = _stored_command_result(conn, work_item_id, idempotency_key)
             if replay:

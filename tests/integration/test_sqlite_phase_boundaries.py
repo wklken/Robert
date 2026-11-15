@@ -238,7 +238,8 @@ class RemediationPhaseBoundaryTests(unittest.TestCase):
                     self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 2)
                     self.assertEqual(conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 2)
                     row = conn.execute(
-                        "SELECT status,attempt_count,observed_head_sha,observed_base_sha FROM pr_remediation_episodes WHERE episode_id=?",
+                        "SELECT status, (SELECT count(*) FROM repair_cycle_claims c WHERE c.episode_id=e.episode_id), "
+                        "observed_head_sha,observed_base_sha FROM pr_remediation_episodes e WHERE episode_id=?",
                         (episode,),
                     ).fetchone()
                     self.assertEqual(row, ("remediating", 2, "head-1", "base-1"))

@@ -14,7 +14,7 @@ from robert_agent.persistence.queries import work_item_events as db_read_work_it
 from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 from robert_agent.persistence.stores import github_sources as db_write_github_sources
-from robert_agent.persistence.stores import task_events as db_write_task_events
+from robert_agent.persistence.stores import request_events as db_write_request_events
 from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import work_items as db_write_work_items
 from robert_agent.persistence.stores import workstream_sources as db_write_workstream_sources
@@ -46,9 +46,10 @@ import re
 import subprocess
 
 
-def _mark_consumed_events(conn, task_id, consumed_fingerprints):
-    for fingerprint in consumed_fingerprints:
-        db_write_task_events.mark_consumed_events(conn, task_id, fingerprint)
+def _mark_consumed_events(conn, payload, now):
+    db_write_request_events.consume_task_result(
+        conn, payload["task_id"], payload["consumed_event_fingerprints"], result_id=payload["result_id"], now=now
+    )
 
 
 def pending_events_for_task(conn, task_id, consumed_fingerprints):
@@ -63,9 +64,8 @@ def _materialize_open_pr_workstream(conn, repo_id, repo_full_name, origin_workst
         return
     pr_number = int(match.group(1))
     pr_source_key = discover.source_key(repo_full_name, "pull_request", pr_number)
-    pr_source_id = values.github_source_id(pr_source_key)
-    db_write_github_sources.insert_for_materialize_open_pr_workstream(
-        conn, pr_source_id, repo_id, pr_source_key, pr_number, action.get("url")
+    pr_source_id = db_write_github_sources.insert_for_materialize_open_pr_workstream(
+        conn, values.github_source_id(pr_source_key), repo_id, pr_source_key, pr_number, action.get("url")
     )
     db_write_workstreams.insert_for_materialize_open_pr_workstream(
         conn, pr_source_key, repo_id, pr_source_id, origin_workstream_id, run_now, run_now
@@ -510,6 +510,8 @@ def finalize_accepted_result(
     dispatch_budget,
     config_result=None,
 ):
+    if "native_source" in payload:
+        return False
     if not execution_ownership.claim_task(conn, payload["task_id"], run_now):
         return False
     work_item_row = db_records.first(
@@ -526,7 +528,7 @@ def finalize_accepted_result(
         and payload.get("recommended_route") == "waiting-for-user"
     )
     if payload["output_type"] == OutputType.WAITING_FOR_USER or local_classification_wait:
-        _mark_consumed_events(conn, payload["task_id"], payload["consumed_event_fingerprints"])
+        _mark_consumed_events(conn, payload, run_now)
         if work_item_row:
             question = payload.get("operator_question") or {}
             if local_classification_wait and not question:
@@ -567,7 +569,7 @@ def finalize_accepted_result(
         payload["task_id"],
         include_consumed=payload["output_type"] == OutputType.CLASSIFICATION_RESULT,
     )
-    _mark_consumed_events(conn, payload["task_id"], payload["consumed_event_fingerprints"])
+    _mark_consumed_events(conn, payload, run_now)
     pending_events = pending_events_for_task(
         conn,
         payload["task_id"],

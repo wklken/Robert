@@ -58,6 +58,13 @@ class RemediationStatus(StrEnum):
 
 
 @unique
+class RequestEventState(StrEnum):
+    PENDING = "pending"
+    CONSUMED = "consumed"
+    REVOKED = "revoked"
+
+
+@unique
 class WakeupStatus(StrEnum):
     PENDING = "pending"
     CONSUMED = "consumed"
@@ -140,3 +147,36 @@ REMEDIATION_TASK_KINDS = frozenset(
 
 # Manual operator wakeups are independent of supervision recovery actions.
 PUBLICATION_RETRY_WAKEUP_KIND = "publication_retry"
+
+
+@unique
+class SourceRoundStatus(StrEnum):
+    ACTIVE = "active"
+    EXECUTION_FINISHED = "execution_finished"
+    WAITING_FOR_USER = "waiting_for_user"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
+@unique
+class SourceCapability(StrEnum):
+    READONLY = "readonly"
+    DEVELOPMENT = "development"
+
+
+@unique
+class SourceAuthorizationType(StrEnum):
+    LABEL_QUEUE = "label_queue"
+    TAPD_MENTION = "tapd_mention"
+    GITHUB_MENTION = "github_mention"
+    OPERATOR_DISPATCH = "operator_dispatch"
+    OPERATOR_RESPONSE = "operator_response"
+    SYSTEM_REPAIR = "system_repair"
+
+
+@unique
+class SourceIngressPhase(StrEnum):
+    PENDING = "pending"
+    HELD = "held"
+    PAUSED = "paused"
+    REVOKED = "revoked"

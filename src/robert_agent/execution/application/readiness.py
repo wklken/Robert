@@ -112,6 +112,8 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
     if _supervision_transition_due(conn, repo_ids, config_result or {}, now):
         return True
     scoped_repos = repo_ids or work_repositories.list_ids(conn)
+    if any(dispatch_requests.recovery_page(conn, config_result, repo_id, now, limit=1) for repo_id in scoped_repos):
+        return True
     capacity_scope = scoped_repos if capacity_repo_ids is None else capacity_repo_ids
     if pending_handoff.ready_rows(conn, scoped_repos, now, config=config_result):
         return True

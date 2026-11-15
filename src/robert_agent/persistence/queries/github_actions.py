@@ -1,6 +1,12 @@
 """Shared queries operations for github_actions."""
 
-from robert_agent.foundation.contracts.delivery import AuditStatus, GitHubActionType, PublicationStatus, PublishStatus
+from robert_agent.foundation.contracts.delivery import (
+    AuditStatus,
+    GitHubActionType,
+    NATIVE_RESULT_CONTRACT,
+    PublicationStatus,
+    PublishStatus,
+)
 from robert_agent.foundation.contracts.execution import AttemptStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind, RecoveryStatus
 
@@ -238,12 +244,15 @@ def find_record_by_action_id(conn, action_id):
     return statements.read(conn, query1, {"p0": action_id})
 
 
-def find_metadata_json_and_target_url_and_external_id_by_result_id(conn, result_id):
+def find_action_records_by_result_id(conn, result_id):
     query1 = (
         select(
             tables["github_actions"].c["metadata_json"],
             tables["github_actions"].c["target_url"],
             tables["github_actions"].c["external_id"],
+            tables["github_actions"].c["provider"],
+            tables["github_actions"].c["target_json"],
+            tables["github_actions"].c["action_type"],
         )
         .select_from(tables["github_actions"])
         .where((tables["github_actions"].c["result_id"] == bindparam("p0")))
@@ -549,6 +558,16 @@ def find_for_ready_actions(conn, now, limit, repo_id=None, task_ids=None, action
         .correlate_except(task)
         .exists()
     )
+    result = tables["worker_results"]
+    native_result = (
+        select(1)
+        .where(
+            result.c.result_id == action.c.result_id,
+            func.json_extract(result.c.metadata_json, sql_constant("$.result_contract")) == NATIVE_RESULT_CONTRACT,
+        )
+        .correlate_except(result)
+        .exists()
+    )
     stmt = select(
         *(
             action.c[name]
@@ -565,7 +584,14 @@ def find_for_ready_actions(conn, now, limit, repo_id=None, task_ids=None, action
                 "metadata_json",
             )
         )
-    ).where(publication_ready(action, now), ~blocked_prior, owner)
+    ).where(
+        publication_ready(action, now),
+        ~blocked_prior,
+        owner,
+        action.c.provider == "github",
+        action.c.target_json.is_(None),
+        ~native_result,
+    )
     if repo_id:
         scoped = (
             select(1)

@@ -44,17 +44,17 @@ class PrRemediationIntegrationFixture(unittest.TestCase):
             )
             conn.execute(
                 """
-                INSERT INTO github_sources(
+                INSERT INTO sources(
                   source_id, repo_id, source_key, source_type, number,
                   title, state, author_login
-                )
+                , provider, host, project_key, external_id)
                 VALUES
                   ('source:issue', 'repo:example/backend',
                    'github:example/backend#1', 'issue', 1, 'Origin', 'open',
-                   'wklken'),
+                   'wklken', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), '1'),
                   ('source:pr', 'repo:example/backend',
                    'github:example/backend!13', 'pull_request', 13, 'Fix',
-                   'open', 'robert-bot')
+                   'open', 'robert-bot', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), '13')
                 """
             )
             conn.execute(
@@ -184,13 +184,13 @@ class PrRemediationIntegrationFixture(unittest.TestCase):
             )
             conn.execute(
                 """
-                INSERT INTO github_sources(
+                INSERT INTO sources(
                   source_id, repo_id, source_key, source_type, number,
                   title, state
-                )
+                , provider, host, project_key, external_id)
                 VALUES ('source:pr', 'repo:example/backend',
                         'github:example/backend!13', 'pull_request', 13,
-                        'Fix', 'open')
+                        'Fix', 'open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), '13')
                 """
             )
             conn.execute(

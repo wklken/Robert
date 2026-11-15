@@ -16,7 +16,7 @@ from robert_agent.work.application import github_requests
 from robert_agent.work.application import preparation
 from robert_agent.work.application import ready_work
 from robert_agent.work.application import remediation_requests
-from robert_agent.work.application import source_events
+from robert_agent.work.application import source_events, source_github_ingress
 from robert_agent.work.application import source_lifecycle
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.foundation.commands import ControlDeadlineExceeded
@@ -133,11 +133,39 @@ def admit_requests(
 
     track_admission = supervision_store.has_schema(conn)
     for event in decisions:
+        incoming = dict(event) if event.get("source_type") == "pull_request" else None
+        if incoming is not None and dry_run and source_github_ingress.belongs_to_native_pr(conn, repo_id, incoming):
+            continue
+        seen = source_github_ingress.seen_event(conn, incoming) if incoming is not None else False
         source_id, event_id = source_events.insert_source_and_event(conn, repo_id, event, run_now)
         admission = None
         if track_admission and supervision_lineage.is_driving_github_input(event):
             # Retain acceptance before any preparation releases the writer.
             admission = supervision_lineage.record_github_received(conn, event, event_id, repo_id, source_id, run_now)
+        if incoming is not None:
+            native = source_github_ingress.record(
+                conn,
+                repo=repo,
+                repo_id=repo_id,
+                config=config_result,
+                event=incoming,
+                source_id=source_id,
+                event_id=event_id,
+                seen=seen,
+                now=run_now,
+            )
+            if native is not None:
+                supervision_lineage.record_disposition(
+                    conn,
+                    admission,
+                    disposition="linked_pending" if native.request_id else "explicitly_ignored",
+                    now=run_now,
+                    reason_code=native.reason,
+                    target_type="ingress_request" if native.request_id else "source_github_ingress",
+                    target_id=native.request_id or event_id,
+                    lineage_key=supervision_lineage.github_key(event) if native.request_id else None,
+                )
+                continue
         if (
             event.get("authorization_status") == "context_only"
             and (event.get("actor_login") or "").casefold() != repo["github_account"].casefold()

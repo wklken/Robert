@@ -86,6 +86,9 @@ def record_result_db(
     value_6,
     action_created_at,
     value_8,
+    *,
+    provider="github",
+    target_json=None,
 ):
     stmt = insert(tables["github_actions"]).values(
         {
@@ -93,6 +96,8 @@ def record_result_db(
             "result_id": bindparam("p1"),
             "task_id": bindparam("p2"),
             "action_type": bindparam("p3"),
+            "provider": bindparam("provider"),
+            "target_json": bindparam("target_json"),
             "target_url": bindparam("p4"),
             "external_id": bindparam("p5"),
             "audit_status": sql_constant(AuditStatus.PENDING.value),
@@ -109,6 +114,8 @@ def record_result_db(
             "p1": result_id,
             "p2": task_id,
             "p3": type,
+            "provider": provider,
+            "target_json": target_json,
             "p4": value_5,
             "p5": value_6,
             "p6": action_created_at,

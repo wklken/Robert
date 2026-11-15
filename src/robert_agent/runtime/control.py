@@ -13,6 +13,7 @@ import time
 from uuid import UUID, uuid4
 
 from robert_agent.execution import runtime_state as daemon_state
+from robert_agent.execution import journal as run_journal
 from robert_agent.execution import control_children
 from robert_agent.persistence import transactions as transactions
 from robert_agent.adapters.processes import identity as worker_identity
@@ -71,6 +72,8 @@ def _retire(conn, child, *, resolution, current_context=None):
     changed = control_children.mark_retired(conn, identifier)
     if not changed:
         raise ValueError("Control child no longer has a recoverable status")
+    if lane == "local":
+        run_journal.finish_stopped_executor(conn, identifier, daemon_state.utc_now())
     recorded = json.loads(encoded)
     evidence = {
         "child_id": identifier,
@@ -215,6 +218,8 @@ class ControlLane:
     def _finish(self):
         with closing(db_database.connect(self.db_path, timeout=5)) as conn, conn:
             control_children.mark_stopped(conn, self.identifier)
+            if self.lane == "local":
+                run_journal.finish_stopped_executor(conn, self.identifier, daemon_state.utc_now())
             control_children.prune_stopped(conn, self.owner, keep=self.identifier)
         if self.output is not None:
             self.output.close()
@@ -286,6 +291,8 @@ def recover(db_path, *, scope_key, current_owner):
             continue
         with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
             control_children.mark_stopped(conn, identifier)
+            if lane == "local":
+                run_journal.finish_stopped_executor(conn, identifier, daemon_state.utc_now())
     return safe
 
 

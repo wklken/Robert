@@ -14,7 +14,9 @@ from robert_agent.execution import journal as run_journal
 from robert_agent.readmodels import progress
 from robert_agent.work import repositories as work_repositories
 from robert_agent.persistence.schema import database as storage
-from robert_agent.runtime import cycle as run_once_module
+from robert_agent.runtime import cycle as run_once_module, native_sources
+from robert_agent.delivery.application import lane as publication_lane
+from robert_agent.execution import source_controller
 from robert_agent.work import queries as work_queries
 from robert_agent.configuration import command as validate_config
 from robert_agent.foundation import values
@@ -87,6 +89,10 @@ def run_loop(
     max_publish_actions=5,
     runner=run_once_module.run_once,
     consume_observations=False,
+    manage_sources=True,
+    tapd_client_factory=None,
+    tapd_observation_provider=None,
+    tapd_identity_provider=None,
 ):
     started = time.monotonic()
     if max_publish_actions < 0:
@@ -95,8 +101,43 @@ def run_loop(
     cycle_results = []
     stop_reason = "max_cycles"
     publish_actions_used = 0
+    source_runnable = (
+        manage_sources
+        and not dry_run
+        and (
+            (not skip_external and native_sources.scan_due(db_path, config))
+            or native_sources.model_due(db_path, config, owner=None, local_only=skip_external)
+        )
+    )
+
+    providers = {
+        key: value
+        for key, value in {
+            "tapd_client_factory": tapd_client_factory,
+            "tapd_observation_provider": tapd_observation_provider,
+            "tapd_identity_provider": tapd_identity_provider,
+        }.items()
+        if value is not None
+    }
+
+    def source_publication_due(conn, *, local_only):
+        return (
+            manage_sources
+            and not (dry_run or skip_publish)
+            and publication_lane.source_ready(
+                conn,
+                config,
+                source_owner=source_controller.standalone_owner(db_path),
+                provider=None,
+                github_allowed=not (local_only or skip_external),
+                tapd_observation_provider=None if local_only or skip_external else tapd_observation_provider,
+                tapd_identity_provider=None if local_only or skip_external else tapd_identity_provider,
+            )
+        )
+
     with closing(run_journal.connect(db_path)) as conn, conn:
-        if not has_runnable_local_work(
+        native_publish_due = source_publication_due(conn, local_only=max_publish_actions == 0)
+        if not (source_runnable or native_publish_due) and not has_runnable_local_work(
             conn,
             repo_ids=repo_ids,
             config_result=config,
@@ -127,12 +168,14 @@ def run_loop(
             stop_reason = "max_seconds"
             break
         remaining_publish_actions = max_publish_actions - publish_actions_used
-        if not skip_publish and remaining_publish_actions <= 0:
+        if not skip_publish and remaining_publish_actions <= 0 and not native_publish_due:
             stop_reason = "max_publish_actions"
             break
         with closing(run_journal.connect(db_path)) as conn, conn:
             before = progress.snapshot_progress(conn)
         observation_kwargs = {"consume_observations": True} if consume_observations else {}
+        if not manage_sources:
+            observation_kwargs["manage_sources"] = False
         result = runner(
             config_path,
             workflow_path=workflow_path,
@@ -142,11 +185,9 @@ def run_loop(
             max_dispatches=max_dispatches,
             max_publish_actions=remaining_publish_actions,
             **observation_kwargs,
+            **providers,
         )
         cycle_results.append(result)
-        if not result.get("ok"):
-            stop_reason = "run_once_failed"
-            break
         publish_actions_used += min(
             remaining_publish_actions,
             max(
@@ -154,10 +195,14 @@ def run_loop(
                 int((result.get("publish_result") or {}).get("pending_count", 0)),
             ),
         )
+        if not result.get("ok"):
+            stop_reason = "run_once_failed"
+            break
         with closing(run_journal.connect(db_path)) as conn, conn:
             after = progress.snapshot_progress(conn)
             diff = progress.diff_progress(before, after)
-            runnable = has_runnable_local_work(
+            native_publish_due = source_publication_due(conn, local_only=publish_actions_used >= max_publish_actions)
+            runnable = native_publish_due or has_runnable_local_work(
                 conn,
                 repo_ids=repo_ids,
                 config_result=config,
@@ -165,10 +210,10 @@ def run_loop(
                 include_publication=not skip_publish,
             )
         cycle_results[-1] = {**result, "progress": diff}
-        if not diff["changed"]:
+        if not diff["changed"] and not (result.get("publish_result") or {}).get("native_completed_count", 0):
             stop_reason = "no_progress"
             break
-        if not skip_publish and publish_actions_used >= max_publish_actions:
+        if not skip_publish and publish_actions_used >= max_publish_actions and not native_publish_due:
             stop_reason = "max_publish_actions"
             break
         if not runnable:
@@ -209,6 +254,7 @@ def main(argv=None):
     parser.add_argument("--skip-external", action="store_true")
     parser.add_argument("--skip-publish", action="store_true")
     parser.add_argument("--consume-observations", action="store_true")
+    parser.add_argument("--repository-only", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--max-cycles", type=int, default=3)
     parser.add_argument("--max-seconds", type=int, default=120)
     parser.add_argument("--max-dispatches", type=int, default=2)
@@ -222,6 +268,7 @@ def main(argv=None):
             skip_external=args.skip_external,
             skip_publish=args.skip_publish,
             consume_observations=args.consume_observations,
+            manage_sources=not args.repository_only,
             max_cycles=args.max_cycles,
             max_seconds=args.max_seconds,
             max_dispatches=args.max_dispatches,

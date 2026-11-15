@@ -45,7 +45,7 @@ class PublicationBudgetTests(PublicationBudgetFixture):
     def test_blocked_push_does_not_publish_later_comment(self):
         with closing(sqlite3.connect(self.db)) as c, c:
             c.execute(
-                "INSERT INTO github_actions VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO github_actions(action_id,result_id,task_id,action_type,target_url,external_id,audit_status,publish_status,created_at,metadata_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     "comment",
                     "r",

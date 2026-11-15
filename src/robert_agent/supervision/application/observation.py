@@ -535,7 +535,7 @@ def _spool_facts(db_path, task_id, attempt_id):
         if len(raw) > MAX_SPOOL_BYTES:
             return {"spool_status": "unverified"}
         record = json.loads(raw)
-        result_spool._validate_record(record)
+        result_spool.validate_record(record, path=path)
         if record["payload"].get("task_id") == task_id and record["payload"].get("attempt_id") == attempt_id:
             return {
                 "spool_status": "saved",

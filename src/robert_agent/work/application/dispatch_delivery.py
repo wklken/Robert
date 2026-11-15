@@ -8,6 +8,7 @@ from robert_agent.security.redaction import redact_and_truncate
 from robert_agent.foundation.contracts.work import DispatchRequestStatus as Status
 from robert_agent.persistence.queries import dispatch_requests as queries
 from robert_agent.persistence.stores import dispatch_requests as stores
+from robert_agent.work import dispatch_requests as facts
 
 
 def complete(conn, repo_ids, now):
@@ -18,8 +19,10 @@ def complete(conn, repo_ids, now):
             groups.setdefault(action["result_id"], []).append(action)
         for result_id, actions in groups.items():
             output = actions[0]["output_type"]
-            if output not in {"comment_analysis", "new_pr"} or not results.result_actions_all_published(
-                conn, result_id
+            if (
+                output not in {"comment_analysis", "new_pr"}
+                or not facts.consumed_by(conn, request, result_id)
+                or not results.result_actions_all_published(conn, result_id)
             ):
                 continue
             confirmed = []

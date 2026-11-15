@@ -94,7 +94,7 @@ class BoardReadModelFixture(unittest.TestCase):
                 (review["workstream_id"],),
             )
             conn.execute(
-                "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, html_url, title, state) VALUES ('pr-review', 'repo-1', 'github:example/repo!12', 'pull_request', 12, 'https://github.com/example/repo/pull/12', 'Review PR', 'open')"
+                "INSERT INTO sources(source_id, repo_id, source_key, source_type, number, html_url, title, state, provider, host, project_key, external_id) VALUES ('pr-review', 'repo-1', 'github:example/repo!12', 'pull_request', 12, 'https://github.com/example/repo/pull/12', 'Review PR', 'open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '12')"
             )
             conn.execute(
                 "INSERT INTO workstreams(workstream_id, repo_id, primary_source_id, origin_workstream_id, lifecycle, created_at, updated_at) VALUES ('github:example/repo!12', 'repo-1', 'pr-review', ?, 'completed', ?, ?)",

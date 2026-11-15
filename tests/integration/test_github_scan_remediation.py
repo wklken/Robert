@@ -56,8 +56,8 @@ class GitHubScanRemediationTests(unittest.TestCase):
         with closing(sqlite3.connect(config["db_path"])) as conn, conn:
             for number in range(1, 41):
                 conn.execute(
-                    """INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,state)
-                    VALUES (?,?,?,'issue',?,'open')""",
+                    """INSERT INTO sources(source_id,repo_id,source_key,source_type,number,state, provider, host, project_key, external_id)
+                    VALUES (?,?,?,'issue',?,'open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id=?2), CAST(?4 AS TEXT))""",
                     (f"s{number}", repo_id, f"github:{repo['full_name']}#{number}", number),
                 )
         calls = []

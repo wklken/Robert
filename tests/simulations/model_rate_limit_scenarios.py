@@ -55,8 +55,8 @@ with closing(sqlite3.connect(db)) as conn:
     ).fetchone()
     number, fingerprint = conn.execute(
         """SELECT source.number,event.event_fingerprint
-           FROM task_events linked JOIN github_events event ON event.event_id=linked.event_id
-           JOIN github_sources source ON source.source_id=event.source_id
+           FROM task_events linked JOIN source_events event ON event.event_id=linked.event_id
+           JOIN sources source ON source.source_id=event.source_id
            WHERE linked.task_id=? AND linked.relationship='trigger'""", (task,)
     ).fetchone()
 

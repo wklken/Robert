@@ -9,6 +9,7 @@ import sys
 from string import Template
 
 from robert_agent.context.prompt_contract import ContextItem, PromptInput, RenderedPrompt
+from robert_agent.foundation.contracts.delivery import NATIVE_RESULT_CONTRACT
 from robert_agent.context.prompt_profiles import GUIDANCE, STAGES
 from robert_agent.context.worker_prompt import worker_prompt_input
 from robert_agent.foundation.commands import emit
@@ -134,6 +135,8 @@ def render_prompt(request: PromptInput) -> RenderedPrompt:
         group, section = GUIDANCE[name]
         sections[section].append(_split_sections(load(f"guidance/{group}.md"))[name])
     protocol = "restricted-repair" if request.stage == "maintenance.repair" else output.transport
+    if output.transport == "helper" and request.identity.get("result_contract") == NATIVE_RESULT_CONTRACT:
+        protocol = "native-helper"
     if protocol == "restricted-repair":
         # The broker includes this same plain fragment in its JSON envelope.
         sections["Delivery"].append(load("protocols/restricted-repair.md"))

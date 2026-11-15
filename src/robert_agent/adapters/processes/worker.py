@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from robert_agent import worker_adapters
+from robert_agent.foundation.tapd_identity import CREDENTIAL_ENVIRONMENT
 from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.foundation.commands import emit
 
@@ -83,10 +84,14 @@ def stop_dispatch(recorded):
 
 def _worker_environment(allowed_names=(), environ=None):
     source = dict(os.environ if environ is None else environ)
-    names = (DEFAULT_WORKER_ENV | set(allowed_names)) - {
-        "_ROBERT_EXECUTOR_ID",
-        "_ROBERT_CONTROL_DEADLINE",
-    }
+    names = (
+        (DEFAULT_WORKER_ENV | set(allowed_names))
+        - CREDENTIAL_ENVIRONMENT
+        - {
+            "_ROBERT_EXECUTOR_ID",
+            "_ROBERT_CONTROL_DEADLINE",
+        }
+    )
     result = {name: source[name] for name in names if name in source}
     result.setdefault(
         "BASH_DEFAULT_TIMEOUT_MS",
@@ -153,6 +158,8 @@ def dispatch_worker(
     environment = _worker_environment(launch.environment_allowlist)
     environment.update(trusted_environment or {})
     environment.update(launch.environment)
+    for name in CREDENTIAL_ENVIRONMENT:
+        environment.pop(name, None)
     try:
         with ExitStack() as stack:
             prompt_file = stack.enter_context(prompt_path.open("r", encoding="utf-8"))

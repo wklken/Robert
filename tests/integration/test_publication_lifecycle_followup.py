@@ -235,10 +235,10 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
             try:
                 now = values.utc_now()
                 with closing(sqlite3.connect(f.db_path)) as c, c:
-                    for old_id, source_key in c.execute("SELECT source_id,source_key FROM github_sources").fetchall():
+                    for old_id, source_key in c.execute("SELECT source_id,source_key FROM sources").fetchall():
                         canonical = values.github_source_id(source_key)
                         c.execute(
-                            "UPDATE github_sources SET source_id=? WHERE source_id=?",
+                            "UPDATE sources SET source_id=? WHERE source_id=?",
                             (canonical, old_id),
                         )
                         c.execute(

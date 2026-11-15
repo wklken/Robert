@@ -1,11 +1,12 @@
 """Read and redact durable notification envelopes without changing lifecycle."""
 
+from dataclasses import dataclass
 import json
 
 from robert_agent.persistence import records
 from robert_agent.persistence.queries import notifications, repos, dispatch_requests
 from robert_agent.security.redaction import redact_text
-from robert_agent.work import messaging
+from robert_agent.work import messaging, source_attention
 from robert_agent.work.messaging_identity import authenticate
 from robert_agent.work.errors import WorkItemValidationError
 
@@ -31,7 +32,57 @@ def allowed_repo_ids(conn, config):
     return frozenset(row[0] for row in repos.load_repos(conn) if row[1] in names and row[1] in configured)
 
 
-def envelope(conn, notification_id, *, config=None, include_closed=False):
+@dataclass(frozen=True, slots=True)
+class NotificationAccess:
+    repo_ids: frozenset[str] | None
+    tapd_project_repos: frozenset[tuple[str, str, str]]
+    tapd_projects: frozenset[tuple[str, str]] = frozenset()
+
+    def allows(self, scope):
+        if scope.kind == "tapd":
+            if scope.required_repo_ids:
+                return all(
+                    (scope.host, scope.workspace_id, repo_id) in self.tapd_project_repos
+                    for repo_id in scope.required_repo_ids
+                )
+            if scope.repo_id is None:
+                return scope.attention_id is not None and (scope.host, scope.workspace_id) in self.tapd_projects
+            return (scope.host, scope.workspace_id, scope.repo_id) in self.tapd_project_repos
+        return scope.kind == "global" or (
+            scope.kind == "repository" and (self.repo_ids is None or scope.repo_id in self.repo_ids)
+        )
+
+
+def notification_access(conn, config=None, *, operator_identity=None, delivery=False):
+    """Resolve current destination permissions, and intersect operator scope when requested."""
+    settings = (config or {}).get("messaging", {})
+    if config is None or (delivery and not settings.get("enabled")):
+        return NotificationAccess(None, frozenset())
+    repo_ids = allowed_repo_ids(conn, config)
+    if not settings.get("enabled") or not settings.get("tapd_projects") or (not delivery and operator_identity is None):
+        return NotificationAccess(repo_ids, frozenset())
+    tapd = config.get("tapd", {})
+    destinations = {(project["host"], project["workspace_id"]) for project in settings["tapd_projects"]}
+    if operator_identity is not None:
+        destinations &= messaging.configured_operator_projects(config, operator_identity)
+    repo_by_name = {row[1]: row[0] for row in repos.load_repos(conn) if row[0] in repo_ids}
+    host = tapd.get("host")
+    projects = frozenset(
+        (host, project["workspace_id"])
+        for project in tapd.get("projects", ())
+        if (host, project["workspace_id"]) in destinations
+    )
+    project_repos = frozenset(
+        (host, project["workspace_id"], repo_by_name[name])
+        for project in tapd.get("projects", ())
+        if (host, project["workspace_id"]) in destinations
+        for name in project["repositories"]
+        if name in repo_by_name
+    )
+    return NotificationAccess(repo_ids, project_repos, projects)
+
+
+def envelope(conn, notification_id, *, config=None, include_closed=False, operator_identity=None, delivery=False):
     row = records.first(
         notifications.find_task_id_and_notification_type_and_status_and_metadata_json_by_notification_id(
             conn, notification_id
@@ -40,6 +91,9 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
     if not row:
         return None
     task_id, kind, status, raw = row
+    scope = messaging.notification_scope(conn, notification_id)
+    if not notification_access(conn, config, operator_identity=operator_identity, delivery=delivery).allows(scope):
+        return None
     metadata = json.loads(raw or "{}")
     dispatch = dispatch_requests.for_task(conn, task_id) if task_id and config is not None else None
     bound_identity = metadata.get("dispatch_identity") or (json.loads(dispatch["identity_json"]) if dispatch else None)
@@ -47,10 +101,6 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         try:
             authenticate(config, bound_identity)
         except WorkItemValidationError:
-            return None
-    repo_id, repository_scoped = messaging.notification_scope(conn, task_id, metadata)
-    if config is not None and repository_scoped:
-        if repo_id not in allowed_repo_ids(conn, config):
             return None
     payload = {
         "protocol": "robert.message.v1",
@@ -107,7 +157,9 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         "decision_id",
         "exit_code",
     ):
-        if key in metadata:
+        if key in metadata and not (
+            scope.kind == "tapd" and key in {"issue_url", "pr_url", "result_url", "workstream_id"}
+        ):
             payload[key] = metadata[key]
     if metadata.get("safe_error"):
         payload["safe_error"] = str(metadata["safe_error"])[:2000]
@@ -119,6 +171,13 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
             return None
         payload.update(attention)
         payload["actions"] = messaging.actions_for(attention["event_type"], attention["kind"])
+    if scope.attention_id is not None:
+        attention = source_attention.notification_details(conn, notification_id, include_closed=include_closed)
+        if attention is None:
+            return None
+        payload.update(attention)
+    if scope.kind == "tapd":
+        payload["actions"] = ["ack"]
     if kind == "supervision_decision_unavailable":
         payload["summary"] = (
             metadata.get("summary") or "自动决策调用连续失败。这是全局监督服务告警，Kanban 不会生成任务确认项。"
@@ -177,10 +236,3 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         "actions": ["ack"],
         "summary": "Details require local inspection.",
     }
-
-
-def delivery_repo_ids(conn, config=None):
-    """None leaves custom-command delivery unscoped; an empty set denies repositories."""
-    if not (config or {}).get("messaging", {}).get("enabled"):
-        return None
-    return allowed_repo_ids(conn, config)

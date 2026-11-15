@@ -147,7 +147,7 @@ def resume_waiting_vote(conn, repo, event, run_now, admission=None):
         manifest_json=None,
         request_json=json.dumps(request, ensure_ascii=False),
     )
-    db_write_task_events.insert_for_resume_waiting_vote(
+    db_write_task_events.record_waiting_vote_reply(
         conn, row[1], values.github_event_id(event["event_fingerprint"]), run_now
     )
     supervision_lineage.record_disposition(

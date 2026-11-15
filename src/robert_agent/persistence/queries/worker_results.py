@@ -1,6 +1,6 @@
 """Shared queries operations for worker_results."""
 
-from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.delivery import NATIVE_RESULT_CONTRACT, OutputType
 from robert_agent.foundation.contracts.execution import AttemptStatus
 from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
 
@@ -67,7 +67,7 @@ def find_metadata_json_by_result_id(conn, result_id):
     return statements.read(conn, query1, {"p0": result_id})
 
 
-def find_for_audit_completed_results(conn, repo_id):
+def find_for_audit_completed_results(conn, repo_id, *, task_id=None):
     table1 = tables["worker_results"].alias("wr")
     table2 = tables["tasks"].alias("t")
     table3 = tables["attempts"].alias("a")
@@ -131,6 +131,8 @@ def find_for_audit_completed_results(conn, repo_id):
         .correlate_except(table1, table2, table3, table4)
         .set_label_style(LABEL_STYLE_NONE)
     )
+    if task_id is not None:
+        query5 = query5.where(table1.c.task_id == task_id)
     return statements.read(conn, query5, {"p0": repo_id})
 
 
@@ -707,6 +709,11 @@ def _orphaned_classification_rows_filtered_statement():
                 table3.c["active_task_id"] == table2.c["task_id"],
                 table2.c["lifecycle"] == sql_constant(TaskLifecycle.COMPLETED.value),
                 table1.c["output_type"] == sql_constant(OutputType.CLASSIFICATION_RESULT.value),
+                func.coalesce(
+                    func.json_extract(table1.c["metadata_json"], sql_constant("$.result_contract")),
+                    sql_constant(""),
+                )
+                != NATIVE_RESULT_CONTRACT,
                 func.coalesce(
                     func.json_extract(
                         table2.c["metadata_json"],

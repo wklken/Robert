@@ -17,6 +17,7 @@ from sqlalchemy import (
 
 from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
+from robert_agent.persistence.queries import notification_scope
 from robert_agent.persistence.queries.dispatch_requests import task_binding
 
 
@@ -216,14 +217,28 @@ def find_for_notify_exhausted_episode(conn, notification_type, episode_id):
     return statements.read(conn, query1, {"p0": notification_type, "p1": episode_id})
 
 
-def find_for_deliver_pending(conn, now, limit, repo_ids=None, *, messaging_repo_ids=None, messaging_settings=None):
+def find_for_deliver_pending(
+    conn,
+    now,
+    limit,
+    repo_ids=None,
+    *,
+    messaging_repo_ids=None,
+    messaging_settings=None,
+    tapd_project_repos=(),
+    tapd_projects=(),
+):
     sqlite.register_timestamp_after(conn)
     notification = tables["notifications"]
+    scope = notification_scope.projection(notification)
     stmt = (
         select(notification.c.notification_id)
+        .select_from(scope.joins)
         .where(
             _pending_delivery(now, repo_ids),
-            _pending_attention(messaging_repo_ids),
+            _pending_attention(),
+            scope.pending_attention(),
+            scope.visible(messaging_repo_ids, tapd_project_repos, tapd_projects, lane_repos=repo_ids),
             _dispatch_identity(messaging_settings),
             _delivery_window(messaging_settings),
         )
@@ -265,14 +280,19 @@ def update_failure(conn, kind, key):
     return statements.read(conn, query1, {"p0": kind, "p1": key})
 
 
-def has_pending_local_delivery_filtered(conn, repo_ids, now, *, messaging_repo_ids=None, messaging_settings=None):
+def has_pending_local_delivery_filtered(
+    conn, repo_ids, now, *, messaging_repo_ids=None, messaging_settings=None, tapd_project_repos=(), tapd_projects=()
+):
     sqlite.register_timestamp_after(conn)
+    scope = notification_scope.projection(tables["notifications"])
     stmt = (
         select(sql_constant(1))
-        .select_from(tables["notifications"])
+        .select_from(scope.joins)
         .where(
             _pending_delivery(now, repo_ids),
-            _pending_attention(messaging_repo_ids),
+            _pending_attention(),
+            scope.pending_attention(),
+            scope.visible(messaging_repo_ids, tapd_project_repos, tapd_projects, lane_repos=repo_ids),
             _dispatch_identity(messaging_settings),
             _delivery_window(messaging_settings),
         )
@@ -293,7 +313,7 @@ def _delivery_window(settings):
 def find_message_context(conn, notification_id):
     """Read current business facts without changing notification or task state."""
     notice, task, stream = tables["notifications"], tables["tasks"], tables["workstreams"]
-    item, repo, source, attempt = (tables[name] for name in ("work_items", "repos", "github_sources", "attempts"))
+    item, repo, source, attempt = (tables[name] for name in ("work_items", "repos", "sources", "attempts"))
     item_id = func.json_extract(notice.c.metadata_json, "$.work_item_id")
     attempt_id = func.json_extract(notice.c.metadata_json, "$.attempt_id")
     joins = (
@@ -304,10 +324,7 @@ def find_message_context(conn, notification_id):
         )
         .outerjoin(
             stream,
-            stream.c.workstream_id
-            == func.coalesce(
-                task.c.workstream_id, item.c.workstream_id, func.json_extract(notice.c.metadata_json, "$.workstream_id")
-            ),
+            stream.c.workstream_id == func.coalesce(task.c.workstream_id, item.c.workstream_id),
         )
         .outerjoin(
             repo,
@@ -362,14 +379,13 @@ def _pending_delivery(now, repo_ids):
     return predicate
 
 
-def _pending_attention(repo_ids):
-    """Exclude closed attention and denied repositories before any queue limit."""
+def _pending_attention():
+    """Exclude closed attention before any queue limit."""
     notice = tables["notifications"]
     event, item = tables["work_item_events"], tables["work_items"]
     resolved = event.alias("resolved_attention")
     attention_id = func.json_extract(notice.c.metadata_json, "$.attention_event_id")
     item_id = func.json_extract(notice.c.metadata_json, "$.work_item_id")
-    metadata_repo = func.json_extract(notice.c.metadata_json, "$.repo_id")
     open_attention = (
         select(1)
         .select_from(event.join(item, item.c.work_item_id == event.c.work_item_id))
@@ -383,55 +399,28 @@ def _pending_attention(repo_ids):
         .correlate(notice)
         .exists()
     )
-    predicate = or_(attention_id.is_(None), open_attention)
-    if repo_ids is None:
-        return predicate
-    task, stream = tables["tasks"], tables["workstreams"]
-    item_repo = select(item.c.repo_id).where(item.c.work_item_id == item_id).correlate(notice).scalar_subquery()
-    task_repo = (
-        select(stream.c.repo_id)
-        .select_from(task.join(stream, stream.c.workstream_id == task.c.workstream_id))
-        .where(task.c.task_id == notice.c.task_id)
-        .correlate(notice)
-        .scalar_subquery()
-    )
-    incident_id = func.json_extract(notice.c.metadata_json, "$.incident_id")
-    binding = _incident_binding(incident_id).correlate(notice)
-    incident = tables["supervision_incidents"]
-    global_incident = binding.where(incident.c.scope_type == "controller").exists()
-    incident_repo = (
-        binding.with_only_columns(binding.selected_columns.repo_id)
-        .where(incident.c.scope_type.in_(("github_event", "work_item_event")))
-        .scalar_subquery()
-    )
-    unbound = and_(
-        notice.c.task_id.is_(None),
-        item_id.is_(None),
-        metadata_repo.is_(None),
-        func.coalesce(func.json_extract(notice.c.metadata_json, "$.repository_scoped"), 0) != 1,
-    )
-    return and_(
-        predicate,
-        or_(
-            and_(unbound, or_(incident_id.is_(None), global_incident)),
-            func.coalesce(item_repo, task_repo, metadata_repo).in_(sorted(repo_ids)),
-            and_(unbound, incident_repo.in_(sorted(repo_ids))),
-        ),
-    )
+    return or_(attention_id.is_(None), open_attention)
 
 
-def find_inbox(conn, *, messaging_repo_ids, messaging_settings=None, limit=100):
+def find_inbox(
+    conn, *, messaging_repo_ids, messaging_settings=None, tapd_project_repos=(), tapd_projects=(), limit=100
+):
     notice = tables["notifications"]
+    scope = notification_scope.projection(notice)
     stmt = (
         select(notice.c.notification_id)
+        .select_from(scope.joins)
         .where(
             notice.c.channel == "local",
             notice.c.status != "resolved",
             or_(
                 func.json_extract(notice.c.metadata_json, "$.operator_response").is_(None),
                 func.json_extract(notice.c.metadata_json, "$.attention_event_id").is_not(None),
+                scope.attention_open,
             ),
-            _pending_attention(messaging_repo_ids),
+            _pending_attention(),
+            scope.pending_attention(),
+            scope.visible(messaging_repo_ids, tapd_project_repos, tapd_projects),
             _dispatch_identity(messaging_settings),
         )
         .order_by(notice.c.created_at.desc(), notice.c.notification_id.desc())
@@ -448,43 +437,6 @@ def find_local_response(conn, notification_id):
             notice.c.notification_id == notification_id, notice.c.channel == "local"
         ),
     )
-
-
-def find_scope(conn, *, work_item_id, task_id):
-    if work_item_id:
-        item = tables["work_items"]
-        stmt = select(item.c.repo_id).where(item.c.work_item_id == work_item_id)
-    else:
-        task, stream = tables["tasks"], tables["workstreams"]
-        stmt = (
-            select(stream.c.repo_id)
-            .select_from(task.join(stream, stream.c.workstream_id == task.c.workstream_id))
-            .where(task.c.task_id == task_id)
-        )
-    return statements.read(conn, stmt)
-
-
-def _incident_binding(incident_id):
-    incident, checkpoint = tables["supervision_incidents"], tables["supervision_checkpoints"]
-    return (
-        select(incident.c.scope_type, func.json_extract(checkpoint.c.metadata_json, "$.repo_id").label("repo_id"))
-        .select_from(
-            incident.outerjoin(
-                checkpoint,
-                and_(
-                    checkpoint.c.scope_type == incident.c.scope_type,
-                    checkpoint.c.scope_id == incident.c.scope_id,
-                    checkpoint.c.rule_id == "admission",
-                ),
-            )
-        )
-        .where(incident.c.incident_id == incident_id)
-    )
-
-
-def find_incident_scope(conn, incident_id):
-    """Recover older task-null notices' scope without rewriting their receipts."""
-    return statements.read(conn, _incident_binding(incident_id))
 
 
 def _dispatch_identity(settings):

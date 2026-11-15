@@ -26,7 +26,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
         )
         db = self.data_dir / "dd.sqlite3"
         with closing(sqlite3.connect(db)) as conn, conn:
-            conn.execute("UPDATE github_sources SET state='closed' WHERE source_key='github:example/backend#123'")
+            conn.execute("UPDATE sources SET state='closed' WHERE source_key='github:example/backend#123'")
             event = {
                 "source_key": "github:example/backend#123",
                 "source_type": "issue",
@@ -37,10 +37,10 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                 "event_at": "2026-07-31T10:00:00Z",
             }
             source_events.insert_source_and_event(conn, "repo:example/backend", event, event["event_at"])
-            self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "closed")
+            self.assertEqual(conn.execute("SELECT state FROM sources").fetchone()[0], "closed")
             event.update(state="open", event_fingerprint="comment:explicit-reopen")
             source_events.insert_source_and_event(conn, "repo:example/backend", event, event["event_at"])
-            self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "open")
+            self.assertEqual(conn.execute("SELECT state FROM sources").fetchone()[0], "open")
 
     def test_remote_close_reconciles_an_unfinished_historical_issue_item(self):
         from robert_agent.readmodels import board
@@ -282,7 +282,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
             source = conn.execute(
                 """
                 SELECT state, metadata_json
-                FROM github_sources
+                FROM sources
                 WHERE source_key = 'github:example/backend#123'
                 """
             ).fetchone()
@@ -366,7 +366,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                 conn.execute(
                     """
                     SELECT metadata_json
-                    FROM github_sources
+                    FROM sources
                     WHERE source_key = 'github:example/backend!456'
                     """
                 ).fetchone()[0]
@@ -401,17 +401,17 @@ class SourceLifecycleTests(RepositoryCycleFixture):
             conn.row_factory = sqlite3.Row
             conn.execute(
                 """
-                INSERT INTO github_sources(
+                INSERT INTO sources(
                   source_id, repo_id, source_key, source_type, number,
                   html_url, title, state, author_login
-                )
+                , provider, host, project_key, external_id)
                 VALUES (
                   'source:github:example/backend#123',
                   'repo:example/backend',
                   ?, 'issue', 123,
                   'https://github.com/example/backend/issues/123',
                   'Compatibility bug', 'open', 'wklken'
-                )
+                , 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), '123')
                 """,
                 (issue_workstream_id,),
             )
@@ -577,7 +577,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                 conn.execute(
                     """
                     SELECT metadata_json
-                    FROM github_sources
+                    FROM sources
                     WHERE source_key = 'github:example/backend!457'
                     """
                 ).fetchone()[0]
@@ -640,14 +640,14 @@ class SourceLifecycleTests(RepositoryCycleFixture):
             source_state, source_metadata_json = conn.execute(
                 """
                 SELECT state, metadata_json
-                FROM github_sources
+                FROM sources
                 WHERE source_key = 'github:example/backend#123'
                 """
             ).fetchone()
             event_status = conn.execute(
                 """
                 SELECT authorization_status
-                FROM github_events
+                FROM source_events
                 WHERE event_fingerprint = 'comment:closed-issue-comment'
                 """
             ).fetchone()[0]
@@ -720,7 +720,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                 conn.execute(
                     """
                     SELECT metadata_json
-                    FROM github_sources
+                    FROM sources
                     WHERE source_key = 'github:example/backend!456'
                     """
                 ).fetchone()[0]
@@ -787,7 +787,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                 """
                 SELECT te.relationship, ge.event_fingerprint
                 FROM task_events te
-                JOIN github_events ge ON ge.event_id = te.event_id
+                JOIN source_events ge ON ge.event_id = te.event_id
                 WHERE te.task_id = ?
                 ORDER BY te.created_at, ge.event_fingerprint
                 """,
@@ -820,7 +820,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
             )
             repo_id, ws, source_id, source_key, source_type, number = conn.execute(
                 "SELECT w.repo_id,w.workstream_id,gs.source_id,gs.source_key,gs.source_type,gs.number "
-                "FROM workstreams w JOIN github_sources gs ON gs.source_id=w.primary_source_id"
+                "FROM workstreams w JOIN sources gs ON gs.source_id=w.primary_source_id"
             ).fetchone()
             args = (
                 conn,

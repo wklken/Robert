@@ -38,7 +38,7 @@ robert openclaw status
 ```
 
 保持 Robert daemon 运行。网络建单在独立发布通道进行；本地调度不等待 GitHub 扫描，
-拿到确认的 Issue 后即进入首次分类。`run-once --dry-run` 不创建远程 Issue。
+确认 Issue 后先保存原派单入口和触发事件，拿到 Worker 容量后进入首次分类。`run-once --dry-run` 不创建远程 Issue。
 
 ## 派单和查看
 
@@ -60,7 +60,7 @@ OpenClaw 命令上下文没有可依赖的每消息唯一编号。因此 `new` �
 分类器根据需求选择分析、开发或澄清。分析发现缺陷不自动获得修改代码的授权。
 需要澄清时，Robert 在 Issue 提问，并将问题发回配置的会话；使用消息中给出的
 `/robert-respond` 命令回复。回复沿用既有版本、工作项和 GitHub 上下文刷新流程。
-分类完成、进入等待或 worker 提交结果都不等于交付完成。
+最终分析或开发结果通过审计时，Robert 记录该结果已经处理原派单。分类和澄清阶段保留原请求为待处理。发布回执另行确认交付。
 
 状态包含请求阶段、Issue 链接、当前子任务和最终交付链接：
 
@@ -97,8 +97,10 @@ OpenClaw 命令上下文没有可依赖的每消息唯一编号。因此 `new` �
 `adapters/github/issues.py` 负责 `gh` 外部协议；`dispatch_requests` 表由
 `models/work.py` 映射并通过 `persistence` 的命名查询和写入访问。
 `application/publication_cycle.py` 在独立发布通道组合建单，
-`work/application/dispatch_admission.py` 把确认的 Issue 接入分类和工作流，
-`work/application/dispatch_delivery.py` 按最终结果回执记录交付。
+`work/application/dispatch_ingress.py` 持久化已确认的 GitHub 入口，
+`work/application/dispatch_admission.py` 接入分类和工作流。
+审计将原请求消费记录写入 `request_events`，`work/application/dispatch_delivery.py`
+核对同一最终结果在原始 Issue 上的回执及必需的 PR 回执。
 
 机器人创建的 Issue 不伪装成可信 GitHub 用户事件。`operator_dispatch` 绑定本地
 受认证请求、Issue 和原始正文；执行、接续与发布前重新检查当前配置。GitHub 扫描仍遵守

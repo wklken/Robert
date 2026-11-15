@@ -18,12 +18,13 @@ from sqlalchemy import (
 
 
 from robert_agent.persistence.catalog import tables
+from robert_agent.persistence.queries.request_events import task_relationship
 from robert_agent.persistence import statements
 
 
 def load_priority_pending_events(conn, priority_limit):
-    table1 = tables["github_events"].alias("ge")
-    table2 = tables["github_sources"].alias("gs")
+    table1 = tables["source_events"].alias("ge")
+    table2 = tables["sources"].alias("gs")
     query3 = (
         select(
             table1.c["event_id"],
@@ -61,8 +62,8 @@ def load_priority_pending_events(conn, priority_limit):
 
 
 def find_for_build_dashboard_data(conn, history_limit):
-    table1 = tables["github_events"].alias("ge")
-    table2 = tables["github_sources"].alias("gs")
+    table1 = tables["source_events"].alias("ge")
+    table2 = tables["sources"].alias("gs")
     table3 = tables["task_events"].alias("te")
     table4 = tables["tasks"].alias("t")
     query5 = (
@@ -81,7 +82,7 @@ def find_for_build_dashboard_data(conn, history_limit):
             table2.c["number"],
             table2.c["html_url"],
             table3.c["task_id"],
-            table3.c["relationship"].label("task_relationship"),
+            task_relationship(table3).label("task_relationship"),
             table4.c["workstream_id"],
         )
         .select_from(
@@ -98,8 +99,8 @@ def find_for_build_dashboard_data(conn, history_limit):
 
 
 def find_for_build_events(conn, value_1, like, like_3, like_4, like_5, limit):
-    table1 = tables["github_events"].alias("ge")
-    table2 = tables["github_sources"].alias("gs")
+    table1 = tables["source_events"].alias("ge")
+    table2 = tables["sources"].alias("gs")
     table3 = tables["task_events"].alias("te")
     query4 = (
         select(
@@ -152,8 +153,8 @@ def find_for_build_events(conn, value_1, like, like_3, like_4, like_5, limit):
 
 
 def find_for_build_event(conn, candidate):
-    table1 = tables["github_events"].alias("ge")
-    table2 = tables["github_sources"].alias("gs")
+    table1 = tables["source_events"].alias("ge")
+    table2 = tables["sources"].alias("gs")
     query3 = (
         select(
             table1.c["event_id"],
@@ -182,9 +183,9 @@ def find_for_build_event(conn, candidate):
 def find_for_summarize_database(conn):
     query1 = (
         select(func.count(literal_column("*")))
-        .select_from(tables["github_events"])
-        .where((tables["github_events"].c["authorization_status"] == sql_constant("pending_actor_permission")))
-        .correlate_except(tables["github_events"])
+        .select_from(tables["source_events"])
+        .where((tables["source_events"].c["authorization_status"] == sql_constant("pending_actor_permission")))
+        .correlate_except(tables["source_events"])
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query1, {})
@@ -193,9 +194,9 @@ def find_for_summarize_database(conn):
 def find_for_summarize_database_2(conn):
     query1 = (
         select(func.count(literal_column("*")))
-        .select_from(tables["github_events"])
-        .where((tables["github_events"].c["authorization_status"] == sql_constant("pending_authorization")))
-        .correlate_except(tables["github_events"])
+        .select_from(tables["source_events"])
+        .where((tables["source_events"].c["authorization_status"] == sql_constant("pending_authorization")))
+        .correlate_except(tables["source_events"])
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query1, {})
@@ -203,10 +204,10 @@ def find_for_summarize_database_2(conn):
 
 def find_event_at_by_event_id(conn, value_1):
     query1 = (
-        select(tables["github_events"].c["event_at"])
-        .select_from(tables["github_events"])
-        .where((tables["github_events"].c["event_id"] == bindparam("p0")))
-        .correlate_except(tables["github_events"])
+        select(tables["source_events"].c["event_at"])
+        .select_from(tables["source_events"])
+        .where((tables["source_events"].c["event_id"] == bindparam("p0")))
+        .correlate_except(tables["source_events"])
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query1, {"p0": value_1})
@@ -214,18 +215,18 @@ def find_event_at_by_event_id(conn, value_1):
 
 def find_payload_json_by_event_fingerprint(conn, event_fingerprint):
     query1 = (
-        select(tables["github_events"].c["payload_json"])
-        .select_from(tables["github_events"])
-        .where((tables["github_events"].c["event_fingerprint"] == bindparam("p0")))
-        .correlate_except(tables["github_events"])
+        select(tables["source_events"].c["payload_json"])
+        .select_from(tables["source_events"])
+        .where((tables["source_events"].c["event_fingerprint"] == bindparam("p0")))
+        .correlate_except(tables["source_events"])
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query1, {"p0": event_fingerprint})
 
 
 def scan_repo_filtered(conn, items, value_1, value_2):
-    table1 = tables["github_events"].alias("ge")
-    table2 = tables["github_sources"].alias("gs")
+    table1 = tables["source_events"].alias("ge")
+    table2 = tables["sources"].alias("gs")
     table3 = tables["workstreams"].alias("w")
     table5 = tables["task_events"].alias("te")
     query6 = (
@@ -263,6 +264,7 @@ def scan_repo_filtered(conn, items, value_1, value_2):
         .where(
             and_(
                 table1.c["repo_id"] == bindparam("p0"),
+                table2.c.provider == sql_constant("github"),
                 table1.c["authorization_status"] == sql_constant("accepted_context"),
                 func.lower(table1.c["actor_login"]).in_(bindparam("items", expanding=True)),
                 func.lower(table1.c["actor_login"]) != bindparam("p1"),
@@ -286,7 +288,7 @@ def scan_repo_filtered(conn, items, value_1, value_2):
 
 def legacy_body_request(conn, repo_id, source_key, actor, body):
     """Keep an already observed body request's identity across collector upgrades."""
-    event = tables["github_events"]
+    event = tables["source_events"]
     query = (
         select(event.c.event_fingerprint)
         .where(

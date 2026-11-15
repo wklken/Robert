@@ -80,7 +80,7 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             self.assertEqual(execution_store.get_binding(conn, "task", self.parent_id), self.old_binding)
             self.assertIsNotNone(
-                conn.execute("SELECT 1 FROM github_events WHERE event_fingerprint='comment:retry'").fetchone()
+                conn.execute("SELECT 1 FROM source_events WHERE event_fingerprint='comment:retry'").fetchone()
             )
             self.assertIsNone(conn.execute("SELECT 1 FROM task_events WHERE event_id='event:comment:retry'").fetchone())
             conn.execute("UPDATE workstreams SET active_task_id=NULL")
@@ -259,7 +259,7 @@ class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
 
         def close(*args, **kwargs):
             with closing(sqlite3.connect(self.db_path)) as conn, conn:
-                conn.execute("UPDATE github_sources SET state='closed'")
+                conn.execute("UPDATE sources SET state='closed'")
             return original(*args, **kwargs)
 
         with mock.patch.object(assigned_workspace, "prepare_worktree", side_effect=close):

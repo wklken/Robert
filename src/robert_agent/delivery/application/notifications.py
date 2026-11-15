@@ -68,6 +68,7 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
     now = now or datetime.now(timezone.utc).isoformat()
     counts = {"sent": 0, "failed": 0, "status": "processed"}
     with closing(db_database.connect(db_path)) as conn:
+        access = messages.notification_access(conn, config, delivery=True)
         ids = [
             r[0]
             for r in db_read_notifications.find_for_deliver_pending(
@@ -75,7 +76,9 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
                 now,
                 limit,
                 repo_ids,
-                messaging_repo_ids=messages.delivery_repo_ids(conn, config),
+                messaging_repo_ids=access.repo_ids,
+                tapd_project_repos=access.tapd_project_repos,
+                tapd_projects=access.tapd_projects,
                 messaging_settings=config.get("messaging", {}) if config is not None else None,
             )
         ]
@@ -128,9 +131,7 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
                     db_write_notifications.set_delivery_state(conn, notification_id, json.dumps(previous))
                 continue
             with closing(db_database.connect(db_path)) as conn:
-                payload = messages.envelope(
-                    conn, notification_id, config=config if (config or {}).get("messaging", {}).get("enabled") else None
-                )
+                payload = messages.envelope(conn, notification_id, config=config, delivery=True)
             if payload is None:
                 continue
             payload["delivery_id"] = delivery_id

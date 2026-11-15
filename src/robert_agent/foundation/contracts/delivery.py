@@ -2,6 +2,8 @@
 
 from enum import StrEnum, unique
 
+NATIVE_RESULT_CONTRACT = "native-v1"
+
 
 @unique
 class GitHubActionType(StrEnum):
@@ -9,6 +11,11 @@ class GitHubActionType(StrEnum):
     PUSH_EXISTING_PR = "push_existing_pr"
     OPEN_PR = "open_pr"
     SUBMIT_PR_REVIEW = "submit_pr_review"
+
+
+@unique
+class SourceControllerAction(StrEnum):
+    GITHUB_FEEDBACK = "source_feedback"
 
 
 @unique
@@ -78,3 +85,10 @@ class QuestionKind(StrEnum):
     CLARIFICATION = "clarification"
     SCOPE_DECISION = "scope_decision"
     COMPLETION_ACCEPTANCE = "completion_acceptance"
+
+
+@unique
+class SourceResultKind(StrEnum):
+    ANSWER = "answer"
+    QUESTION = "question"
+    CONTROL_NOTICE = "control_notice"

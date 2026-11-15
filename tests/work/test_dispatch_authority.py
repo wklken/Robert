@@ -15,26 +15,13 @@ REQUEST_BODY = "调研启动慢的原因"
 
 class DispatchAuthorityTests(DispatchFixture):
     def _confirmed_event(self):
-        request_id = self.draft()["request_id"]
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute(
-                "UPDATE dispatch_requests SET status = 'issue_created', issue_json = ? WHERE request_id = ?",
-                (json.dumps({"number": 7, "html_url": ISSUE_URL}), request_id),
-            )
-        return {
-            "dispatch_request_id": request_id,
-            "event_fingerprint": f"operator-dispatch:{request_id}",
-            "event_type": "operator_dispatch",
-            "actor_kind": "operator",
-            "source_key": ISSUE_KEY,
-            "source_type": "issue",
-            "workstream_id": ISSUE_KEY,
-            "number": 7,
-            "url": ISSUE_URL,
-            "repo": "example/repo",
-            "repo_full_name": "example/repo",
-            "body": REQUEST_BODY,
-        }
+        request_id = self.create_issue(number=7)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            raw = conn.execute(
+                "SELECT payload_json FROM source_events WHERE event_fingerprint=?",
+                (f"operator-dispatch:{request_id}",),
+            ).fetchone()[0]
+        return json.loads(raw)
 
     def test_reauthorization_binds_trigger_to_confirmed_request_and_issue(self):
         event = self._confirmed_event()
@@ -49,6 +36,8 @@ class DispatchAuthorityTests(DispatchFixture):
                 {"event_type": "comment"},
                 {"actor_kind": "github_user"},
                 {"body": "Replace the user request"},
+                {"source_author_login": "forged"},
+                {"repo_full_name": "elsewhere/repo"},
                 {"source_key": "elsewhere/repo#7"},
                 {"workstream_id": "elsewhere/repo#7"},
                 {"number": 8},
@@ -157,12 +146,14 @@ class DispatchAuthorityTests(DispatchFixture):
             [row["notification_id"] for row in messaging.inbox(restricted, self.identity)["messages"]], ["current"]
         )
         with closing(database.connect(self.db_path)) as conn, conn:
+            access = messages.notification_access(conn, restricted, delivery=True)
             rows = notifications.find_for_deliver_pending(
                 conn,
                 NOW,
                 1,
                 [self.repo_id],
-                messaging_repo_ids=messages.delivery_repo_ids(conn, restricted),
+                messaging_repo_ids=access.repo_ids,
+                tapd_project_repos=access.tapd_project_repos,
                 messaging_settings=restricted["messaging"],
             )
             self.assertEqual([row[0] for row in rows], ["current"])

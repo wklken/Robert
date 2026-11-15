@@ -70,19 +70,22 @@ def _archive_rejected(path, record):
     path.unlink(missing_ok=True)
 
 
-def _validate_record(record):
+def validate_record(record, *, path):
     if (
         not isinstance(record, dict)
         or record.get("status") != "pending"
-        or type(record.get("normalizer_version")) is not int
-        or record["normalizer_version"] < 1
-        or record.get("result_contract") != result_contract.CONTRACT_ID
+        or not result_contract.supports_normalizer(record.get("result_contract"), record.get("normalizer_version"))
         or not isinstance(record.get("payload"), dict)
         or not isinstance(record.get("fingerprint"), str)
         or record["payload"].get("_submission_fingerprint") != record["fingerprint"]
-        or record["payload"].get("_result_contract") != result_contract.CONTRACT_ID
+        or record["payload"].get("_result_contract") != record["result_contract"]
+        or record["payload"].get("_normalizer_version") != record["normalizer_version"]
+        or type(record["payload"].get("_normalizer_version")) is not int
         or not isinstance(record["payload"].get("attempt_id"), str)
         or not record["payload"].get("attempt_id")
+        or not isinstance(record["payload"].get("task_id"), str)
+        or not record["payload"].get("task_id")
+        or path.stem != hashlib.sha256(record["payload"]["attempt_id"].encode()).hexdigest()
     ):
         raise ValueError("unsupported or invalid result spool contract")
 
@@ -107,20 +110,22 @@ def _ingest(db_path, path, record, writer, notifier, *, defer_database_errors=Fa
     return response
 
 
-def submit(db_path, envelope, writer, notifier=None, *, prepare, lookup):
+def submit(db_path, envelope, writer, notifier=None, *, contract_id, prepare, lookup):
     """Serialize semantic deduplication, preparation and durable final-slot writes."""
-    digest = result_contract.semantic_fingerprint(envelope)
+    digest = result_contract.semantic_fingerprint(envelope, contract_id)
     with locked_record(db_path, envelope["attempt_id"]) as path:
         if path.exists():
             try:
                 record = json.loads(path.read_text())
-                _validate_record(record)
+                validate_record(record, path=path)
             except (ValueError, OSError, TypeError):
                 return {
                     "ok": False,
                     "status": "unsupported_contract",
                     "safe_error": "Existing spool requires manual reconciliation before submission.",
                 }
+            if record["result_contract"] != contract_id:
+                return {"ok": False, "status": "unsupported_contract"}
             if record["fingerprint"] != digest:
                 return {
                     "ok": False,
@@ -134,15 +139,14 @@ def submit(db_path, envelope, writer, notifier=None, *, prepare, lookup):
         payload, rejection = prepare(db_path, envelope)
         if rejection:
             return rejection
-        payload.update(
-            _submission_fingerprint=digest,
-            _result_contract=result_contract.CONTRACT_ID,
-            _normalizer_version=result_contract.NORMALIZER_VERSION,
-        )
+        if payload.pop("_prepared_contract") != contract_id:
+            return {"ok": False, "status": "unsupported_contract"}
+        version = result_contract.NORMALIZER_VERSIONS[contract_id]
+        payload.update(_submission_fingerprint=digest, _result_contract=contract_id, _normalizer_version=version)
         record = {
             "status": "pending",
-            "result_contract": result_contract.CONTRACT_ID,
-            "normalizer_version": result_contract.NORMALIZER_VERSION,
+            "result_contract": contract_id,
+            "normalizer_version": version,
             "fingerprint": digest,
             "payload": payload,
             "saved_at": datetime.now(timezone.utc).isoformat(),
@@ -180,9 +184,7 @@ def replay(db_path, writer, limit=100, *, attempt_id=None):
                     continue
                 try:
                     record = json.loads(path.read_text())
-                    _validate_record(record)
-                    if path != _record_path(db_path, record["payload"]["attempt_id"]):
-                        raise ValueError("spool identity differs from its path")
+                    validate_record(record, path=path)
                 except (ValueError, OSError, TypeError):
                     if path.exists():
                         path.rename(path.with_suffix(".invalid"))

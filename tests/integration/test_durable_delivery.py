@@ -26,7 +26,7 @@ class DeliveryAndRecoveryTests(unittest.TestCase):
             conn.execute("UPDATE github_actions SET metadata_json=json_set(metadata_json,'$.publish.retryable',0)")
             for i in range(25):
                 conn.execute(
-                    "INSERT INTO github_actions SELECT ?,result_id,task_id,action_type,target_url,external_id,audit_status,publish_status,created_at,metadata_json FROM github_actions WHERE action_id='push'",
+                    "INSERT INTO github_actions(action_id,result_id,task_id,action_type,target_url,external_id,audit_status,publish_status,created_at,metadata_json) SELECT ?,result_id,task_id,action_type,target_url,external_id,audit_status,publish_status,created_at,metadata_json FROM github_actions WHERE action_id='push'",
                     ("stopped-" + str(i),),
                 )
             conn.execute("INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('a2','t',2,'completed')")
@@ -34,7 +34,7 @@ class DeliveryAndRecoveryTests(unittest.TestCase):
                 "INSERT INTO worker_results SELECT 'r2',task_id,'a2',output_type,consumed_event_fingerprints_json,verification_json,handoff,created_at,metadata_json FROM worker_results WHERE result_id='r'"
             )
             conn.execute(
-                "INSERT INTO github_actions SELECT 'healthy','r2',task_id,action_type,target_url,external_id,audit_status,publish_status,'zzz',json_remove(metadata_json,'$.publish') FROM github_actions WHERE action_id='push'"
+                "INSERT INTO github_actions(action_id,result_id,task_id,action_type,target_url,external_id,audit_status,publish_status,created_at,metadata_json) SELECT 'healthy','r2',task_id,action_type,target_url,external_id,audit_status,publish_status,'zzz',json_remove(metadata_json,'$.publish') FROM github_actions WHERE action_id='push'"
             )
             ready = publication_queries.ready_actions(conn, 20)
             self.assertEqual([row["action_id"] for row in ready], ["healthy"])
@@ -59,7 +59,8 @@ def writer(db,payload,notifier=None):
  response=result._record_result_db(db,payload,notifier=notifier)
  assert response['ok'], response
  os._exit(73)
-result_spool.submit(sys.argv[1],p,writer,prepare=result._prepare,lookup=result._lookup)
+result_spool.submit(sys.argv[1],p,writer,contract_id="compact-v1",prepare=result._prepare,
+ lookup=lambda path,envelope,digest: result._lookup(path,envelope,digest,"compact-v1"))
 """
         child = subprocess.run(
             [sys.executable, "-c", program, str(fixture.db), str(payload)],

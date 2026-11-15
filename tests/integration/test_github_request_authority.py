@@ -52,7 +52,7 @@ class GitHubRequestAuthorityTests(GitHubInputFixture):
         self.scan(first)
         counts.append(len(self.rows("SELECT task_id FROM tasks")))
         self.assertEqual(self.rows("SELECT route_id FROM tasks"), [("comment-analysis",)])
-        fingerprints = [r[0] for r in self.rows("SELECT event_fingerprint FROM github_events")]
+        fingerprints = [r[0] for r in self.rows("SELECT event_fingerprint FROM source_events")]
         # Finish a terminal route so a clarification child cannot mask redispatch.
         self.finish(
             fingerprints,

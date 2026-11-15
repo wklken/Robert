@@ -64,7 +64,7 @@ def family(conn, root_id):
 
 def targets(conn, repositories, limit=100, after=""):
     ws, repo = tables["workstreams"], tables["repos"]
-    task_table, source = tables["tasks"], tables["github_sources"]
+    task_table, source = tables["tasks"], tables["sources"]
     return _rows(
         conn,
         select(ws.c.workstream_id)
@@ -161,7 +161,7 @@ def context(conn, root_id):
         .order_by(attempts.c.started_at.desc(), attempts.c.attempt_id.desc())
         .limit(16),
     )
-    sources, links = tables["github_sources"], tables["workstream_sources"]
+    sources, links = tables["sources"], tables["workstream_sources"]
     source_rows = _rows(
         conn,
         select(*[_text(c) if c.name in {"title", "metadata_json"} else c for c in sources.c])
@@ -175,7 +175,7 @@ def context(conn, root_id):
         .limit(16),
     )
     source_ids = [row["source_id"] for row in source_rows]
-    events = tables["github_events"]
+    events = tables["source_events"]
     event_rows = _rows(
         conn,
         select(

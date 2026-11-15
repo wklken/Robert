@@ -6,7 +6,6 @@ from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import (
     select,
-    column,
     bindparam,
     and_,
     or_,
@@ -18,12 +17,13 @@ from sqlalchemy import (
 
 
 from robert_agent.persistence.catalog import tables
+from robert_agent.persistence.queries.request_events import task_relationship
 from robert_agent.persistence import statements
 
 
 def find_for_for_result(conn, task_id):
     table1 = tables["task_events"].alias("te")
-    table2 = tables["github_events"].alias("ge")
+    table2 = tables["source_events"].alias("ge")
     query3 = (
         select(table2.c["payload_json"])
         .select_from(table1.join(table2, (table2.c["event_id"] == table1.c["event_id"]), isouter=False))
@@ -37,11 +37,11 @@ def find_for_for_result(conn, task_id):
 
 def find_for_build_task(conn, task_id):
     table1 = tables["task_events"].alias("te")
-    table2 = tables["github_events"].alias("ge")
-    table3 = tables["github_sources"].alias("gs")
+    table2 = tables["source_events"].alias("ge")
+    table3 = tables["sources"].alias("gs")
     query4 = (
         select(
-            table1.c["relationship"],
+            task_relationship(table1).label("relationship"),
             table2.c["event_fingerprint"],
             table2.c["event_type"],
             table2.c["actor_login"],
@@ -97,7 +97,7 @@ def find_for_build_event(conn, event_id):
     )
     query7 = (
         select(
-            table1.c["relationship"],
+            task_relationship(table1).label("relationship"),
             table2.c["task_id"],
             table2.c["lifecycle"],
             table2.c["priority"],
@@ -139,7 +139,7 @@ def find_for_target(conn, task_id):
         .where(
             and_(
                 (tables["task_events"].c["task_id"] == bindparam("p0")),
-                tables["task_events"].c["relationship"].in_([sql_constant("context"), sql_constant("pending")]),
+                task_relationship(tables["task_events"]).in_([sql_constant("context"), sql_constant("pending")]),
             )
         )
         .order_by(tables["task_events"].c["event_id"].asc())
@@ -152,7 +152,7 @@ def find_for_target(conn, task_id):
 
 def find_for_snapshot(conn, task_id, repo_id):
     table1 = tables["task_events"].alias("te")
-    table2 = tables["github_events"].alias("ge")
+    table2 = tables["source_events"].alias("ge")
     query3 = (
         select(
             table2.c["event_type"],
@@ -182,7 +182,7 @@ def find_for_snapshot(conn, task_id, repo_id):
             and_(
                 table1.c["task_id"] == bindparam("p0"),
                 table2.c["repo_id"] == bindparam("p1"),
-                table1.c["relationship"].in_(
+                task_relationship(table1).in_(
                     [
                         sql_constant("trigger"),
                         sql_constant("pending"),
@@ -192,7 +192,7 @@ def find_for_snapshot(conn, task_id, repo_id):
             )
         )
         .order_by(
-            (table1.c["relationship"] == sql_constant("trigger")).desc(),
+            (task_relationship(table1) == sql_constant("trigger")).desc(),
             table2.c["event_at"].desc(),
             table2.c["event_id"].desc(),
         )
@@ -205,14 +205,14 @@ def find_for_snapshot(conn, task_id, repo_id):
 
 def find_for_pending_events_for_task(conn, task_id):
     table1 = tables["task_events"].alias("te")
-    table2 = tables["github_events"].alias("ge")
+    table2 = tables["source_events"].alias("ge")
     query3 = (
         select(table2.c["payload_json"], table2.c["event_fingerprint"])
         .select_from(table1.join(table2, (table2.c["event_id"] == table1.c["event_id"]), isouter=False))
         .where(
             and_(
                 (table1.c["task_id"] == bindparam("p0")),
-                table1.c["relationship"].in_([sql_constant("pending"), sql_constant("context")]),
+                task_relationship(table1).in_([sql_constant("pending"), sql_constant("context")]),
             )
         )
         .order_by(table2.c["event_at"].asc(), table2.c["event_id"].asc())
@@ -224,9 +224,9 @@ def find_for_pending_events_for_task(conn, task_id):
 
 def find_for_events_for_task(conn, task_id):
     table1 = tables["task_events"].alias("te")
-    table2 = tables["github_events"].alias("ge")
+    table2 = tables["source_events"].alias("ge")
     query3 = (
-        select(table1.c["relationship"], table2.c["payload_json"])
+        select(task_relationship(table1), table2.c["payload_json"])
         .select_from(table1.join(table2, (table2.c["event_id"] == table1.c["event_id"]), isouter=False))
         .where((table1.c["task_id"] == bindparam("p0")))
         .order_by(
@@ -234,7 +234,7 @@ def find_for_events_for_task(conn, task_id):
                 (sql_constant("trigger"), sql_constant(0)),
                 (sql_constant("context"), sql_constant(1)),
                 (sql_constant("pending"), sql_constant(2)),
-                value=table1.c["relationship"],
+                value=task_relationship(table1),
                 else_=sql_constant(3),
             ).asc(),
             table2.c["event_at"].asc(),
@@ -260,7 +260,7 @@ def find_for_prepare_queued_reviews(conn, value_1):
 
 def find_for_event_has_terminal_trigger(conn, event_fingerprint):
     table1 = tables["task_events"].alias("te")
-    table2 = tables["github_events"].alias("ge")
+    table2 = tables["source_events"].alias("ge")
     table3 = tables["tasks"].alias("t")
     query4 = (
         select(sql_constant(1))
@@ -274,10 +274,10 @@ def find_for_event_has_terminal_trigger(conn, event_fingerprint):
                 (table2.c["event_fingerprint"] == bindparam("p0")),
                 (
                     or_(
-                        (table1.c["relationship"] == sql_constant("consumed")),
+                        (task_relationship(table1) == sql_constant("consumed")),
                         (
                             and_(
-                                (table1.c["relationship"] == sql_constant("trigger")),
+                                (task_relationship(table1) == sql_constant("trigger")),
                                 table3.c["lifecycle"].in_(
                                     [
                                         sql_constant(TaskLifecycle.COMPLETED.value),
@@ -301,10 +301,10 @@ def find_for_event_has_terminal_trigger(conn, event_fingerprint):
 
 def find_for_failed_parent_context_events(conn, parent_task_id):
     table1 = tables["task_events"].alias("te")
-    table2 = tables["github_events"].alias("ge")
+    table2 = tables["source_events"].alias("ge")
     query3 = (
         select(
-            table1.c["relationship"],
+            task_relationship(table1).label("relationship"),
             table2.c["event_fingerprint"],
             table2.c["payload_json"],
         )
@@ -312,7 +312,7 @@ def find_for_failed_parent_context_events(conn, parent_task_id):
         .where(
             and_(
                 (table1.c["task_id"] == bindparam("p0")),
-                table1.c["relationship"].in_(
+                task_relationship(table1).in_(
                     [
                         sql_constant("trigger"),
                         sql_constant("context"),
@@ -325,7 +325,7 @@ def find_for_failed_parent_context_events(conn, parent_task_id):
             case(
                 (sql_constant("trigger"), sql_constant(0)),
                 (sql_constant("context"), sql_constant(1)),
-                value=table1.c["relationship"],
+                value=task_relationship(table1),
                 else_=sql_constant(2),
             ).asc(),
             table2.c["event_at"].asc(),
@@ -340,34 +340,26 @@ def find_for_failed_parent_context_events(conn, parent_task_id):
 def find_for_receipt_facts(conn, key, target_id, target_id_3):
     table1 = tables["task_events"].alias("te")
     table2 = tables["tasks"].alias("t")
-    table3 = tables["worker_results"].alias("wr")
-    table4 = tables["github_events"].alias("ge")
-    items6 = func.json_each(table3.c["consumed_event_fingerprints_json"]).table_valued(
-        "key", "value", "type", "atom", "id", "parent", "fullkey", "path"
-    )
-    query7 = (
-        select(sql_constant(1))
-        .select_from(items6)
-        .where((column("value") == table4.c["event_fingerprint"]))
-        .correlate_except(items6)
-        .set_label_style(LABEL_STYLE_NONE)
-    )
-    query5 = (
-        select(func.max(table3.c["created_at"]))
-        .select_from(table3.join(table4, (table4.c["event_id"] == table1.c["event_id"]), isouter=False))
-        .where(and_((table3.c["task_id"] == table1.c["task_id"]), query7.exists()))
-        .correlate_except(table3, table4)
-        .set_label_style(LABEL_STYLE_NONE)
+    ledger = tables["request_events"]
+    worker_results = tables["worker_results"]
+    # The ledger is the receipt authority. A Worker result's original creation
+    # time remains the occurrence boundary when immutable evidence is retained.
+    consumed_at = (
+        select(func.coalesce(worker_results.c.created_at, ledger.c.consumed_at))
+        .select_from(ledger.outerjoin(worker_results, worker_results.c.result_id == ledger.c.result_id))
+        .where(ledger.c.task_id == table1.c.task_id, ledger.c.event_id == table1.c.event_id)
+        .correlate(table1)
+        .scalar_subquery()
     )
     query8 = (
         select(
             table1.c["task_id"],
             case(
                 (
-                    (table1.c["relationship"] == sql_constant("trigger")),
+                    (task_relationship(table1) == sql_constant("trigger")),
                     table1.c["created_at"],
                 ),
-                else_=query5.scalar_subquery(),
+                else_=consumed_at,
             ).label("occurred_at"),
         )
         .select_from(table1.join(table2, (table2.c["task_id"] == table1.c["task_id"]), isouter=False))
@@ -379,13 +371,13 @@ def find_for_receipt_facts(conn, key, target_id, target_id_3):
                         (
                             and_(
                                 (table1.c["task_id"] == bindparam("p1")),
-                                (table1.c["relationship"] == sql_constant("consumed")),
+                                (task_relationship(table1) == sql_constant("consumed")),
                             )
                         ),
                         (
                             and_(
                                 table2.c["parent_task_id"] == bindparam("p2"),
-                                table1.c["relationship"] == sql_constant("trigger"),
+                                task_relationship(table1) == sql_constant("trigger"),
                                 not_(
                                     table2.c["lifecycle"].in_(
                                         [
@@ -409,10 +401,10 @@ def find_for_receipt_facts(conn, key, target_id, target_id_3):
 
 def task_related_events_filtered(conn, items, value_1):
     table1 = tables["task_events"].alias("te")
-    table2 = tables["github_events"].alias("ge")
+    table2 = tables["source_events"].alias("ge")
     query3 = (
         select(
-            table1.c["relationship"],
+            task_relationship(table1).label("relationship"),
             table2.c["event_fingerprint"],
             table2.c["payload_json"],
         )
@@ -420,7 +412,7 @@ def task_related_events_filtered(conn, items, value_1):
         .where(
             and_(
                 (table1.c["task_id"] == bindparam("p0")),
-                table1.c["relationship"].in_(bindparam("items", expanding=True)),
+                task_relationship(table1).in_(bindparam("items", expanding=True)),
             )
         )
         .order_by(
@@ -428,7 +420,7 @@ def task_related_events_filtered(conn, items, value_1):
                 (sql_constant("trigger"), sql_constant(0)),
                 (sql_constant("consumed"), sql_constant(1)),
                 (sql_constant("context"), sql_constant(2)),
-                value=table1.c["relationship"],
+                value=task_relationship(table1),
                 else_=sql_constant(3),
             ).asc(),
             table2.c["event_at"].asc(),

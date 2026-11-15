@@ -400,7 +400,7 @@ class DashboardFixture(SummaryFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
                 """
-                INSERT INTO github_events(
+                INSERT INTO source_events(
                   event_id, repo_id, source_id, event_fingerprint, event_type,
                   actor_login, author_association, authorization_status,
                   event_at, payload_json
@@ -419,7 +419,7 @@ class DashboardFixture(SummaryFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
                 """
-                INSERT INTO github_events(
+                INSERT INTO source_events(
                   event_id, repo_id, source_id, event_fingerprint, event_type,
                   actor_login, author_association, authorization_status,
                   event_at, payload_json
@@ -438,7 +438,7 @@ class DashboardFixture(SummaryFixture):
         with closing(sqlite3.connect(db_path)) as conn, conn:
             conn.execute(
                 """
-                INSERT INTO github_events(
+                INSERT INTO source_events(
                   event_id, repo_id, source_id, event_fingerprint, event_type,
                   actor_login, author_association, authorization_status,
                   event_at, payload_json

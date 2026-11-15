@@ -72,6 +72,8 @@ robert_agent/
 [`foundation/timestamps.py`](../src/robert_agent/foundation/timestamps.py) 只使用标准库，
 供配置校验、SQLite 方言函数与监督告警共用 UTC 时间解析和微秒比较。
 它不执行 I/O，也不依赖领域或用例；通知的启用时间边界在各条投递路径保持一致。
+[`foundation/tapd_identity.py`](../src/robert_agent/foundation/tapd_identity.py) 为配置、评论策略和 Worker 适配器
+共享 TAPD 身份语法与控制器专用凭据变量名，依赖仅限标准库。
 
 稳定领域能力、纯策略、适配器和读模型不依赖应用用例、具体 workflow、runtime 或接口。
 领域 `application/` 与具体 workflow 属于应用层，按明确的模块依赖组合能力；跨领域
@@ -608,7 +610,7 @@ Episode 的 `resolved`、`exhausted`、`superseded` 与 `canceled` 记录不同�
 ```mermaid
 flowchart LR
     Repo["repos"] --> WS["workstreams<br/>primary / origin 关系"]
-    Source["github_sources · github_events"] -.-> WS
+    Source["sources · source_events"] -.-> WS
     WS --> Task["tasks<br/>一次受控工作"]
     WS --> Episode["pr_remediation_episodes<br/>系统修复范围与预算"]
     Task --> Attempt["attempts<br/>可重试的执行尝试"]
@@ -627,6 +629,113 @@ flowchart LR
 workstream 保留多轮 Task 历史，活动任务由部分唯一索引串行约束。Task 可有多个
 Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result。
 本地和 GitHub 任务进入同一控制面，`work_items` 提供生命周期投影与操作入口。
+`sources` 用 provider、host、project_key、source_type 和 external_id 标识外部来源。
+GitHub 保留既有来源和事件 ID。TAPD Story 与 Bug 的来源和事件可先存入
+`sources` 和 `source_events`，后续确定执行仓库。正式 workstream 仍归属一个仓库。
+`ingress_requests` 保存授权证据、内容快照和请求阶段。`task_events` 保存任务的触发与上下文关联。
+`request_events` 在任务或来源请求的范围内记录待处理与消费事实，一个范围的变化不会改写其他范围。
+
+原生 TAPD 发布按 `source_required_actions` 的顺序验证各平台回执。GitHub 创建回执可恢复真实 PR 来源和派生
+workstream，并保留原 TAPD WorkItem。派生流保存创建关联与审计固定的 base SHA，后续 PR 状态独立更新。
+TAPD 准备正文加入已确认的 PR 链接与代码检查摘要。轮次收尾会从原始结果和同一回执重新构造正文，并核对
+完整发布顺序。见 [PR 关联](../src/robert_agent/delivery/application/source_pr_lineage.py) 和
+[来源收尾](../src/robert_agent/delivery/application/source_completion.py)。
+
+分类和问答不依赖历史 PR 的可用性。开发流程由
+[当前 PR 选择](../src/robert_agent/work/application/source_pr_selection.py) 根据创建回执和独立的 GitHub
+观测决定新建、复用或暂停；`source_pr_selections` 按轮次和仓库保存选择证据。准备的任务保留原始分类建议、
+控制器选择的路由及证据摘要，启动和新发布前重新核验，不改写已冻结的输入、Git 状态或创建回执。
+
+[派生 PR 入口](../src/robert_agent/work/application/source_github_ingress.py) 根据已确认的创建回执核对 GitHub
+PR 和原 TAPD 来源。关联 PR 的讨论在普通 GitHub 任务、评审和投票前截取。可信 @ 请求保留真实 GitHub
+来源和事件，在 `request_events` 登记一次，并以等待状态保留独立 GitHub 回帖目标。`source_github_ingress`
+保存首次和最新观察，缓存重放不替代最新观察，旧上下文编辑不创建新请求。当前入口仅登记请求和上下文。
+
+[GitHub 当前观测](../src/robert_agent/work/application/source_github_observation.py) 在独立的有界读取中核对原 PR、
+评论 ID、正文与作者／编辑者。`source_github_observations` 保存本次操作的证据，不承担请求消费。
+读取前先使旧证据失效，读取后在写事务中复核来源认领、请求、配置和观测版本。GitHub 网络请求不持有
+数据库写锁。已关闭 PR 的状态与评论提及的可信性分别记录。完整当前证据可用于混合轮次入队和执行授权。
+[讨论读取适配器](../src/robert_agent/adapters/github/discussion.py) 和 TAPD CLI 复用
+[有界进程传输](../src/robert_agent/adapters/processes/bounded.py)，TAPD 适配器保留自身的异常协议转换。
+
+[来源成员查询](../src/robert_agent/persistence/queries/source_members.py) 统一核对 TAPD 与关联 GitHub 请求的
+真实事件、冻结版本和创建回执关联。GitHub 的原始作者与创建时间来自不可变的首次记录，普通编辑只更新
+最新正文。冻结轮次保留各自的平台身份，结果按实际处理的事件精确更新唯一消费账本，并保存相应 GitHub
+回帖目标。活动混合轮次按原成员分批读取当前 GitHub 评论，再核对来源认领、观测版本和冻结输入。
+启动前的正文编辑只替换原请求集合；新评论留到下一轮，启动后的提示词保持不变。
+明确撤销会取消本轮；读取失败本身不构成撤销。TAPD 已明确失去标签授权时，即使正文暂不可用，
+控制器也会暂停原 GitHub 开发请求并记录取消，消费账本和未确认退出的进程占位保持不变。
+仓库 Worker 的准备和 PR 选择复核本轮的完整观测证据。启动前另行读取当前 TAPD 与所有 GitHub 触发评论，
+将证据绑定到精确任务、attempt、冻结输入和本次观测时间；两次启动写事务都会重新核对。
+准备阶段的证据不能替代启动证据，普通编辑导致拒绝旧提示词并交回协调器重新冻结。
+启动成功不消费请求。混合轮次的模型使用独立的
+[当前模型观测](../src/robert_agent/work/application/source_model_observation.py)，在启动前、身份登记后、
+运行中和输出验收前读取两个来源；每次证据绑定具体模型、启动代际、冻结提示词和当前检查。
+启动器在身份登记前的停止检查只认可原有精确启动授权，不假定进程已进入运行状态。
+真实身份与退出证明独立记录；授权丢失禁止接纳输出，退出未确认仍保留占位。
+当前混合请求限于关联 PR 的仓库，模型集成验证覆盖只读子任务后的汇总。
+混合结果验收重新核对当前观测与冻结成员，在同一事务中追加控制器的必需 GitHub 回评动作，再消费请求。
+回评以 `source_feedback` 保存，直接归属于结果；同一 PR 合并为一个动作，原始触发评论与创建回执关联完整保留。
+[回评契约](../src/robert_agent/persistence/rounds/source_feedback.py) 只保存固定状态或代码／检查投影摘要的封闭配方，
+使用不含内部身份的回执标记，不接受 Worker 私有正文。原有 Worker 动作顺序和协议限制保持不变。
+已消费混合请求的 TAPD 回评通过独立的[交付观测](../src/robert_agent/delivery/application/source_delivery_observation.py)
+复核当前 TAPD 与全部原始 GitHub 触发评论。证据绑定当前结果、动作、来源认领和观察版本，不能复用执行授权。
+普通编辑不改写已接受输入或消费记录；明确撤销取消后续发布，读取未知则等待。已开始但结果未知的 TAPD
+评论仍使用原始准备记录独立回读，确认回执不再发送一次。PR 关联只处理经过审计的代码动作，另行验证必需回评。
+混合结果的 GitHub 代码动作在准备发送和最终写入前分别读取两个来源。最终证据绑定已启动的精确发布记录、
+准备内容及原始 PR head/base；后一次读取发现的新变化不能被较早预检覆盖，原有推送租约也继续生效。
+只允许排除本动作自身的未确认记录，其他未知效果或历史进程仍阻止写入。
+专用 [GitHub 回评发布器](../src/robert_agent/delivery/application/source_feedback_publication.py) 使用当前双来源授权，
+重建封闭代码／检查正文，验证前序回执后保存原始请求并发布。独立分页和评论读回确认作者、正文与关联 PR；
+超时保留未知状态，只对账原请求，不重复发送。全局启用时，已启动请求可在项目配置移除后只读对账原目标。
+回评与 Worker 代码动作使用不同回执类型。混合结果的[本地收尾](../src/robert_agent/delivery/application/source_completion.py)
+要求完整回执及独立的当前双来源授权；该证明不能授权新的远程写入。最后回执保存后重启，后续发布扫描
+可在零发布额度下重新核验并完成原轮次，未处理请求保持待处理。问题通知绑定完整有序回执，查询在分页前
+校验各条回执和项目／仓库范围。没有外部观测能力或处于只对账模式时，混合来源收尾保持等待。
+已接受的混合轮次仍由协调器复核原始触发。历史处置使用独立的原始结果、取消记录和暂停版本证明；
+确认撤销后保留已确认回执，只取消从未开始的剩余动作。标签或处理人失效时，旧开发结果在进程与发布状态
+可核验后暂停，允许新的独立只读请求进入队列。旧结果的后续处置不会覆盖新工作项；未知写入仍须先独立对账。
+混合结果可在当前已发布选项和新可信回复下认领原交付，认领前后使用不同的双来源证明，
+并重新核对原始提示词、Git 和 PR。认领不改变旧取消或消费记录。缺失的 TAPD 回复使用独立的当前发布证明和再次读取的完整单据证据，
+在最终本地 Git／提示词核对后发送；已有回执不重复发送。混合结果的 GitHub 回评续发、代码动作续发
+和恢复后的收尾尚未接通，历史处置或认领证明不能授权这些动作。
+
+暂停授权的确认使用 `source_confirmation_questions` 和 `source_confirmation_answers`，分别保存当前问题的
+版本、作用范围、真实发布回执和可信选项回复。原始与最新的作者自写正文必须匹配同一问题及选项，旧评论编辑
+不创建确认，撤销或作用范围变化使确认失效。控制器在来源认领下按命名消费者领取一次确认；确认记录本身不
+恢复授权、不派发任务，也不消费工作请求。规则选择复用入队策略，同仓库的多个匹配标签不会产生仓库冲突。
+见 [确认策略](../src/robert_agent/work/source_confirmation.py) 和
+[确认凭据](../src/robert_agent/work/application/source_confirmations.py)。
+
+同规则恢复由 `source_resume_transitions` 保存已应用选项、原暂停绑定和仓库身份。
+启动和发布仍复核该选项的当前证据；未知证据保持等待，明确撤销会取消依赖它的执行。
+该转换仅恢复仍有效、尚未消费的请求，消费和取消历史保持不变。
+
+已接受结果因标签或处理人失效暂停时，[交付暂停用例](../src/robert_agent/delivery/application/source_delivery_pause.py)
+在同一事务保存 `source_delivery_pauses` 的版本化证据并结束旧执行占位。它核对原结果、冻结输入、
+消费成员、动作目标以及已确认或确定未开始的效果；所有历史进程和未知效果仍阻止释放。
+确定未开始的暂停动作可让出队列给独立只读调查，但不获得发布权限。
+[交付恢复](../src/robert_agent/delivery/application/source_delivery_resume.py) 在当前明确选项下领取
+`source_delivery_recoveries`，逐个补发原结果缺少的动作。它复核原提示词、仓库、已审计 Git 对象和
+当前 PR 或新 PR 的远端 base，不重跑 Worker，也不重写消费或取消历史。已成功的动作保留原回执。
+纯问答可使用执行前记录、结果验收时复核的只读 Git 快照；快照缺失或仓库变化时拒绝补发。
+快照仅证明所记录的本地 Git 状态，不提供操作系统文件隔离。
+
+恢复中再次失去同规则授权时，已确定的效果和未开始的剩余动作形成新暂停版本，旧恢复所有者标记
+`suspended_at`，后续需要新版本的确认。未知效果仍占用来源，必须先对账。`completed_at` 只记录
+所有必需回执得到确认后的本地收尾。WorkItem 保存实际创建子任务的轮次指针，旧结果收尾不会覆盖
+后来实际工作拥有的投影。见 [暂停证据查询](../src/robert_agent/persistence/queries/source_delivery_pauses.py)。
+
+原触发评论被明确删除或移除提及、单据进入终态后，
+[交付撤销用例](../src/robert_agent/delivery/application/source_retirement.py) 保存
+`source_result_retirements`。它保留已确认发布的部分，只跳过有证据证明从未开始的剩余动作；
+准备过但未执行的意图记录为本地无效果失败，不伪装成远程回读。原结果、冻结输入、消费记录和取消历史
+保持不变。协调器持续检查尚未收尾的历史结果；未知进程或未知发布结果仍会阻止收尾。
+后续队列只认可重新核验过的撤销证据，标签或处理人失效仍走可恢复的交付暂停。
+
+原生修复的[预算检查](../src/robert_agent/work/application/repair_cycles.py) 使用原始 PR 创建回执的目标分支，
+并核对当前仓库和发布账号。首次观察到目标分支变化也不会扣除修复次数；同一目标分支的 head/base SHA
+前进保留原预算。健康收尾检查整个来源的执行及发布占用，不能只检查上一次修复任务。
 
 专用表保留各自边界：`github_scan_batches` / `github_scan_reads` 保存扫描重放输入；
 `leases` / `github_control_children` 保存执行所有权；`review_sessions` / `review_runs`
@@ -653,11 +762,30 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 校验发送者、会话和仓库授权后调用既有命令；OpenClaw 插件只做协议转换。
 [Issue 派单](features/issue-dispatch.md) 由 `work/application/dispatch_requests.py`
 保存受认证草稿和提交，独立发布通道通过 `application/publication_cycle.py` 创建或对账 Issue。
-`dispatch_admission.py` 接入已有分类器，`dispatch_delivery.py` 核对最终发布回执。
-`work/dispatch_requests.py` 持有请求绑定和当前授权规则，`models/work.py` 映射持久请求，
-所有查询与条件状态转换仍由 `persistence/queries/dispatch_requests.py` 和
-`persistence/stores/dispatch_requests.py` 执行。
+`dispatch_ingress.py` 将确认回执绑定到 GitHub 来源、原始 `operator_dispatch` 事件和入口，
+`dispatch_admission.py` 在取得容量后接入分类器。最终结果审计和 `request_events`
+消费证据在同一事务写入，`dispatch_delivery.py` 另行核对该结果的原始 Issue 发布回执。
+`work/dispatch_requests.py` 持有派单绑定和当前授权规则，`models/work.py` 映射持久请求。
+`persistence` 持有对应的命名查询和条件写入。
 持久化统一调用 `persistence/queries/notifications.py`、`persistence/queries/work_item_events.py`
 和 `persistence/stores/notifications.py`；问题和通知使用调用方事务原子提交，
 收件箱、发送队列和就绪检测在限额前应用相同的未解决问题和仓库筛选。
 通知确认不会改变 Supervisor 事件或执行所有权。未来渠道复用同一版本化协议。
+
+原生 TAPD 通知复用[持久目标范围查询](../src/robert_agent/persistence/queries/notification_scope.py)，
+从真实任务、轮次和原单据关联取得项目与仓库。发送需匹配显式项目目的地和仓库范围，收件箱及确认收悉
+还须匹配已认证操作者的项目权限。这些筛选先于列表限额，并在读取信封和写入确认时复核。
+派生 PR 上的历史 GitHub 任务保持原有范围；缺失原生关联不能回退成普通仓库权限。
+协调器在保存进度的同一事务写入 [`source_attentions`](../src/robert_agent/persistence/queries/source_attention.py)
+和通知 outbox。来源协调告警可以没有 WorkItem 或任务。仓库尚未选定时按单据项目授权，已有可验证的
+仓库关联时还须匹配仓库权限。协调器记录相关阶段的进展或退出后结束告警，历史收悉回执仍保留。
+普通问题在 TAPD 回执确认并完成来源收尾后，在同一事务写入 `source_question_attentions` 和通知。
+Worker 问题要求其项目和仓库范围；仓库识别前的问题使用项目范围，汇总问题要求全部选中仓库范围。
+通知按原结果、轮次和发布回执核验，不使用通知正文作为授权，关键确认问题也不会变成普通问答入口。
+发布结果未知时，`source_publication_attentions` 将通知绑定到实际来源、结果、动作、发布意图和请求指纹。
+通知和未知状态在同一事务落库。后续独立读回核实同一效果后解除对应通知；同一结果的多个效果分别记录。
+没有执行轮次的固定控制通知按项目授权，不能借用其他任务的仓库范围。
+恢复补发时发现原仓库或执行证据变化，`source_recovery_attentions` 将告警绑定到原已取消轮次、结果和
+暂停版本。通知只提示检查及重新处理，不修改原结果、已消费请求或执行状态。原证据重新核实并获准继续，
+或该恢复版本完成缺少的交付后，才解除相应告警。
+当前原生通知支持确认收到，告警在实际问题解决前仍留在收件箱。收悉不会恢复任务、释放执行占用或增加修复预算。

@@ -1,6 +1,6 @@
 """Audit saved results with fresh execution and publication evidence."""
 
-from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.delivery import NATIVE_RESULT_CONTRACT, OutputType
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
 
@@ -10,13 +10,17 @@ from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import dispatch_requests as dispatch_queries
 from robert_agent.persistence.queries import work_items as db_read_work_items
+from robert_agent.persistence.queries import result_contract as db_read_contract
+from robert_agent.persistence.queries import source_sessions as source_rounds, source_tasks
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 from robert_agent.persistence.stores import attempts as db_write_attempts
 from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import worker_results as db_write_worker_results
 from robert_agent.delivery.application import audit as audit_result
+from robert_agent.delivery.application import validation as result_validation
 from robert_agent.delivery import results
 from robert_agent.delivery.application import scope as result_scope
+from robert_agent.delivery.application import native_preparation
 from robert_agent.execution.application import evidence
 from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import completion
@@ -30,8 +34,9 @@ from robert_agent.foundation import commands as control_commands
 from robert_agent.foundation import values
 from robert_agent.readmodels import usage
 from robert_agent.foundation.commands import ControlDeadlineExceeded
-from robert_agent.work import wakeup
+from robert_agent.work import dispatch_requests as dispatch_facts, wakeup
 from robert_agent.workflows import pr_remediation as remediation
+from hashlib import sha256
 from robert_agent.workflows import routes as route
 import json
 import subprocess
@@ -81,10 +86,12 @@ def audit_completed_results(
     dispatch_queue,
     dispatch_budget,
     config_result=None,
+    *,
+    task_id=None,
 ):
     from robert_agent.supervision import actions as supervision_actions
 
-    rows = db_read_worker_results.find_for_audit_completed_results(conn, repo_id)
+    rows = db_read_worker_results.find_for_audit_completed_results(conn, repo_id, task_id=task_id)
     audited = 0
     for row in rows:
         result_row = row[:8]
@@ -100,11 +107,33 @@ def audit_completed_results(
         verification_policy = route.verification_policy_for(row[13])
         task_kind = row[14]
         task_metadata = values.json_object(row[15])
-        if values.json_object(result_row[7]).get("result_contract") != result_contract.CONTRACT_ID:
+        metadata = values.json_object(result_row[7])
+        contract_id = metadata.get("result_contract")
+        if not isinstance(contract_id, str) or contract_id not in result_contract.NORMALIZER_VERSIONS:
             # Old results remain audit history or unresolved cutover work. Never
             # consume, publish or terminalize them through the new protocol.
             continue
-        observation = values.json_object(result_row[7]).get("audit_observation", {})
+        native = contract_id == NATIVE_RESULT_CONTRACT
+        attempt_metadata_row = db_records.first(db_read_attempts.find_metadata_json_by_attempt_id(conn, row[2]))
+        attempt_metadata = values.json_object(attempt_metadata_row[0] if attempt_metadata_row else None)
+        if native:
+            subject_type, subject_id = execution_ownership.subject_for_task(conn, row[1])
+            if not source_rounds.attempt_is_settled(
+                conn, row[1], row[2], subject_type=subject_type, subject_id=subject_id
+            ):
+                continue
+            if not result_contract.supports_normalizer(contract_id, metadata.get("normalizer_version")):
+                continue
+        elif (
+            db_read_contract.has_round_membership(conn, row[1])
+            or attempt_metadata.get("result_contract") not in (None, result_contract.CONTRACT_ID)
+            or (
+                "normalizer_version" in metadata
+                and not result_contract.supports_normalizer(contract_id, metadata["normalizer_version"])
+            )
+        ):
+            continue
+        observation = metadata.get("audit_observation", {})
         if not evidence.inspection_due(observation, run_now):
             continue
         payload = results.load_result_payload(conn, result_row)
@@ -127,14 +156,63 @@ def audit_completed_results(
         claim = gate.get("claim")
         _record_result_usage_status(conn, payload["attempt_id"], payload["result_id"])
         conn.commit()
+        github_proof = tapd_proof = None
         try:
-            action_scope = result_scope.for_result(
-                conn,
-                payload["task_id"],
-                payload["attempt_id"],
-                workstream_id,
-                command_runner=control_commands.run_command,
+            requires_git_scope = not native or any(
+                action["provider"] == "github" for action in payload["planned_actions"]
             )
+            action_scope = (
+                result_scope.for_result(
+                    conn,
+                    payload["task_id"],
+                    payload["attempt_id"],
+                    workstream_id,
+                    command_runner=control_commands.run_command,
+                )
+                if requires_git_scope
+                else None
+            )
+            if native:
+                if requires_git_scope:
+                    source = payload.get("native_source")
+                    active = (
+                        source_rounds.active_round(conn, source.get("source_id")) if isinstance(source, dict) else None
+                    )
+                    if (
+                        active
+                        and active["round_id"] == source.get("round_id")
+                        and sha256(active["input_snapshot_json"].encode()).hexdigest()
+                        == source.get("round_input_sha256")
+                    ):
+                        github_proof = native_preparation.prepare_github(
+                            payload,
+                            action_scope,
+                            attempt_metadata.get("native_workspace"),
+                            values.json_object(active["input_snapshot_json"]),
+                            (config_result or {}).get("tapd", {}),
+                        )
+                    if github_proof:
+                        action_scope = {
+                            **action_scope,
+                            "native_github": github_proof,
+                            "head_owner": github_proof["purpose"]["git_pin"]["push_repository"].split("/")[0],
+                            "base_branch": github_proof["purpose"]["git_pin"]["base_branch"],
+                        }
+                if any(action["provider"] == "tapd" for action in payload["planned_actions"]):
+                    source = payload.get("native_source")
+                    native_repo = (
+                        source_tasks.repository(conn, source.get("repo_id")) if isinstance(source, dict) else None
+                    )
+                    tapd_proof = native_preparation.prepare_tapd(
+                        payload,
+                        action_scope["worktree_path"]
+                        if github_proof
+                        else native_repo["repo_root"]
+                        if native_repo
+                        else None,
+                        github_proof,
+                        readonly_snapshot=(attempt_metadata.get("native_workspace") or {}).get("readonly_snapshot"),
+                    )
         except ControlDeadlineExceeded:
             raise
         except subprocess.TimeoutExpired as exc:
@@ -207,31 +285,90 @@ def audit_completed_results(
             continue
         if not execution_ownership.claim_task(conn, payload["task_id"], run_now):
             continue
+        native_settings = None
+        if native:
+            current_attempt = source_tasks.attempt(conn, payload["task_id"], payload["attempt_id"])
+            if (
+                current_attempt is None
+                or values.json_object(current_attempt["metadata_json"]).get("native_workspace")
+                != attempt_metadata.get("native_workspace")
+                or not source_tasks.is_latest_attempt(conn, payload["task_id"], current_attempt["attempt_no"])
+            ):
+                continue
+            settings, rejection = result_validation.context(
+                conn, payload["task_id"], payload["attempt_id"], include_scope=False
+            )
+            if not rejection and settings["result_contract"] == contract_id:
+                native_settings = settings["native"]
         dispatch_request = dispatch_queries.for_task(conn, payload["task_id"])
-        audit = audit_result.audit_result(
-            payload,
-            allowed_actions,
-            recommended_skills=recommended_skills,
-            required_skills=required_skills,
-            expected_output=expected_output,
-            verification_policy=verification_policy,
-            origin_type=origin_type,
-            action_scope=action_scope,
-            dispatch_issue_url=json.loads(dispatch_request["issue_json"])["html_url"] if dispatch_request else None,
-            task_kind=task_kind,
-            remediation_context=remediation_context,
-            remediation_attestation=remediation_attestation,
-            review_input_policy=task_metadata.get("review_input_policy", "required"),
+        dispatch_event = dispatch_facts.confirmed_event(dispatch_request) if dispatch_request else None
+        audit = (
+            {
+                "ok": False,
+                "status": "policy_violation",
+                "violations": ["action_scope"],
+                "safe_error": "Native result is outside the current source round.",
+            }
+            if native and native_settings is None
+            else {
+                "ok": False,
+                "status": "policy_violation",
+                "violations": ["dispatch_ingress"],
+                "safe_error": "Confirmed operator dispatch evidence is unavailable.",
+            }
+            if dispatch_request and dispatch_event is None
+            else audit_result.audit_result(
+                payload,
+                allowed_actions,
+                recommended_skills=recommended_skills,
+                required_skills=required_skills,
+                expected_output=expected_output,
+                verification_policy=verification_policy,
+                origin_type=origin_type,
+                action_scope=action_scope,
+                dispatch_issue_url=dispatch_event["url"] if dispatch_event else None,
+                task_kind=task_kind,
+                remediation_context=remediation_context,
+                remediation_attestation=remediation_attestation,
+                review_input_policy=task_metadata.get("review_input_policy", "required"),
+                native=native_settings,
+                native_tapd=tapd_proof,
+            )
         )
-        if claim and not supervision_actions.finish(
-            conn,
-            claim,
-            now=checked_at,
-            outcome="observing" if audit["status"] == "accepted" else "failed",
-            receipt={"result_id": payload["result_id"], "audit_status": audit["status"]},
-        ):
-            continue
-        results.record_result_audit(conn, payload["result_id"], audit)
+        checkpoint = "accept_worker_result"
+        if not conn.in_transaction:
+            db_transactions.begin_immediate(conn)
+        db_transactions.savepoint(conn, checkpoint)
+        try:
+            if (
+                dispatch_request
+                and audit["status"] == "accepted"
+                and payload["output_type"] in {OutputType.COMMENT_ANALYSIS, OutputType.NEW_PR}
+                and not dispatch_facts.consume_result(conn, config_result, dispatch_request, payload, run_now)
+            ):
+                db_transactions.rollback_to(conn, checkpoint)
+                audit = {
+                    "ok": False,
+                    "status": "policy_violation",
+                    "violations": ["dispatch_ingress"],
+                    "safe_error": "Final result does not match the confirmed operator dispatch request.",
+                }
+            if claim and not supervision_actions.finish(
+                conn,
+                claim,
+                now=checked_at,
+                outcome="observing" if audit["status"] == "accepted" else "failed",
+                receipt={"result_id": payload["result_id"], "audit_status": audit["status"]},
+            ):
+                db_transactions.finish_isolation(conn, checkpoint, rollback=True)
+                continue
+            results.record_result_audit(conn, payload["result_id"], audit)
+            if audit["status"] == "accepted":
+                results.set_github_actions_status(conn, payload["result_id"], "accepted")
+        except BaseException:
+            db_transactions.finish_isolation(conn, checkpoint, rollback=True)
+            raise
+        db_transactions.release(conn, checkpoint)
         wakeup.consume_wakeups_for_results(
             conn,
             result_ids=[payload["result_id"]],
@@ -256,7 +393,16 @@ def audit_completed_results(
             audited += 1
             continue
 
-        results.set_github_actions_status(conn, payload["result_id"], "accepted")
+        if native:
+            if payload["output_type"] in {OutputType.LOCAL_RESULT, OutputType.CLASSIFICATION_RESULT}:
+                db_write_tasks.update_for_finish_parent_for_child(conn, run_now, payload["task_id"])
+                execution_ownership.close_terminal_task(conn, payload["task_id"], run_now)
+            else:
+                work_application_lifecycle.mark_task_waiting_for_publish(
+                    conn, payload["task_id"], workstream_id, run_now
+                )
+            audited += 1
+            continue
         memory_status = project_memory.record_memory_delta(
             conn,
             payload,

@@ -183,7 +183,7 @@ class SupervisionLineageTests(unittest.TestCase):
         self.assertTrue(self.cycle(fixture)["ok"])
         with closing(sqlite3.connect(fixture.data_dir / "dd.sqlite3")) as conn, conn:
             event_id, repo_id, source_id, payload = conn.execute(
-                "SELECT event_id,repo_id,source_id,payload_json FROM github_events"
+                "SELECT event_id,repo_id,source_id,payload_json FROM source_events"
             ).fetchone()
             event = json.loads(payload)
             now = values.utc_now()

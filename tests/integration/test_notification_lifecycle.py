@@ -156,7 +156,7 @@ class NotificationLifecycleTests(unittest.TestCase):
                     events = {
                         fingerprint: json.loads(payload)
                         for fingerprint, payload in conn.execute(
-                            "SELECT event_fingerprint,payload_json FROM github_events"
+                            "SELECT event_fingerprint,payload_json FROM source_events"
                         )
                     }
                     self.assertTrue(expected <= events.keys())
@@ -180,7 +180,7 @@ class NotificationLifecycleTests(unittest.TestCase):
             events = [
                 json.loads(row[0])
                 for row in conn.execute(
-                    "SELECT payload_json FROM github_events WHERE event_fingerprint LIKE 'comment:%'"
+                    "SELECT payload_json FROM source_events WHERE event_fingerprint LIKE 'comment:%'"
                 )
             ]
             self.assertEqual(len(events), 3)

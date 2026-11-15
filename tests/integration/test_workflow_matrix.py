@@ -186,7 +186,7 @@ repos:
             """
             SELECT te.relationship, ge.event_fingerprint
             FROM task_events te
-            JOIN github_events ge ON ge.event_id = te.event_id
+            JOIN source_events ge ON ge.event_id = te.event_id
             """
         )
         prompt = Path(result["prompt_paths"][0]).read_text(encoding="utf-8")
@@ -300,7 +300,7 @@ repos:
             """
             SELECT te.relationship, ge.event_fingerprint
             FROM task_events te
-            JOIN github_events ge ON ge.event_id = te.event_id
+            JOIN source_events ge ON ge.event_id = te.event_id
             ORDER BY te.relationship, ge.event_fingerprint
             """
         )
@@ -528,7 +528,7 @@ repos:
         event_row = self.fetchone(
             """
             SELECT authorization_status, actor_login
-            FROM github_events
+            FROM source_events
             WHERE event_fingerprint = 'comment:pr-author-followup-707'
             """
         )
@@ -644,7 +644,7 @@ repos:
                 """
                 SELECT te.relationship, ge.event_fingerprint
                 FROM task_events te
-                JOIN github_events ge ON ge.event_id = te.event_id
+                JOIN source_events ge ON ge.event_id = te.event_id
                 WHERE te.task_id = ?
                 ORDER BY ge.event_at, ge.event_id
                 """,
@@ -787,9 +787,10 @@ repos:
         self.assertEqual(
             self.fetchall(
                 """
-                SELECT te.relationship, ge.event_fingerprint
+                SELECT COALESCE(re.state, te.relationship), ge.event_fingerprint
                 FROM task_events te
-                JOIN github_events ge ON ge.event_id = te.event_id
+                JOIN source_events ge ON ge.event_id = te.event_id
+                LEFT JOIN request_events re ON re.task_id = te.task_id AND re.event_id = te.event_id
                 WHERE te.task_id = ?
                 ORDER BY ge.event_at, ge.event_id
                 """,
@@ -837,7 +838,7 @@ repos:
             """
             SELECT te.relationship, ge.event_fingerprint
             FROM task_events te
-            JOIN github_events ge ON ge.event_id = te.event_id
+            JOIN source_events ge ON ge.event_id = te.event_id
             WHERE te.task_id = ?
             ORDER BY te.relationship, ge.event_fingerprint
             """,

@@ -447,6 +447,8 @@ def _remote_branch(action, action_scope, run_command, *, push_remote=None):
 def classify_remote_state(action, action_scope, run_command, *, conn=None):
     """Classify one action without changing SQLite or remote state."""
 
+    if action.get("provider", "github") != "github" or action.get("target_json") is not None:
+        return _result("unknown", "unsupported_action_provider")
     if not isinstance(action_scope, dict):
         return _result("unknown", "audited_scope_missing")
     action_type = action.get("action_type")

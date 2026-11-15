@@ -26,6 +26,11 @@ def refresh_pending_events(events, pending, covered, repo):
         if (raw.get("source_type", "issue"), raw["number"]) not in covered:
             continue
         refreshed = dict(raw)
+        if raw.get("github_discussion_item") or (
+            raw.get("source_type") == "pull_request"
+            and raw.get("event_type") in {"comment", "review", "review_comment"}
+        ):
+            refreshed["github_discussion_replayed"] = True
         if raw.get("event_type") == "comment" and raw.get("body_authorization_complete") is not True:
             refreshed["body_authorization_complete"] = False
         refreshed["mentions_dd"] = bool(discover.bot_requests(raw.get("body"), account))

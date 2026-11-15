@@ -74,10 +74,12 @@ class RemediationTests(unittest.TestCase):
         with closing(self.connect()) as conn:
             return conn.execute(
                 """
-                SELECT episode_kind, subject_key, status, attempt_count,
-                       failure_signature, result_head_sha
-                FROM pr_remediation_episodes
-                ORDER BY episode_kind, first_seen_at
+                SELECT e.episode_kind, e.subject_key, e.status,
+                       COALESCE(c.legacy_attempt_count, 0) +
+                           (SELECT count(*) FROM repair_cycle_claims WHERE episode_id=e.episode_id),
+                       e.failure_signature, e.result_head_sha
+                FROM pr_remediation_episodes e LEFT JOIN repair_cycles c ON c.episode_id=e.episode_id
+                ORDER BY e.episode_kind, e.first_seen_at
                 """
             ).fetchall()
 
@@ -452,6 +454,70 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(row[2], "open")
         self.assertEqual(row[3], 1)
 
+    def test_reopened_legacy_episode_charges_each_start_and_enforces_limit(self):
+        from robert_agent.workflows import pr_remediation as remediation
+
+        with closing(self.connect()) as conn, conn:
+            remediation.upsert_health_episodes(
+                conn,
+                repo=self.repo,
+                workstream=self.workstream,
+                snapshot=self.snapshot,
+                ci_summary=None,
+                now="2026-07-26T00:01:00Z",
+            )
+            episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
+            conn.execute(
+                "INSERT INTO tasks(task_id,workstream_id,task_kind,lifecycle,created_at,updated_at)"
+                " VALUES('old-task','pr-ws','merge_conflict_remediation','completed','now','now')"
+            )
+            policy = {"enabled": True, "max_attempts": 2, "max_wall_minutes": 60}
+            start = dict(episode_id=episode_id, task_id="old-task", now="2026-07-26T00:02:00Z", policy=policy)
+            for _ in range(2):
+                self.assertTrue(remediation.record_task_started(conn, **start))
+                self.assertFalse(remediation.record_task_started(conn, **start))
+                self.assertTrue(
+                    remediation.record_publish_result(
+                        conn, episode_id=episode_id, publish_status="failed", now="2026-07-26T00:02:00Z"
+                    )
+                )
+            third = remediation.record_task_started(conn, **start)
+            episode = remediation.load_episode(conn, episode_id)
+            self.assertEqual((episode["attempt_count"], third, episode["status"]), (2, False, "open"))
+            claims = conn.execute(
+                "SELECT request_key,task_id FROM repair_cycle_claims WHERE episode_id=?", (episode_id,)
+            ).fetchall()
+            self.assertEqual(len(claims), 2)
+            self.assertEqual({task_id for _, task_id in claims}, {"old-task"})
+
+    def test_legacy_charge_rolls_back_if_start_audit_cannot_be_written(self):
+        from unittest.mock import patch
+
+        from robert_agent.workflows import pr_remediation as remediation
+
+        with closing(self.connect()) as conn, conn:
+            remediation.upsert_health_episodes(
+                conn,
+                repo=self.repo,
+                workstream=self.workstream,
+                snapshot=self.snapshot,
+                ci_summary=None,
+                now="2026-07-26T00:01:00Z",
+            )
+            (episode_id,) = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()
+            conn.execute(
+                "INSERT INTO tasks(task_id,workstream_id,task_kind,lifecycle,created_at,updated_at)"
+                " VALUES('repair','pr-ws','merge_conflict_remediation','completed','now','now')"
+            )
+            start = dict(episode_id=episode_id, task_id="repair", now="2026-07-26T00:02:00Z")
+            with patch.object(remediation, "_audit_transition", side_effect=RuntimeError("audit write failed")):
+                with self.assertRaisesRegex(RuntimeError, "audit write failed"):
+                    remediation.record_task_started(conn, **start)
+            saved = remediation.load_episode(conn, episode_id)
+            self.assertEqual((saved["attempt_count"], saved["status"]), (0, "open"))
+            self.assertTrue(remediation.record_task_started(conn, **start))
+            self.assertEqual(remediation.load_episode(conn, episode_id)["attempt_count"], 1)
+
     def test_budget_status_enforces_attempt_wall_token_and_cost_limits(self):
         from robert_agent.workflows import pr_remediation as remediation
 
@@ -735,8 +801,8 @@ class RemediationTests(unittest.TestCase):
             episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
             conn.execute(
                 """
-                UPDATE pr_remediation_episodes
-                SET attempt_count = 2
+                UPDATE repair_cycles
+                SET legacy_attempt_count = 2
                 WHERE episode_id = ?
                 """,
                 (episode_id,),

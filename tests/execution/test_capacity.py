@@ -25,7 +25,7 @@ class CapacityTests(RepositoryCycleFixture):
                 task_id = f"task:{repo_id}"
                 attempt_id = f"attempt:{repo_id}"
                 conn.execute(
-                    "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number) VALUES (?, ?, ?, 'issue', 1)",
+                    "INSERT INTO sources(source_id, repo_id, source_key, source_type, number, provider, host, project_key, external_id) VALUES (?, ?, ?, 'issue', 1, 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id=?2), '1')",
                     (source_id, repo_id, workstream_id),
                 )
                 conn.execute(

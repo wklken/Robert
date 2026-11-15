@@ -39,7 +39,7 @@ class ScanEntrypointTests(unittest.TestCase):
                     synchronize.assert_called_once_with("fixture.json", refresh_context=False)
                     publish.assert_not_called()
                 else:
-                    publish.assert_called_once_with("fixture.json", dry_run=True)
+                    publish.assert_called_once_with("fixture.json", dry_run=True, source_only=False, stop=mock.ANY)
                     synchronize.assert_not_called()
 
 

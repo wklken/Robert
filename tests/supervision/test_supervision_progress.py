@@ -107,7 +107,7 @@ class _SupervisionDatabaseFixture(unittest.TestCase):
             "INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) VALUES('repo','example/repo','default','main','/tmp','/tmp')"
         )
         self.execute(
-            "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number) VALUES('source','repo','example/repo#1','issue',1)"
+            "INSERT INTO sources(source_id,repo_id,source_key,source_type,number, provider, host, project_key, external_id) VALUES('source','repo','example/repo#1','issue',1, 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo'), '1')"
         )
 
     def execute(self, sql, params=()):

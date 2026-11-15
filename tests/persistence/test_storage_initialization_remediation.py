@@ -27,7 +27,7 @@ class StorageInitializationRemediationTests(unittest.TestCase):
                 "INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) VALUES ('r','example/r','bot','main','/repo','/worktrees')"
             )
             conn.execute(
-                "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,title,state,author_login) VALUES ('issue','r','github:example/r#1','issue',1,'Origin','open','maintainer'),('pr','r','github:example/r!2','pull_request',2,'Related','open','bot')"
+                "INSERT INTO sources(source_id,repo_id,source_key,source_type,number,title,state,author_login, provider, host, project_key, external_id) VALUES ('issue','r','github:example/r#1','issue',1,'Origin','open','maintainer', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='r'), '1'),('pr','r','github:example/r!2','pull_request',2,'Related','open','bot', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='r'), '2')"
             )
             conn.execute(
                 "INSERT INTO workstreams(workstream_id,repo_id,primary_source_id,lifecycle,active_task_id,created_at,updated_at) VALUES ('github:example/r#1','r','issue','active','t','2026-10-26','2026-10-26')"
@@ -37,7 +37,7 @@ class StorageInitializationRemediationTests(unittest.TestCase):
             )
             payload = {"workstream_id": "github:example/r!2", "origin_workstream_id": "github:example/r#1"}
             conn.execute(
-                "INSERT INTO github_events(event_id,repo_id,source_id,event_fingerprint,event_type,actor_login,authorization_status,event_at,payload_json) VALUES ('event','r','pr','comment:1','comment','maintainer','accepted_context','2026-10-26',?)",
+                "INSERT INTO source_events(event_id,repo_id,source_id,event_fingerprint,event_type,actor_login,authorization_status,event_at,payload_json) VALUES ('event','r','pr','comment:1','comment','maintainer','accepted_context','2026-10-26',?)",
                 (json.dumps(payload),),
             )
             conn.execute(
@@ -71,7 +71,7 @@ class StorageInitializationRemediationTests(unittest.TestCase):
             )
             self.assertEqual(
                 conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(),
-                [(1,), (2,), (4,), (5,), (6,)],
+                [(1,), (2,), (4,), (5,), (6,), (7,), (8,), (9,)],
             )
             self.assertIsNotNone(
                 conn.execute("SELECT work_item_id FROM work_items WHERE workstream_id='github:example/r#1'").fetchone()

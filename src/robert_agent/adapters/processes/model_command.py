@@ -1,4 +1,4 @@
-"""Bounded no-tool model command transport with owned process cleanup."""
+"""Bounded model command transport with owned process cleanup."""
 
 from robert_agent.foundation.contracts.execution import ModelCommandStatus
 
@@ -75,20 +75,30 @@ def stable_identity(proc, stop):
     return None
 
 
-def run(profile, payload, stop, on_started):
+def run(profile, payload, stop, on_started, *, build_launch=None, lifecycle=False):
     """Return bounded output after the process group exits; persist identity at spawn."""
     proc, stopped, output, status = None, True, b"", ModelCommandStatus.STOPPED.value
     diagnostics = {"stderr": bytearray(), "stderr_truncated": False}
+    identity = None
     try:
         with tempfile.TemporaryDirectory(prefix="robert-model-", ignore_cleanup_errors=True) as root:
             cwd = Path(root).resolve()
             source = cwd / "request.json"
             source.write_text(payload, encoding="utf-8")
-            launch = build_worker_launch(source, cwd, worker_agent_config={"agent": "command", **profile})
+            launch = (
+                build_worker_launch(source, cwd, worker_agent_config={"agent": "command", **profile})
+                if build_launch is None
+                else build_launch(source, cwd)
+            )
             environment = {key: os.environ[key] for key in launch.environment_allowlist if key in os.environ}
             environment.update(HOME=str(cwd), TMPDIR=str(cwd), PATH=os.defpath)
             if stop.is_set():
-                return {"status": status, "output": output, "stopped": stopped}
+                return {
+                    "status": status,
+                    "output": output,
+                    "stopped": stopped,
+                    **({"identity": None, "process_created": False} if lifecycle else {}),
+                }
             try:
                 with source.open("rb") as input_stream:
                     proc = subprocess.Popen(
@@ -139,4 +149,5 @@ def run(profile, payload, stop, on_started):
         "exit_code": proc.returncode if proc is not None else None,
         "safe_error": safe_error,
         "stderr_truncated": diagnostics["stderr_truncated"],
+        **({"identity": identity, "process_created": proc is not None} if lifecycle else {}),
     }

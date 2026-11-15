@@ -83,8 +83,8 @@ class DispatchOrderingTests(RepositoryCycleFixture):
             )
             conn.execute(
                 """
-                INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, title, state, author_login)
-                VALUES ('source:github:example/backend#2878', 'repo:example/backend', 'github:example/backend#2878', 'issue', 2878, 'older issue', 'open', 'wklken')
+                INSERT INTO sources(source_id, repo_id, source_key, source_type, number, title, state, author_login, provider, host, project_key, external_id)
+                VALUES ('source:github:example/backend#2878', 'repo:example/backend', 'github:example/backend#2878', 'issue', 2878, 'older issue', 'open', 'wklken', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), '2878')
                 """
             )
             conn.execute(
@@ -121,8 +121,8 @@ class DispatchOrderingTests(RepositoryCycleFixture):
 
             conn.execute(
                 """
-                INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, title, state, author_login)
-                VALUES ('source:github:example/backend!2886', 'repo:example/backend', 'github:example/backend!2886', 'pull_request', 2886, 'fix(operator): improve release log context', 'open', 'robert-bot')
+                INSERT INTO sources(source_id, repo_id, source_key, source_type, number, title, state, author_login, provider, host, project_key, external_id)
+                VALUES ('source:github:example/backend!2886', 'repo:example/backend', 'github:example/backend!2886', 'pull_request', 2886, 'fix(operator): improve release log context', 'open', 'robert-bot', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), '2886')
                 """
             )
             conn.execute(
@@ -173,7 +173,7 @@ class DispatchOrderingTests(RepositoryCycleFixture):
                     "number": 2878,
                 }
                 conn.execute(
-                    "INSERT INTO github_events(event_id,repo_id,source_id,event_fingerprint,event_type,payload_json,event_at) VALUES(?,'repo:example/backend',?,?,'comment',?,?)",
+                    "INSERT INTO source_events(event_id,repo_id,source_id,event_fingerprint,event_type,payload_json,event_at) VALUES(?,'repo:example/backend',?,?,'comment',?,?)",
                     (task, source, task, json.dumps(event), now),
                 )
                 conn.execute(

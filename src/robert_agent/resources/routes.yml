@@ -9,6 +9,16 @@ routes:
       required_statuses: [passed]
       allow_skipped: true
     recommended_skills: [fast-code-path, fast-zoom-out]
+  - id: source-evidence
+    workspace_mode: analysis
+    expected_output: local_result
+    allowed_github_actions: []
+    needs_worktree: false
+    verification_policy:
+      mode: optional
+      required_statuses: [passed]
+      allow_skipped: true
+    recommended_skills: [fast-code-path, fast-zoom-out]
   - id: comment-analysis
     workspace_mode: analysis
     expected_output: comment_analysis

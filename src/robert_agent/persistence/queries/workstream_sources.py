@@ -9,7 +9,7 @@ from robert_agent.persistence import statements
 
 def find_for_build_workstream(conn, workstream_id):
     table1 = tables["workstream_sources"].alias("ws")
-    table2 = tables["github_sources"].alias("gs")
+    table2 = tables["sources"].alias("gs")
     query3 = (
         select(
             table1.c["relationship"],
@@ -31,7 +31,7 @@ def find_for_build_workstream(conn, workstream_id):
 
 def find_for_get_work_item(conn, workstream_id):
     table1 = tables["workstream_sources"].alias("ws")
-    table2 = tables["github_sources"].alias("gs")
+    table2 = tables["sources"].alias("gs")
     query3 = (
         select(
             table1.c["relationship"],

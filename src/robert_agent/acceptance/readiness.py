@@ -15,6 +15,7 @@ import sys
 
 from robert_agent.foundation.commands import emit
 from robert_agent.configuration import command as validate_config
+from robert_agent.application.source_cycle import has_due_source
 from robert_agent.resource_files import resource
 
 
@@ -177,6 +178,8 @@ def acceptance_preflight(
         )
     )
     gates.append(_control_plane_state_gate(config["db_path"]))
+    if has_due_source(config["db_path"], config, owner=None):
+        gates.append(_gate("native_source_work", "passed", "TAPD source work is due for controller processing"))
     multi_repo = len(config["repos"]) > 1
     for repo in config["repos"]:
         repo_name = repo["full_name"]

@@ -24,7 +24,7 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
                 closing(sqlite3.connect(self.db)) as conn,
                 conn,
             ):
-                conn.execute("UPDATE github_sources SET state='open'")
+                conn.execute("UPDATE sources SET state='open'")
                 conn.execute("UPDATE execution_subjects SET binding_status=?", (binding_status,))
                 self.assertEqual(
                     source_lifecycle.reconcile_remote_source_states(
@@ -37,7 +37,7 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
                     1 if binding_status == "terminal" else 0,
                 )
                 self.assertEqual(
-                    conn.execute("SELECT state FROM github_sources").fetchone()[0],
+                    conn.execute("SELECT state FROM sources").fetchone()[0],
                     "closed",
                 )
                 self.assertEqual(
@@ -63,7 +63,7 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
         self.seed()
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
-                "INSERT INTO github_sources SELECT 'second',repo_id,'github:example/backend!124',source_type,124,html_url,title,state,author_login,source_updated_at,metadata_json FROM github_sources"
+                "INSERT INTO sources(source_id,repo_id,source_key,source_type,number,html_url,title,state,author_login,source_updated_at,metadata_json,provider,host,project_key,external_id) SELECT 'second',repo_id,'github:example/backend!124',source_type,124,html_url,title,state,author_login,source_updated_at,metadata_json,provider,host,project_key,'124' FROM sources"
             )
             conn.execute(
                 "INSERT INTO workstreams(workstream_id,repo_id,primary_source_id,lifecycle,created_at,updated_at) VALUES ('second','repo:example/backend','second','completed','now','now')"
@@ -72,7 +72,7 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
 
         def broken(conn, *args):
             if args[5] == 123:
-                conn.execute("UPDATE github_sources SET title='partial' WHERE number=123")
+                conn.execute("UPDATE sources SET title='partial' WHERE number=123")
                 raise ValueError("broken source")
             return record(conn, *args)
 
@@ -91,7 +91,7 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
                 ),
                 1,
             )
-            rows = conn.execute("SELECT number,state,title FROM github_sources ORDER BY number").fetchall()
+            rows = conn.execute("SELECT number,state,title FROM sources ORDER BY number").fetchall()
             self.assertEqual(rows[0][1], "open")
             self.assertNotEqual(rows[0][2], "partial")
             self.assertEqual(rows[1][1], "closed")
@@ -170,7 +170,7 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
                 ),
                 0,
             )
-            self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "closed")
+            self.assertEqual(conn.execute("SELECT state FROM sources").fetchone()[0], "closed")
             self.assertEqual(
                 conn.execute("SELECT active_task_id FROM workstreams").fetchone()[0],
                 task,
@@ -185,7 +185,7 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
         self.seed()
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
-                "INSERT INTO github_sources SELECT 'second',repo_id,'github:example/backend!124',source_type,124,html_url,title,state,author_login,source_updated_at,metadata_json FROM github_sources"
+                "INSERT INTO sources(source_id,repo_id,source_key,source_type,number,html_url,title,state,author_login,source_updated_at,metadata_json,provider,host,project_key,external_id) SELECT 'second',repo_id,'github:example/backend!124',source_type,124,html_url,title,state,author_login,source_updated_at,metadata_json,provider,host,project_key,'124' FROM sources"
             )
             conn.execute(
                 "INSERT INTO workstreams(workstream_id,repo_id,primary_source_id,lifecycle,created_at,updated_at) VALUES ('second','repo:example/backend','second','completed','now','now')"
@@ -194,9 +194,9 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
 
         def record(conn, *args):
             if args[5] == 123:
-                conn.execute("UPDATE github_sources SET title='checkpoint' WHERE number=123")
+                conn.execute("UPDATE sources SET title='checkpoint' WHERE number=123")
                 conn.commit()
-                conn.execute("UPDATE github_sources SET title='uncommitted' WHERE number=123")
+                conn.execute("UPDATE sources SET title='uncommitted' WHERE number=123")
                 raise RuntimeError("failure after external I/O checkpoint")
             return original(conn, *args)
 
@@ -216,11 +216,11 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
                 1,
             )
             self.assertEqual(
-                conn.execute("SELECT title FROM github_sources WHERE number=123").fetchone()[0],
+                conn.execute("SELECT title FROM sources WHERE number=123").fetchone()[0],
                 "checkpoint",
             )
             self.assertEqual(
-                conn.execute("SELECT state FROM github_sources WHERE number=124").fetchone()[0],
+                conn.execute("SELECT state FROM sources WHERE number=124").fetchone()[0],
                 "closed",
             )
 

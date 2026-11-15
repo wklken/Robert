@@ -92,7 +92,7 @@ class ReviewRemediationTests(unittest.TestCase):
     def test_attention_closed_issue_records_only_source_once(self):
         task = self.seed("attention")
         with closing(sqlite3.connect(self.db)) as conn, conn:
-            conn.execute("UPDATE github_sources SET source_type='issue',source_key='github:example/backend#123'")
+            conn.execute("UPDATE sources SET source_type='issue',source_key='github:example/backend#123'")
             conn.execute("UPDATE tasks SET lifecycle='running'")
             conn.execute("UPDATE attempts SET status='running',metadata_json='{}'")
             conn.execute("UPDATE workstreams SET lifecycle='active',active_task_id=?", (task,))
@@ -117,7 +117,7 @@ class ReviewRemediationTests(unittest.TestCase):
                     ),
                     0,
                 )
-            self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "closed")
+            self.assertEqual(conn.execute("SELECT state FROM sources").fetchone()[0], "closed")
             self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "running")
             self.assertEqual(conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0], "attention")
             self.assertEqual(

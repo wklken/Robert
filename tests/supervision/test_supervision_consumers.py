@@ -37,6 +37,7 @@ class SupervisionSpoolConsumerTests(unittest.TestCase):
                         "task_id": f"task-{attempt_id}",
                         "_submission_fingerprint": fingerprint,
                         "_result_contract": result_contract.CONTRACT_ID,
+                        "_normalizer_version": 1,
                     },
                 },
             )

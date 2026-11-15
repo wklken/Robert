@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 import sys
 import tempfile
 from pathlib import Path
@@ -15,15 +16,39 @@ class WorkerEnvironmentTests(unittest.TestCase):
             "HOME": "/home/test",
             "SECRET_TOKEN": "hidden",
             "CUSTOM_VALUE": "allowed",
+            "TAPD_ACCESS_TOKEN": "fixture-token",
+            "TAPD_API_USER": "fixture-user",
+            "TAPD_API_PASSWORD": "fixture-password",
         }
         result = _worker_environment(
-            allowed_names=["CUSTOM_VALUE"],
+            allowed_names=["CUSTOM_VALUE", "TAPD_ACCESS_TOKEN", "TAPD_API_USER", "TAPD_API_PASSWORD"],
             environ=source,
         )
         self.assertEqual(result["PATH"], "/bin")
         self.assertEqual(result["HOME"], "/home/test")
         self.assertEqual(result["CUSTOM_VALUE"], "allowed")
         self.assertNotIn("SECRET_TOKEN", result)
+        self.assertTrue({"TAPD_ACCESS_TOKEN", "TAPD_API_USER", "TAPD_API_PASSWORD"}.isdisjoint(result))
+
+    def test_trusted_launch_environment_cannot_forward_tapd_credentials(self):
+        from robert_agent.adapters.processes import worker
+
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_path = Path(tmp) / "prompt.md"
+            prompt_path.write_text("task prompt", encoding="utf-8")
+            with mock.patch.object(worker.subprocess, "Popen", side_effect=OSError("test launch")) as launch:
+                dispatch_worker(
+                    task_id="task",
+                    attempt_id="attempt",
+                    prompt_path=prompt_path,
+                    worker_agent="command",
+                    worker_command=[sys.executable, "local-worker.py"],
+                    dry_run=False,
+                    trusted_environment={"TAPD_ACCESS_TOKEN": "test-value", "TEST_MODEL_CONFIG": "control"},
+                )
+            environment = launch.call_args.kwargs["env"]
+            self.assertNotIn("TAPD_ACCESS_TOKEN", environment)
+            self.assertEqual(environment["TEST_MODEL_CONFIG"], "control")
 
     def test_worker_config_rejects_working_directory(self):
         from tests.support.config_v2 import ConfigV2Fixture

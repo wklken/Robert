@@ -23,3 +23,8 @@ def task_publication_lock(db_path, task_id):
             yield True
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def source_publication_lock(db_path, source_id):
+    """Serialize source effects before any task lock, independently of model work."""
+    return task_publication_lock(db_path, "source-publication:" + source_id)

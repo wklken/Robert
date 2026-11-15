@@ -10,6 +10,7 @@ from robert_agent.foundation.contracts.work import (
 )
 
 from robert_agent.persistence import records as db_records
+from robert_agent.persistence import transactions as db_transactions
 from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import notifications as db_read_notifications
 from robert_agent.persistence.queries import pr_remediation_episodes as db_read_pr_remediation_episodes
@@ -20,8 +21,9 @@ from robert_agent.persistence.stores import audit_events as db_write_audit_event
 from robert_agent.persistence.stores import notifications as db_write_notifications
 from robert_agent.persistence.stores import pr_ci_observations as db_write_pr_ci_observations
 from robert_agent.persistence.stores import pr_remediation_episodes as db_write_pr_remediation_episodes
+from robert_agent.persistence.stores import repair_cycles as db_write_repair_cycles
+from robert_agent.work import repair_budget
 
-from datetime import datetime, timezone
 import hashlib
 import json
 import subprocess
@@ -263,6 +265,8 @@ def _transition(conn, episode, new_status, reason, now):
     )
     if db_records.first(db_read_projections.find_for_transition(conn))[0] != 1:
         return None
+    if terminal_at:
+        db_write_repair_cycles.close_episode_cycle(conn, episode_id=episode["episode_id"], reason=reason, now=now)
     _audit_transition(conn, episode, old_status, new_status, reason, now)
     if new_status == RemediationStatus.EXHAUSTED.value:
         _notify_exhausted_episode(conn, episode, reason, now)
@@ -308,6 +312,7 @@ def _create_episode(
         now,
         json.dumps(metadata, ensure_ascii=False, sort_keys=True),
     )
+    db_write_repair_cycles.ensure_episode_cycle(conn, episode_id)
     return _load_episode(conn, episode_id)
 
 
@@ -571,15 +576,6 @@ def upsert_health_episodes(
     return transitions
 
 
-def _parse_time(value):
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
 def _episode_usage(conn, episode_id):
     payloads = []
     for row in db_read_attempts.find_for_episode_usage(conn, episode_id):
@@ -592,49 +588,13 @@ def _episode_usage(conn, episode_id):
 
 
 def budget_status(conn, *, episode, policy, now):
-    usage_summary = _episode_usage(conn, episode["episode_id"])
-    result = {
-        "ok": True,
-        "reason": "",
-        **usage_summary,
-    }
-    if episode["attempt_count"] >= policy["max_attempts"]:
-        return {**result, "ok": False, "reason": "max_attempts"}
-    first_seen = _parse_time(episode.get("first_seen_at"))
-    current = _parse_time(now)
-    if first_seen and current:
-        elapsed_minutes = (current.astimezone(timezone.utc) - first_seen.astimezone(timezone.utc)).total_seconds() / 60
-        result["elapsed_minutes"] = elapsed_minutes
-        if elapsed_minutes >= policy["max_wall_minutes"]:
-            return {
-                **result,
-                "ok": False,
-                "reason": "max_wall_minutes",
-            }
-    max_tokens = policy.get("max_total_tokens")
-    max_cost = policy.get("max_cost_usd")
-    expected = max(episode["attempt_count"], result["attempt_usage_count"])
-    if (max_tokens and result["measured_token_attempt_count"] < expected) or (
-        max_cost and result["measured_cost_attempt_count"] < expected
-    ):
-        return {
-            **result,
-            "ok": False,
-            "reason": "usage_unavailable",
-        }
-    if max_tokens and result["total_tokens"] >= max_tokens:
-        return {
-            **result,
-            "ok": False,
-            "reason": "max_total_tokens",
-        }
-    if max_cost and result["total_cost_usd"] >= max_cost:
-        return {
-            **result,
-            "ok": False,
-            "reason": "max_cost_usd",
-        }
-    return result
+    return repair_budget.status(
+        attempt_count=episode["attempt_count"],
+        started_at=episode.get("first_seen_at"),
+        policy=policy,
+        usage=_episode_usage(conn, episode["episode_id"]),
+        now=now,
+    )
 
 
 def _policy_for_episode(repo, episode_kind):
@@ -783,22 +743,43 @@ def cancel_workstream_episodes(
     return canceled
 
 
-def record_task_started(conn, *, episode_id, task_id, now):
+def record_task_started(conn, *, episode_id, task_id, now, policy=None):
+    if not conn.in_transaction:
+        db_transactions.begin_immediate(conn)
     episode = _load_episode(conn, episode_id)
-    if not episode or episode["status"] != RemediationStatus.OPEN:
+    if (
+        not episode
+        or episode["status"] != RemediationStatus.OPEN
+        or (
+            policy is not None
+            and (not policy["enabled"] or not budget_status(conn, episode=episode, policy=policy, now=now)["ok"])
+        )
+    ):
         return False
-    db_write_pr_remediation_episodes.record_task_started(conn, task_id, now, episode_id)
-    if db_records.first(db_read_projections.find_for_transition(conn))[0] != 1:
-        return False
-    _audit_transition(
-        conn,
-        {**episode, "last_task_id": task_id},
-        RemediationStatus.OPEN.value,
-        RemediationStatus.REMEDIATING.value,
-        "task_started",
-        now,
-    )
-    return True
+    return _charge_task_start(conn, episode, task_id, now)
+
+
+def _charge_task_start(conn, episode, task_id, now):
+    checkpoint = "start_legacy_repair"
+    db_transactions.savepoint(conn, checkpoint)
+    try:
+        started = db_write_repair_cycles.record_episode_claim(
+            conn, episode_id=episode["episode_id"], task_id=task_id, now=now
+        )
+        if started:
+            _audit_transition(
+                conn,
+                {**episode, "last_task_id": task_id},
+                RemediationStatus.OPEN.value,
+                RemediationStatus.REMEDIATING.value,
+                "task_started",
+                now,
+            )
+    except BaseException:
+        db_transactions.finish_isolation(conn, checkpoint, rollback=True)
+        raise
+    db_transactions.finish_isolation(conn, checkpoint, rollback=not started)
+    return started
 
 
 def record_publish_result(
@@ -836,6 +817,8 @@ def record_publish_result(
     )
     if db_records.first(db_read_projections.find_for_transition(conn))[0] != 1:
         return False
+    if new_status in TERMINAL_REMEDIATION_STATUSES:
+        db_write_repair_cycles.close_episode_cycle(conn, episode_id=episode_id, reason=reason, now=now)
     _audit_transition(
         conn,
         episode,

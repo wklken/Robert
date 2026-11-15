@@ -74,14 +74,14 @@ class CutoverRecoveryFixture(unittest.TestCase):
     def github_item(self):
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
-                "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,state) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open')"
+                "INSERT INTO sources(source_id,repo_id,source_key,source_type,number,html_url,state, provider, host, project_key, external_id) VALUES('source','repo','github:x/y#205','issue',205,'https://github.com/x/y/issues/205','open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo'), '205')"
             )
             conn.execute("UPDATE workstreams SET primary_source_id='source' WHERE workstream_id='bad'")
             conn.execute(
                 "UPDATE work_items SET origin_type='github',origin_source_id='source' WHERE work_item_id='item'"
             )
             conn.execute(
-                "INSERT INTO github_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','assigned','assignment:205',?,?)",
+                "INSERT INTO source_events(event_id,repo_id,source_id,event_type,event_fingerprint,payload_json,event_at) VALUES('event','repo','source','assigned','assignment:205',?,?)",
                 (json.dumps({"event_type": "assigned", "number": 205}), self.now),
             )
             conn.execute(

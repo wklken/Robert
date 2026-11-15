@@ -58,17 +58,22 @@ class PublicationFixture(SummaryFixture):
                 """
                 INSERT INTO pr_remediation_episodes(
                   episode_id, workstream_id, episode_kind, subject_key,
-                  observed_head_sha, observed_base_sha, status, attempt_count,
+                  observed_head_sha, observed_base_sha, status,
                   failure_signature, first_seen_at, updated_at, last_task_id,
                   metadata_json
                 )
                 VALUES (
                   'episode-ci', 'ws-1', 'ci', 'head-1',
-                  'head-1', 'base-1', 'remediating', 1,
+                  'head-1', 'base-1', 'remediating',
                   'failure-1', ?, ?, 'task-1', '{"pr_number":42}'
                 )
                 """,
                 (now, now),
+            )
+            conn.execute(
+                "INSERT INTO repair_cycles(cycle_id,scope,episode_id,started_at,status,legacy_attempt_count,created_at,updated_at)"
+                " VALUES('episode-ci','github','episode-ci',?,'active',1,?,?)",
+                (now, now, now),
             )
             conn.execute(
                 """

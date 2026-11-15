@@ -350,8 +350,8 @@ repos:
             )
             conn.execute(
                 """
-                INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, html_url, title, state, author_login)
-                VALUES (?, 'repo:example/backend', ?, 'pull_request', ?, ?, 'Fix compatibility bug', 'open', 'robert-bot')
+                INSERT INTO sources(source_id, repo_id, source_key, source_type, number, html_url, title, state, author_login, provider, host, project_key, external_id)
+                VALUES (?, 'repo:example/backend', ?, 'pull_request', ?, ?, 'Fix compatibility bug', 'open', 'robert-bot', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo:example/backend'), CAST(?3 AS TEXT))
                 """,
                 (
                     source_id,

@@ -80,7 +80,8 @@ class CyclePublicationTests(RepositoryCycleFixture):
         calls = []
         original_publish = publish.publish_ready_actions
 
-        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None):
+        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None, *, provider=None):
+            self.assertEqual(provider, "github")
             calls.append((str(db_path), dry_run))
             return {
                 "ok": True,
@@ -215,7 +216,8 @@ class CyclePublicationTests(RepositoryCycleFixture):
 
         original_publish = publish.publish_ready_actions
 
-        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None):
+        def fake_publish_ready_actions(db_path, dry_run=False, repo_id=None, config=None, *, provider=None):
+            self.assertEqual(provider, "github")
             with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute(
                     """
@@ -254,7 +256,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
             ).fetchone()[0]
             workstream = conn.execute("SELECT lifecycle, active_task_id FROM workstreams").fetchone()
             relationship = conn.execute(
-                "SELECT relationship FROM task_events WHERE task_id = ?",
+                "SELECT state FROM request_events WHERE task_id = ?",
                 (task_id,),
             ).fetchone()[0]
             publish_step = json.loads(
@@ -312,7 +314,8 @@ class CyclePublicationTests(RepositoryCycleFixture):
 
         original_publish = publish.publish_ready_actions
 
-        def fake_publish_ready_actions(_db_path, dry_run=False, repo_id=None, config=None):
+        def fake_publish_ready_actions(_db_path, dry_run=False, repo_id=None, config=None, *, provider=None):
+            self.assertEqual(provider, "github")
             return {
                 "ok": False,
                 "status": "publish_failed",
@@ -445,7 +448,7 @@ class CyclePublicationTests(RepositoryCycleFixture):
                 task_id = f"task:{repo_id}"
                 result_id = f"result:{repo_id}"
                 conn.execute(
-                    "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number) VALUES (?, ?, ?, 'issue', 1)",
+                    "INSERT INTO sources(source_id, repo_id, source_key, source_type, number, provider, host, project_key, external_id) VALUES (?, ?, ?, 'issue', 1, 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id=?2), '1')",
                     (source_id, repo_id, workstream_id),
                 )
                 conn.execute(

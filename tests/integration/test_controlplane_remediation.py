@@ -166,6 +166,7 @@ class ControlplaneRemediationTests(unittest.TestCase):
                     "attempt_id": attempt,
                     "task_id": "task",
                     "_result_contract": "compact-v1",
+                    "_normalizer_version": 1,
                     "_submission_fingerprint": "semantic",
                 }
                 record = {

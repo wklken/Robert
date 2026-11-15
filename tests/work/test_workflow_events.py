@@ -198,7 +198,7 @@ class WorkflowEventApplicationTests(WorkflowEventApplicationFixture):
         self._bind()
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, state) VALUES ('source-1', 'repo-1', 'github:example/repo!7', 'pull_request', 7, 'open')"
+                "INSERT INTO sources(source_id, repo_id, source_key, source_type, number, state, provider, host, project_key, external_id) VALUES ('source-1', 'repo-1', 'github:example/repo!7', 'pull_request', 7, 'open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '7')"
             )
             result = source_lifecycle.record_remote_terminal_state(
                 conn,
@@ -233,7 +233,7 @@ class WorkflowEventApplicationTests(WorkflowEventApplicationFixture):
     def test_remote_terminal_reconciliation_targets_episode_not_child_task(self):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, state) VALUES ('source-1', 'repo-1', 'github:example/repo!7', 'pull_request', 7, 'open')"
+                "INSERT INTO sources(source_id, repo_id, source_key, source_type, number, state, provider, host, project_key, external_id) VALUES ('source-1', 'repo-1', 'github:example/repo!7', 'pull_request', 7, 'open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '7')"
             )
             conn.execute(
                 "INSERT INTO pr_remediation_episodes(episode_id, workstream_id, episode_kind, subject_key, observed_head_sha, observed_base_sha, status, first_seen_at, updated_at, last_task_id) VALUES ('episode-1', 'ws-1', 'ci', 'example/repo!7', ?, ?, 'remediating', ?, ?, 'task-2')",

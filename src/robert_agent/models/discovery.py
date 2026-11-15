@@ -1,6 +1,6 @@
 """GitHub discovery cache, scan state and child records."""
 
-from sqlalchemy import Index, Integer, REAL, text, Text
+from sqlalchemy import ForeignKey, Index, Integer, REAL, text, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from robert_agent.models.base import Base
@@ -52,3 +52,36 @@ class GitHubScanRead(Base):
     command_key: Mapped[str] = mapped_column(Text, primary_key=True)
     response_json: Mapped[str | None] = mapped_column(Text)
     observed_at: Mapped[float] = mapped_column(REAL)
+
+
+class TapdDiscoveryProgress(Base):
+    __tablename__ = "tapd_discovery_progress"
+
+    probe_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    attempted_at: Mapped[str] = mapped_column(Text)
+    completed_at: Mapped[str | None] = mapped_column(Text)
+    attention_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class TapdObservationProgress(Base):
+    __tablename__ = "tapd_observation_progress"
+
+    source_id: Mapped[str] = mapped_column(Text, ForeignKey("sources.source_id", ondelete="CASCADE"), primary_key=True)
+    attempted_at: Mapped[str] = mapped_column(Text)
+    completed_at: Mapped[str | None] = mapped_column(Text)
+    attention_reason: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (Index("idx_tapd_observation_progress_attempted", "attempted_at", "source_id"),)
+
+
+class TapdCoordination(Base):
+    __tablename__ = "tapd_coordination"
+
+    source_id: Mapped[str] = mapped_column(Text, ForeignKey("sources.source_id", ondelete="CASCADE"), primary_key=True)
+    updated_at: Mapped[str] = mapped_column(Text)
+    next_due_at: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
+    round_id: Mapped[str | None] = mapped_column(Text, ForeignKey("source_rounds.round_id"))
+
+    __table_args__ = (Index("idx_tapd_coordination_updated", "updated_at", "source_id"),)

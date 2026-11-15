@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from robert_agent.adapters.github import client as github_client
+from robert_agent.adapters.github.discussion import issue_comment_body, issue_comment_fields
 import argparse
 import hashlib
 import json
@@ -11,7 +12,7 @@ from pathlib import Path
 from robert_agent.foundation.commands import emit
 
 
-SOURCE_CONTEXT_VERSION = 4
+SOURCE_CONTEXT_VERSION = 5
 
 
 def _body_context(raw, *, legacy_empty_unknown=False):
@@ -685,30 +686,14 @@ def _comment_to_raw(raw, comment, event_type="comment", repo_config=None, runner
         permission = _actor_permission(repo_config, actor_login, runner)
     provenance = {}
     if event_type == "comment":
-        # REST preserves the original author after another collaborator edits it.
-        # GraphQL returns body and its editor in one observation.
-        created = comment.get("created_at")
-        updated = comment.get("updated_at")
-        provenance["body_authorization_complete"] = not (updated and created and updated != created)
         node_id = comment.get("node_id")
-        if node_id and runner:
-            query = "query($id:ID!){node(id:$id){... on IssueComment{id body author{login} editor{login} lastEditedAt updatedAt}}}"
-            response = github_client.try_read_json(
-                ["gh", "api", "graphql", "-f", f"query={query}", "-f", f"id={node_id}"], runner=runner
-            )
-            node = ((response or {}).get("data") or {}).get("node") if isinstance(response, dict) else None
-            provenance["body_authorization_complete"] = False
-            if isinstance(node, dict) and node.get("id") == node_id and isinstance(node.get("body"), str):
-                author = _login(node, "author")
-                editor = _login(node, "editor")
-                actor_login = editor if node.get("lastEditedAt") else author
-                comment = {**comment, "body": node["body"], "updated_at": node.get("updatedAt")}
-                provenance.update(
-                    body_authorization_complete=bool(actor_login),
-                    body_author_login=author,
-                    body_editor_login=editor,
-                    body_edited_at=node.get("lastEditedAt"),
-                )
+        lookup = bool(node_id and runner)
+        response = (
+            github_client.try_read_json(["gh", "api", "graphql", *issue_comment_fields(node_id)], runner=runner)
+            if lookup
+            else None
+        )
+        comment, actor_login, provenance = issue_comment_body(comment, response, lookup=lookup)
     event_id = comment.get("id") or raw.get("id")
     enriched = {
         **raw,
@@ -723,6 +708,16 @@ def _comment_to_raw(raw, comment, event_type="comment", repo_config=None, runner
         "body_updated_at": comment.get("updated_at") or comment.get("created_at") or comment.get("submitted_at"),
         "event_at": comment.get("created_at") or comment.get("submitted_at") or raw.get("event_at"),
     }
+    enriched.pop("github_discussion_item", None)
+    if comment.get("id") and comment.get("html_url"):
+        enriched["github_discussion_item"] = {
+            "id": comment["id"],
+            "url": comment["html_url"],
+            "author": user.get("login"),
+            "author_type": user.get("type"),
+            "created_at": comment.get("created_at") or comment.get("submitted_at"),
+            "updated_at": comment.get("updated_at") or comment.get("submitted_at") or comment.get("created_at"),
+        }
     if comment.get("id"):
         enriched["event_fingerprint"] = event_fingerprint(event_type, comment["id"])
     return enriched

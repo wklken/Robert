@@ -1,75 +1,35 @@
-"""Shared stores operations for task_events."""
+"""Task-event bindings and their task-local ledger admission."""
 
-from robert_agent.persistence.expressions import sql_constant
-
-from sqlalchemy import select, update, bindparam, and_, LABEL_STYLE_NONE
 from sqlalchemy.dialects.sqlite import insert
 
-
-from robert_agent.persistence.catalog import tables
+from robert_agent.foundation.contracts.work import RequestEventState
 from robert_agent.persistence import statements
+from robert_agent.persistence.catalog import tables
+from robert_agent.persistence.stores.request_events import record_task_event
 
 
-def insert_for_append_event_to_active_task(conn, task_id, value_2, relationship, run_now):
-    stmt = (
-        insert(tables["task_events"])
-        .values(
-            {
-                "task_id": bindparam("p0"),
-                "event_id": bindparam("p1"),
-                "relationship": bindparam("p2"),
-                "created_at": bindparam("p3"),
-            }
-        )
-        .prefix_with("OR IGNORE", dialect="sqlite")
-    )
-    return statements.write(conn, stmt, {"p0": task_id, "p1": value_2, "p2": relationship, "p3": run_now})
+def bind_task_event(conn, task_id, event_id, relationship, created_at, *, ignore_duplicate=False):
+    """Bind the trigger or context actually supplied to a task."""
+    binding = tables["task_events"]
+    stmt = insert(binding).values(task_id=task_id, event_id=event_id, relationship=relationship, created_at=created_at)
+    if ignore_duplicate:
+        stmt = stmt.on_conflict_do_nothing(index_elements=[binding.c.task_id, binding.c.event_id])
+    return statements.write(conn, stmt)
 
 
-def mark_consumed_events(conn, task_id, fingerprint):
-    query1 = (
-        select(tables["github_events"].c["event_id"])
-        .select_from(tables["github_events"])
-        .where((tables["github_events"].c["event_fingerprint"] == bindparam("p1")))
-        .correlate_except(tables["github_events"])
-        .set_label_style(LABEL_STYLE_NONE)
-    )
-    stmt = (
-        update(tables["task_events"])
-        .values({"relationship": sql_constant("consumed")})
-        .where(
-            and_(
-                (tables["task_events"].c["task_id"] == bindparam("p0")),
-                tables["task_events"].c["event_id"].in_(query1),
-            )
-        )
-    )
-    return statements.write(conn, stmt, {"p0": task_id, "p1": fingerprint})
+def append_task_event(conn, task_id, event_id, relationship, now):
+    if relationship == "context":
+        return bind_task_event(conn, task_id, event_id, relationship, now, ignore_duplicate=True)
+    if relationship != "pending":
+        raise ValueError("Appended task events must be context or pending")
+    # A previously bound event was ignored by legacy admission. In particular
+    # rediscovery cannot requeue a result or promote an existing context.
+    if bind_task_event(conn, task_id, event_id, "context", now, ignore_duplicate=True):
+        return record_task_event(conn, task_id, event_id, RequestEventState.PENDING, now)
+    return 0
 
 
-def insert_for_resume_waiting_vote(conn, value_1, value_2, run_now):
-    stmt = (
-        insert(tables["task_events"])
-        .values(
-            {
-                "task_id": bindparam("p0"),
-                "event_id": bindparam("p1"),
-                "relationship": sql_constant("consumed"),
-                "created_at": bindparam("p2"),
-            }
-        )
-        .prefix_with("OR IGNORE", dialect="sqlite")
-    )
-    return statements.write(conn, stmt, {"p0": value_1, "p1": value_2, "p2": run_now})
-
-
-def insert_for_create_task_attempt_and_prompt(conn, task_id, value_2, relationship, run_now):
-    stmt = insert(tables["task_events"]).values(
-        {
-            "task_id": bindparam("p0"),
-            "event_id": bindparam("p1"),
-            "relationship": bindparam("p2"),
-            "created_at": bindparam("p3"),
-        }
-    )
-    return statements.write(conn, stmt, {"p0": task_id, "p1": value_2, "p2": relationship, "p3": run_now})
+def record_waiting_vote_reply(conn, task_id, event_id, now):
+    if bind_task_event(conn, task_id, event_id, "context", now, ignore_duplicate=True):
+        return record_task_event(conn, task_id, event_id, RequestEventState.CONSUMED, now, consumed_at=now)
+    return 0

@@ -31,11 +31,11 @@ class WorkflowOperationsTests(unittest.TestCase):
             )
             conn.execute(
                 """
-                INSERT INTO github_sources(
+                INSERT INTO sources(
                   source_id, repo_id, source_key, source_type, number,
                   title, state
-                ) VALUES ('source-1', 'repo-1', 'github:example/repo#1',
-                          'issue', 1, 'Request', 'open')
+                , provider, host, project_key, external_id) VALUES ('source-1', 'repo-1', 'github:example/repo#1',
+                          'issue', 1, 'Request', 'open', 'github', 'github.com', (SELECT full_name FROM repos WHERE repo_id='repo-1'), '1')
                 """
             )
             conn.execute(
@@ -194,7 +194,7 @@ class MigratedSubjectClaimTests(unittest.TestCase):
               routing_mode TEXT NOT NULL DEFAULT 'auto',
               requested_worker TEXT
             );
-            CREATE TABLE github_events (event_id TEXT PRIMARY KEY);
+            CREATE TABLE source_events (event_id TEXT PRIMARY KEY);
             """
         )
         storage._migrate_pr_remediation(self.conn)

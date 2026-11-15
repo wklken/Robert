@@ -3,7 +3,8 @@ import json
 import sqlite3
 
 from robert_agent.persistence import database
-from robert_agent.work.application import dispatch_delivery
+from robert_agent.foundation import values
+from robert_agent.work.application import dispatch_delivery, dispatch_ingress
 from tests.support.dispatch_requests import DispatchFixture
 
 
@@ -16,32 +17,38 @@ PR = "https://github.com/example/repo/pull/8"
 class DispatchDeliveryTests(DispatchFixture):
     def setUp(self):
         super().setUp()
-        self.request_id = self.draft()["request_id"]
+        self.request_id = self.create_issue(number=7)
+        self.source_key = "github:example/repo#7"
+        self.fingerprint = f"operator-dispatch:{self.request_id}"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                "INSERT INTO workstreams(workstream_id, repo_id, created_at, updated_at) VALUES ('ws', ?, ?, ?)",
-                (self.repo_id, NOW, NOW),
+                "INSERT INTO workstreams(workstream_id, repo_id, primary_source_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (self.source_key, self.repo_id, values.github_source_id(self.source_key), NOW, NOW),
             )
             conn.execute(
                 "INSERT INTO tasks(task_id, workstream_id, lifecycle, created_at, updated_at) "
-                "VALUES ('task', 'ws', 'completed', ?, ?)",
-                (NOW, NOW),
+                "VALUES ('task', ?, 'completed', ?, ?)",
+                (self.source_key, NOW, NOW),
             )
             conn.execute(
                 "INSERT INTO attempts(attempt_id, task_id, attempt_no, status) VALUES ('attempt', 'task', 1, 'completed')"
             )
             conn.execute(
-                "UPDATE dispatch_requests SET status = 'admitted', workstream_id = 'ws', task_id = 'task', issue_json = ? "
-                "WHERE request_id = ?",
-                (json.dumps({"number": 7, "html_url": ISSUE}), self.request_id),
+                "UPDATE dispatch_requests SET status = 'admitted', task_id = 'task' WHERE request_id = ?",
+                (self.request_id,),
+            )
+            conn.execute(
+                "INSERT INTO task_events(task_id,event_id,relationship,created_at) VALUES('task', ?, 'trigger', ?)",
+                (values.github_event_id(self.fingerprint), NOW),
             )
 
     def _result(self, output):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                "INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, handoff, created_at) "
-                "VALUES ('result', 'task', 'attempt', ?, 'Startup trace analyzed.', ?)",
-                (output, NOW),
+                "INSERT INTO worker_results(result_id, task_id, attempt_id, output_type, handoff, created_at, "
+                "consumed_event_fingerprints_json, metadata_json) "
+                "VALUES ('result', 'task', 'attempt', ?, 'Startup trace analyzed.', ?, ?, ?)",
+                (output, NOW, json.dumps([self.fingerprint]), json.dumps({"audit": {"status": "accepted"}})),
             )
 
     def _action(self, action_id, kind, url, *, published=True, receipt=True, receipt_action_id=None):
@@ -72,6 +79,7 @@ class DispatchDeliveryTests(DispatchFixture):
 
     def _complete(self):
         with closing(database.connect(self.db_path)) as conn, conn:
+            dispatch_ingress.recover_confirmed(conn, self.config, self.repo_id, values.utc_now())
             dispatch_delivery.complete(conn, [self.repo_id], NOW)
 
     def _notices(self):

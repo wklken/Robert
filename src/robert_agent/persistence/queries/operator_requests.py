@@ -15,7 +15,7 @@ def pending_tasks(conn, repo_ids=(), task_id=None):
     table3 = tables["repos"].alias("r")
     table4 = tables["wakeups"].alias("wu")
     table5 = tables["work_items"].alias("wi")
-    table6 = tables["github_sources"].alias("gs")
+    table6 = tables["sources"].alias("gs")
     table8 = tables["attempts"].alias("a")
     query9 = (
         select(sql_constant(1))

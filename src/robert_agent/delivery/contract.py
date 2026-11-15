@@ -1,8 +1,14 @@
-"""The sole worker submission contract and deterministic result normalization."""
+"""Compact Worker submission normalization and shared result protocol helpers."""
 
 from robert_agent.context.memory_policy import memory_delta_error, redact_memory_delta
 
-from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType, ReviewAction, VerificationStatus
+from robert_agent.foundation.contracts.delivery import (
+    GitHubActionType,
+    NATIVE_RESULT_CONTRACT,
+    OutputType,
+    ReviewAction,
+    VerificationStatus,
+)
 from robert_agent.foundation.contracts.work import TaskKind
 
 from robert_agent.delivery import policies
@@ -13,6 +19,7 @@ import re
 
 CONTRACT_ID = "compact-v1"
 NORMALIZER_VERSION = 3
+NORMALIZER_VERSIONS = {CONTRACT_ID: NORMALIZER_VERSION, NATIVE_RESULT_CONTRACT: 1}
 OUTPUTS = frozenset(output.value for output in OutputType)
 FIELDS = {
     "planned_github_actions",
@@ -72,10 +79,10 @@ def _require(condition, field, message, code="invalid_submission"):
         raise InvalidSubmission(field, message, code)
 
 
-def validate_submission(submission, output_type, origin_type):
+def validate_submission(submission, output_type, origin_type, *, native=False):
     _require(output_type in OUTPUTS, "output_type", "Unsupported output type.")
     _require(isinstance(submission, dict), "result", "Submission must be an object.")
-    unknown = set(submission) - FIELDS
+    unknown = set(submission) - (FIELDS - {"planned_github_actions"} if native else FIELDS)
     _require(
         not unknown,
         "result",
@@ -83,7 +90,7 @@ def validate_submission(submission, output_type, origin_type):
         "program_owned_field",
     )
     consumed = "consumed_work_item_event_ids" if origin_type == "web" else "consumed_event_fingerprints"
-    for field in ("planned_github_actions", "used_skills", "verification", consumed):
+    for field in ("used_skills", "verification", consumed, *(() if native else ("planned_github_actions",))):
         _require(
             field in submission and isinstance(submission[field], list),
             field,
@@ -104,7 +111,7 @@ def validate_submission(submission, output_type, origin_type):
     for field in ("handoff", "recommended_route", "branch_slug"):
         if field in submission:
             _require(isinstance(submission[field], str), field, field + " must be a string.")
-    for index, action in enumerate(submission["planned_github_actions"]):
+    for index, action in enumerate(submission.get("planned_github_actions", [])):
         field = f"planned_github_actions[{index}]"
         _require(
             isinstance(action, dict) and isinstance(action.get("type"), str) and action["type"] in ACTION_FIELDS,
@@ -147,7 +154,7 @@ def validate_submission(submission, output_type, origin_type):
                 field + ".title",
                 "PR title is required.",
             )
-    types = [action["type"] for action in submission["planned_github_actions"]]
+    types = [action["type"] for action in submission.get("planned_github_actions", [])]
     if output_type in {OutputType.CLASSIFICATION_RESULT, OutputType.LOCAL_RESULT}:
         _require(
             not types,
@@ -160,7 +167,7 @@ def validate_submission(submission, output_type, origin_type):
             "planned_github_actions",
             "A PR review requires exactly one comment.",
         )
-    if output_type == OutputType.WAITING_FOR_USER:
+    if output_type == OutputType.WAITING_FOR_USER and not native:
         _require(
             not types
             if origin_type == "web"
@@ -357,9 +364,17 @@ def validate_submission(submission, output_type, origin_type):
     return submission
 
 
-def semantic_fingerprint(envelope):
+def supports_normalizer(contract_id, version):
+    if not isinstance(contract_id, str) or type(version) is not int:
+        return False
+    if contract_id == CONTRACT_ID:
+        return 1 <= version <= NORMALIZER_VERSION
+    return NORMALIZER_VERSIONS.get(contract_id) == version
+
+
+def semantic_fingerprint(envelope, contract_id=CONTRACT_ID):
     data = {
-        "contract": CONTRACT_ID,
+        "contract": contract_id,
         "task_id": envelope["task_id"],
         "attempt_id": envelope["attempt_id"],
         "output_type": envelope["output_type"],

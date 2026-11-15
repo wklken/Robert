@@ -18,8 +18,6 @@ def _count(table, *criteria):
 def database_totals(conn):
     names = (
         "repos",
-        "github_sources",
-        "github_events",
         "workstreams",
         "tasks",
         "attempts",
@@ -28,7 +26,17 @@ def database_totals(conn):
         "notifications",
         "agent_runs",
     )
-    query = select(*(_count(tables[name]).label(name) for name in names))
+    source, event = tables["sources"], tables["source_events"]
+    github = source.c.provider == sql_constant("github")
+    query = select(
+        *(_count(tables[name]).label(name) for name in names),
+        _count(source, github).label("github_sources"),
+        select(func.count())
+        .select_from(event.join(source, source.c.source_id == event.c.source_id))
+        .where(github)
+        .scalar_subquery()
+        .label("github_events"),
+    )
     return dict(statements.read(conn, query)[0])
 
 

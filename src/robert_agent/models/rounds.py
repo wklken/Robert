@@ -3,6 +3,7 @@
 from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     text,
@@ -132,4 +133,51 @@ class ReviewProcessPool(Base):
     __table_args__ = (
         CheckConstraint("singleton=1"),
         CheckConstraint("max_concurrency>0"),
+    )
+
+
+class SourceModelRun(Base):
+    __tablename__ = "source_model_runs"
+
+    run_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    round_id: Mapped[str] = mapped_column(Text)
+    request_id: Mapped[str] = mapped_column(Text)
+    stage: Mapped[str] = mapped_column(Text)
+    worker_id: Mapped[str] = mapped_column(Text)
+    input_version: Mapped[str] = mapped_column(Text)
+    prompt_sha256: Mapped[str] = mapped_column(Text)
+    input_packet_json: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    slot_reserved: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    launch_id: Mapped[str | None] = mapped_column(Text, unique=True)
+    launch_token: Mapped[int | None] = mapped_column(Integer)
+    dispatch_json: Mapped[str | None] = mapped_column(Text)
+    output_json: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    exit_json: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["round_id", "request_id"], ["source_round_requests.round_id", "source_round_requests.request_id"]
+        ),
+        CheckConstraint("stage IN ('identify','synthesis')"),
+        CheckConstraint("status IN ('waiting','starting','running','succeeded','failed','interrupted')"),
+        CheckConstraint("slot_reserved IN (0,1)"),
+        CheckConstraint("slot_reserved = (status IN ('starting','running'))"),
+        CheckConstraint("(launch_id IS NULL) = (launch_token IS NULL)"),
+        CheckConstraint("dispatch_json IS NULL OR launch_id IS NOT NULL"),
+        CheckConstraint("status <> 'running' OR dispatch_json IS NOT NULL"),
+        CheckConstraint("(status IN ('succeeded','failed','interrupted')) = (exit_json IS NOT NULL)"),
+        CheckConstraint("(status = 'succeeded') = (output_json IS NOT NULL)"),
+        Index("idx_source_model_runs_round", "round_id", "created_at", "run_id"),
+        Index("idx_source_model_runs_reserved", "slot_reserved", sqlite_where=text("slot_reserved=1")),
+        Index(
+            "idx_source_model_runs_active",
+            "round_id",
+            unique=True,
+            sqlite_where=text("status IN ('waiting','starting','running')"),
+        ),
     )

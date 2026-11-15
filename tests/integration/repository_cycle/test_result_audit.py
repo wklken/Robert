@@ -221,7 +221,7 @@ class CycleResultAuditTests(RepositoryCycleFixture):
             repo_id, source_id = conn.execute("SELECT repo_id, primary_source_id FROM workstreams").fetchone()
             conn.execute(
                 """
-                INSERT INTO github_events(
+                INSERT INTO source_events(
                   event_id, repo_id, source_id, event_fingerprint, event_type,
                   actor_login, authorization_status, event_at, payload_json
                 ) VALUES (?, ?, ?, ?, 'comment', 'wklken',

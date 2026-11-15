@@ -70,7 +70,7 @@ class RetryPreparationTests(RepositoryCycleFixture):
                 """
                 SELECT te.relationship, ge.event_fingerprint
                 FROM task_events te
-                JOIN github_events ge ON ge.event_id = te.event_id
+                JOIN source_events ge ON ge.event_id = te.event_id
                 WHERE te.task_id = ?
                 ORDER BY te.relationship, ge.event_at
                 """,
@@ -146,7 +146,7 @@ class RetryPreparationTests(RepositoryCycleFixture):
                 """
                 SELECT te.relationship, ge.event_fingerprint
                 FROM task_events te
-                JOIN github_events ge ON ge.event_id = te.event_id
+                JOIN source_events ge ON ge.event_id = te.event_id
                 WHERE te.task_id = ?
                 ORDER BY CASE te.relationship WHEN 'trigger' THEN 0 ELSE 1 END, ge.event_at
                 """,

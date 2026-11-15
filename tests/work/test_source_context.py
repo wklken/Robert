@@ -70,7 +70,7 @@ class SourceContextTests(unittest.TestCase):
             for event in events:
                 source_events.insert_source_and_event(conn, values.repository_id(REPO["full_name"]), event, NEW)
             return json.loads(
-                conn.execute("SELECT payload_json FROM github_events WHERE event_fingerprint='assigned:70'").fetchone()[
+                conn.execute("SELECT payload_json FROM source_events WHERE event_fingerprint='assigned:70'").fetchone()[
                     0
                 ]
             )
@@ -256,7 +256,7 @@ class SourceContextTests(unittest.TestCase):
         self.assertIn(BODY, prompt)
         with closing(sqlite3.connect(fixture.data_dir / "dd.sqlite3")) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
-            payload = json.loads(conn.execute("SELECT payload_json FROM github_events").fetchone()[0])
+            payload = json.loads(conn.execute("SELECT payload_json FROM source_events").fetchone()[0])
         self.assertEqual(payload["actor_login"], "wklken")
         self.assertEqual(payload["event_type"], "assigned")
         self.assertEqual(payload["authorization_status"], "authorized_trigger")

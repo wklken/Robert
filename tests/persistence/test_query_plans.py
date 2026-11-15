@@ -17,21 +17,25 @@ from robert_agent.persistence.schema.database import init_database
 class NotificationQueryPlanTests(unittest.TestCase):
     def test_cached_readiness_uses_current_repository_and_time_parameters(self):
         fixture = Path(__file__).parents[1] / "fixtures/persistence/pre_orm_5e0e952.sql"
-        with closing(sqlite3.connect(":memory:")) as conn:
-            conn.executescript(fixture.read_text())
-            conn.execute(
-                "UPDATE attempts SET metadata_json=json_set(metadata_json, '$.resume.not_before_at', ?)",
-                ("2026-11-08T00:00:00+00:00",),
-            )
-            for repos, now, expected in (
-                (["repo:example/backend"], "2026-11-09T00:00:00+00:00", True),
-                (["missing"], "2026-11-09T00:00:00+00:00", False),
-                (["repo:example/backend"], "2026-11-07T00:00:00+00:00", False),
-                ([], "2026-11-09T00:00:00+00:00", True),
-                ([], "2026-11-07T00:00:00+00:00", False),
-            ):
-                with self.subTest(repos=repos, now=now):
-                    self.assertEqual(bool(attempts.has_local_work_filtered_2(conn, repos, now)), expected)
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "db.sqlite3"
+            with closing(sqlite3.connect(db)) as conn:
+                conn.executescript(fixture.read_text())
+            init_database(db)
+            with closing(sqlite3.connect(db)) as conn:
+                conn.execute(
+                    "UPDATE attempts SET metadata_json=json_set(metadata_json, '$.resume.not_before_at', ?)",
+                    ("2026-11-08T00:00:00+00:00",),
+                )
+                for repos, now, expected in (
+                    (["repo:example/backend"], "2026-11-09T00:00:00+00:00", True),
+                    (["missing"], "2026-11-09T00:00:00+00:00", False),
+                    (["repo:example/backend"], "2026-11-07T00:00:00+00:00", False),
+                    ([], "2026-11-09T00:00:00+00:00", True),
+                    ([], "2026-11-07T00:00:00+00:00", False),
+                ):
+                    with self.subTest(repos=repos, now=now):
+                        self.assertEqual(bool(attempts.has_local_work_filtered_2(conn, repos, now)), expected)
 
     def test_repeated_lifecycle_reads_reuse_templates_without_caching_values(self):
         fixture = Path(__file__).parents[1] / "fixtures/persistence/pre_orm_5e0e952.sql"

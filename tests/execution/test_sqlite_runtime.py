@@ -186,7 +186,17 @@ class SQLiteRuntimeTests(unittest.TestCase):
         event = json.loads(fixture.fixture_path.read_text())["events"][0]
         fixture.fixture_path.write_text(
             json.dumps(
-                {"events": [{**event, "id": f"acceptance-{number}", "number": 800 + number} for number in range(count)]}
+                {
+                    "events": [
+                        {
+                            **event,
+                            "id": f"acceptance-{number}",
+                            "number": 800 + number,
+                            "url": f"https://github.com/example/backend/issues/{800 + number}",
+                        }
+                        for number in range(count)
+                    ]
+                }
             )
         )
         response = run_once.run_once(

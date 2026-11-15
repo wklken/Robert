@@ -11,6 +11,7 @@ from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import repos as db_read_repos
 from robert_agent.persistence.queries import route_decisions as db_read_route_decisions
 from robert_agent.persistence.queries import task_events as db_read_task_events
+from robert_agent.persistence.queries import source_tasks
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import wakeups as db_read_wakeups
 from robert_agent.persistence.queries import workstreams as db_read_workstreams
@@ -92,7 +93,7 @@ def upsert_route_decision(conn, task_id, route_result, run_now):
 
 def refresh_prepared_task(conn, data_dir, db_path, repo, event, run_now, dry_run, config_result=None):
     state = source_events.active_task_state(conn, event["workstream_id"])
-    if not state:
+    if not state or source_tasks.has_native_origin(conn, state["task_id"]):
         return None
     # Persist event ingestion before contending with dispatch. No SQLite writer
     # lock may be retained while acquiring the process lock or preparing Git.
@@ -326,6 +327,10 @@ def create_task_attempt_and_prompt(
         ):
             return None
     existing = None
+    if parent_task_id and source_tasks.has_native_origin(conn, parent_task_id):
+        return None
+    if existing_task_id and source_tasks.has_native_origin(conn, existing_task_id):
+        return None
     if existing_task_id:
         existing = db_records.first(
             db_read_tasks.find_for_create_task_attempt_and_prompt(conn, existing_task_id, stream["workstream_id"])
@@ -432,6 +437,10 @@ def create_task_attempt_and_prompt(
     runtime_context = attempt_context.runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
 
+    episode_id = remediation_context.get("episode_id")
+    repair_checkpoint = "prepare_remediation_task" if episode_id and not blocked else None
+    if repair_checkpoint:
+        db_transactions.savepoint(conn, repair_checkpoint)
     db_write_workstreams.insert_for_create_task_attempt_and_prompt(
         conn, workstream_id, repo_id, source_id, lifecycle, task_id, run_now, run_now
     )
@@ -525,9 +534,20 @@ def create_task_attempt_and_prompt(
             json.dumps(task_metadata, ensure_ascii=False, sort_keys=True),
         )
     if not execution_ownership.claim_task(conn, task_id, run_now):
-        if not existing:
+        if repair_checkpoint:
+            db_transactions.finish_isolation(conn, repair_checkpoint, rollback=True)
+        elif not existing:
             db_write_tasks.delete_for_create_task_attempt_and_prompt(conn, task_id)
         return None
+    if repair_checkpoint:
+        policy_key = "conflict" if task["task_kind"] == TaskKind.MERGE_CONFLICT_REMEDIATION.value else "ci"
+        policy = (repo.get("pr_automation") or {}).get(policy_key)
+        if not remediation.record_task_started(
+            conn, episode_id=episode_id, task_id=task_id, now=run_now, policy=policy
+        ):
+            db_transactions.finish_isolation(conn, repair_checkpoint, rollback=True)
+            return None
+        db_transactions.release(conn, repair_checkpoint)
     if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
         round_store = vote_store if route_result.get("native_vote_workers") else review_store
         workers = route_result.get("native_vote_workers") or route_result["native_review_workers"]
@@ -562,7 +582,7 @@ def create_task_attempt_and_prompt(
         execution_ownership.close_terminal_task(conn, task_id, run_now)
     for index, related_event in enumerate(related_events):
         relationship = "trigger" if index == 0 else "context"
-        db_write_task_events.insert_for_create_task_attempt_and_prompt(
+        db_write_task_events.bind_task_event(
             conn, task_id, values.github_event_id(related_event["event_fingerprint"]), relationship, run_now
         )
     db_write_route_decisions.insert_for_upsert_route_decision(
@@ -621,13 +641,6 @@ def create_task_attempt_and_prompt(
             reason="required_route_skills_missing",
             now=run_now,
         )
-    if not blocked and remediation_context.get("episode_id"):
-        remediation.record_task_started(
-            conn,
-            episode_id=remediation_context["episode_id"],
-            task_id=task_id,
-            now=run_now,
-        )
     return {
         "task_id": task_id,
         "attempt_id": attempt_id,
@@ -681,6 +694,8 @@ def create_resume_attempt_and_prompt(
     *,
     config_result=None,
 ):
+    if source_tasks.has_native_origin(conn, task_id):
+        return None
     if recovery_context.get("reason_code") == "review_revision_changed":
         return _restart_changed_review(
             conn,
