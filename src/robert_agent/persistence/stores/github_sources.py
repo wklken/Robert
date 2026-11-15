@@ -185,3 +185,63 @@ def record_current_state_closed_source(conn, value_1, value_2, value_3, value_4,
         stmt,
         {"p0": value_1, "p1": value_2, "p2": value_3, "p3": value_4, "p4": source_id},
     )
+
+
+def upsert_tapd_source(
+    conn,
+    source_id,
+    repo_id,
+    source_key,
+    source_type,
+    project_key,
+    external_id,
+    html_url,
+    title,
+    state,
+    source_updated_at,
+    metadata_json,
+):
+    table = tables["github_sources"]
+    stmt = insert(table).values(
+        {
+            "source_id": bindparam("p0"),
+            "repo_id": bindparam("p1"),
+            "source_key": bindparam("p2"),
+            "source_type": bindparam("p3"),
+            "provider": sql_constant("tapd"),
+            "project_key": bindparam("p4"),
+            "external_id": bindparam("p5"),
+            "html_url": bindparam("p6"),
+            "title": bindparam("p7"),
+            "state": bindparam("p8"),
+            "source_updated_at": bindparam("p9"),
+            "metadata_json": bindparam("p10"),
+        }
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["source_key"],
+        set_={
+            "html_url": stmt.excluded["html_url"],
+            "title": stmt.excluded["title"],
+            "state": stmt.excluded["state"],
+            "source_updated_at": stmt.excluded["source_updated_at"],
+            "metadata_json": func.json_patch(table.c["metadata_json"], stmt.excluded["metadata_json"]),
+        },
+    )
+    return statements.write(
+        conn,
+        stmt,
+        {
+            "p0": source_id,
+            "p1": repo_id,
+            "p2": source_key,
+            "p3": source_type,
+            "p4": project_key,
+            "p5": external_id,
+            "p6": html_url,
+            "p7": title,
+            "p8": state,
+            "p9": source_updated_at,
+            "p10": metadata_json,
+        },
+    )

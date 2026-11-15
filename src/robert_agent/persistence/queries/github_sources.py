@@ -2,7 +2,9 @@
 
 from functools import cache
 
+from robert_agent.foundation.contracts.work import WorkstreamLifecycle
 from robert_agent.persistence.expressions import sql_constant
+from robert_agent.persistence.queries import github_events as event_queries
 
 from sqlalchemy import (
     select,
@@ -146,12 +148,66 @@ def find_for_sources_for_workstream(conn, workstream_id, workstream_id_2):
     )
     query5 = union(query3, query4)
     query2 = (
-        select(table1.c["source_type"], table1.c["number"])
+        select(
+            table1.c["source_type"],
+            table1.c["number"],
+            table1.c["provider"],
+            table1.c["project_key"],
+            table1.c["external_id"],
+        )
         .distinct()
         .select_from(table1)
         .where(table1.c["source_id"].in_(query5))
-        .order_by(table1.c["source_type"].asc(), table1.c["number"].asc())
+        .order_by(table1.c["source_type"].asc(), table1.c["number"].asc(), table1.c["external_id"].asc())
         .correlate_except(table1)
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query2, {"p0": workstream_id, "p1": workstream_id_2})
+
+
+def find_tapd_tracked_sources(conn, project_key):
+    """Open TAPD sources whose workstream, work item or request is still unfinished."""
+    source = tables["github_sources"].alias("gs")
+    workstream = tables["workstreams"]
+    work_item = tables["work_items"]
+    active = (
+        select(sql_constant(1))
+        .where(
+            workstream.c["primary_source_id"] == source.c["source_id"],
+            workstream.c["lifecycle"].in_(
+                [
+                    sql_constant(WorkstreamLifecycle.ACTIVE.value),
+                    sql_constant(WorkstreamLifecycle.WAITING_FOR_USER.value),
+                ]
+            ),
+        )
+        .correlate(source)
+    )
+    unfinished = (
+        select(sql_constant(1))
+        .where(
+            work_item.c["origin_source_id"] == source.c["source_id"],
+            work_item.c["completed_at"].is_(None),
+            work_item.c["canceled_at"].is_(None),
+        )
+        .correlate(source)
+    )
+    query = (
+        select(
+            source.c["source_id"],
+            source.c["repo_id"],
+            source.c["source_key"],
+            source.c["source_type"],
+            source.c["external_id"],
+            source.c["metadata_json"],
+        )
+        .where(
+            source.c["provider"] == sql_constant("tapd"),
+            source.c["project_key"] == bindparam("p0"),
+            source.c["state"] == sql_constant("open"),
+            or_(active.exists(), unfinished.exists(), event_queries.tapd_unprocessed_exists(source)),
+        )
+        .order_by(source.c["source_key"].asc())
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    return statements.read(conn, query, {"p0": project_key})

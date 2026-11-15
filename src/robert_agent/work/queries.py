@@ -89,11 +89,10 @@ def remote_source_rows(conn, repo_id):
 
 def sources_for_workstream(conn, workstream_id):
     return [
-        {
-            "source_type": source_type,
-            "number": number,
-        }
-        for source_type, number in db_read_github_sources.find_for_sources_for_workstream(
-            conn, workstream_id, workstream_id
+        {"source_type": source_type, "number": number}
+        if provider == "github"
+        else {"source_type": source_type, "provider": provider, "project_key": project_key, "external_id": external_id}
+        for source_type, number, provider, project_key, external_id in (
+            db_read_github_sources.find_for_sources_for_workstream(conn, workstream_id, workstream_id)
         )
     ]

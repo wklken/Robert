@@ -65,5 +65,9 @@ def source_key(host: str, workspace_id: str, kind: str, external_id: str, reposi
     return f"tapd:{host}/{workspace_id}/{kind}/{external_id}:{repository}"
 
 
+def is_source_key(value) -> bool:
+    return isinstance(value, str) and value.startswith("tapd:")
+
+
 def comment_fingerprint(host: str, workspace_id: str, comment_id: str) -> str:
     return f"tapd-comment:{host}/{workspace_id}/{comment_id}"

@@ -547,6 +547,8 @@ def find_for_remote_source_rows(conn, repo_id):
             table2.c["source_key"],
             table2.c["source_type"],
             table2.c["number"],
+            table2.c["provider"],
+            table2.c["state"],
         )
         .select_from(
             table1.join(

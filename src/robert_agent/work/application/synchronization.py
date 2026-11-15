@@ -21,6 +21,7 @@ from robert_agent.workflows import pr_health
 from robert_agent.persistence.schema import database as storage
 from robert_agent.configuration import command as validate_config
 from robert_agent.foundation.commands import ControlDeadlineExceeded
+from robert_agent.foundation import tapd_identity
 from robert_agent.adapters.github import read as github_read
 from robert_agent.adapters.github import recording as github_recording
 from robert_agent.adapters.github import budget as github_budget
@@ -65,12 +66,17 @@ def scan_repo(config, repo, session, hints):
     recorded = github_recording.RecordingRunner(session)
     with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
         repo_id = work_repositories.upsert_repo(conn, repo)
-        known = work_queries.load_known_workstreams(conn, repo_id)
+        known = {
+            workstream_id
+            for workstream_id in work_queries.load_known_workstreams(conn, repo_id)
+            if not tapd_identity.is_source_key(workstream_id)
+        }
         health_sources = {(row[0], row[1]) for row in db_read_workstreams.find_for_scan_repo(conn, repo_id)}
         sources = list(
             dict.fromkeys(
                 (row[4], row[5], (row[4], row[5]) in health_sources)
                 for row in work_queries.remote_source_rows(conn, repo_id)
+                if row[6] == "github"
             )
         )
         pending_rows = db_read_github_scan_batches.find_for_scan_repo(conn, repo_id)

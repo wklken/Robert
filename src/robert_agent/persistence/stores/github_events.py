@@ -146,3 +146,57 @@ def record_current_state_closed_source(conn, event_id):
         .where((tables["github_events"].c["event_id"] == bindparam("p0")))
     )
     return statements.write(conn, stmt, {"p0": event_id})
+
+
+def insert_tapd_event_if_absent(
+    conn,
+    event_id,
+    repo_id,
+    source_id,
+    event_fingerprint,
+    event_type,
+    actor_login,
+    authorization_status,
+    event_at,
+    payload_json,
+):
+    """Authority is decided at first observation; later edits never rewrite it."""
+    stmt = insert(tables["github_events"]).values(
+        {
+            "event_id": bindparam("p0"),
+            "repo_id": bindparam("p1"),
+            "source_id": bindparam("p2"),
+            "event_fingerprint": bindparam("p3"),
+            "event_type": bindparam("p4"),
+            "actor_kind": sql_constant("tapd_user"),
+            "actor_login": bindparam("p5"),
+            "authorization_status": bindparam("p6"),
+            "event_at": bindparam("p7"),
+            "payload_json": bindparam("p8"),
+        }
+    )
+    stmt = stmt.on_conflict_do_nothing(index_elements=["event_fingerprint"])
+    return statements.write(
+        conn,
+        stmt,
+        {
+            "p0": event_id,
+            "p1": repo_id,
+            "p2": source_id,
+            "p3": event_fingerprint,
+            "p4": event_type,
+            "p5": actor_login,
+            "p6": authorization_status,
+            "p7": event_at,
+            "p8": payload_json,
+        },
+    )
+
+
+def record_tapd_authorization(conn, event_id, authorization_status):
+    stmt = (
+        update(tables["github_events"])
+        .values({"authorization_status": bindparam("p0")})
+        .where(tables["github_events"].c["event_id"] == bindparam("p1"))
+    )
+    return statements.write(conn, stmt, {"p0": authorization_status, "p1": event_id})
