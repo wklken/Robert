@@ -70,7 +70,7 @@ class TapdPromptTests(unittest.TestCase):
         self.assertEqual([entry["comment_id"] for entry in items["tapd-discussion"].content], ["1"])
         self.assertEqual([entry["comment_id"] for entry in items["tapd-prior-results"].content], ["2"])
         self.assertEqual({item.completeness for item in items.values()}, {"complete"})
-        self.assertIn("Code changes are not enabled for TAPD requests", rendered.text)
+        self.assertIn("Keep TAPD out of GitHub", rendered.text)
         self.assertIn("需求描述", rendered.text)
 
     def test_classification_is_limited_to_tapd_routes(self):

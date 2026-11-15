@@ -83,7 +83,7 @@ class TapdAdmissionTests(TapdCycleCase):
         text = prompt.read_text(encoding="utf-8")
         self.assertIn("tapd-request", text)
         self.assertIn("@robert-wklken in body", text)
-        self.assertIn("Code changes are not enabled for TAPD requests", text)
+        self.assertIn("Keep TAPD out of GitHub", text)
 
     def test_published_reply_completes_the_request_and_is_never_a_new_request(self):
         self.scan(comment("1", "<p>@robert-wklken 请分析一下这个需求</p>"))
@@ -216,10 +216,13 @@ class TapdAdmissionTests(TapdCycleCase):
             [("ignored_current_state_closed",)],
         )
 
-    def test_code_change_request_from_tapd_goes_to_classification(self):
-        self.scan(comment("2", "@robert-wklken 请修复这个报错并提交 PR"))
+    def test_code_change_request_from_tapd_opens_a_pull_request_route(self):
+        self.scan(comment("2", "@robert-wklken please fix this bug"))
         self.cycle()
-        self.assertEqual(self.query("SELECT route_id FROM tasks"), [("classification-result",)])
+        self.assertEqual(self.query("SELECT route_id FROM tasks"), [("new-pr",)])
+        ((branch,),) = self.query("SELECT branch_name FROM attempts")
+        self.assertNotIn("1100", branch)
+        self.assertRegex(branch, r"rbt-[0-9a-f]{12}")
 
     def test_request_that_lost_authority_is_recorded_and_never_runs(self):
         self.scan(comment("3", "@robert-wklken 帮忙看看"))

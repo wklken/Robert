@@ -16,22 +16,31 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(result["route_id"], "update-existing-pr")
         self.assertNotIn("open_pr", result["allowed_github_actions"])
 
-    def test_tapd_requests_stay_on_analysis_and_clarification_routes(self):
+    def test_tapd_ticket_queue_follows_issue_rules_and_pr_queue_follows_pr_rules(self):
         from robert_agent.workflows import routing
 
-        event = {"provider": "tapd", "source_type": "tapd_story", "number": None}
-        for intent, expected in (
-            ("analysis", "comment-analysis"),
-            ("bug_fix", "classification-result"),
-            (None, "classification-result"),
+        ticket = {"provider": "tapd", "source_type": "tapd_story", "number": None}
+        derived = {**ticket, "has_open_dd_pr": True, "existing_pr_number": 7}
+        for event, intent, route_id, expected in (
+            (ticket, "analysis", None, "comment-analysis"),
+            (ticket, "bug_fix", None, "new-pr"),
+            (ticket, "pr_followup_fix", None, "classification-result"),
+            (ticket, None, None, "classification-result"),
+            (ticket, None, "new-pr", "new-pr"),
+            (ticket, None, "update-existing-pr", "waiting-for-user"),
+            (ticket, None, "review-pr", "waiting-for-user"),
+            (derived, "analysis", None, "comment-analysis"),
+            (derived, "bug_fix", None, "update-existing-pr"),
+            (derived, "pr_followup_fix", None, "update-existing-pr"),
+            (derived, None, "new-pr", "update-existing-pr"),
+            (derived, None, "vote", "waiting-for-user"),
         ):
-            with self.subTest(intent=intent):
-                self.assertEqual(routing.effective_route(None, {}, {**event, "intent": intent})["route_id"], expected)
-        self.assertEqual(
-            routing.effective_route(None, {}, event, route_id="waiting-for-user")["route_id"], "waiting-for-user"
-        )
-        blocked = routing.effective_route(None, {}, event, route_id="new-pr")
-        self.assertEqual((blocked["route_id"], blocked["allowed_github_actions"]), ("waiting-for-user", ["comment"]))
+            with self.subTest(pr=event is derived, intent=intent, route_id=route_id):
+                resolved = routing.effective_route(None, {}, {**event, "intent": intent}, route_id=route_id)
+                self.assertEqual(resolved["route_id"], expected)
+        blocked = routing.effective_route(None, {}, ticket, route_id="review-pr")
+        self.assertEqual(blocked["allowed_github_actions"], ["comment"])
+        self.assertIn("not supported from TAPD", blocked["routing_block_reason"])
         self.assertEqual(routing.effective_route(None, {}, {"intent": "bug_fix"})["route_id"], "new-pr")
 
     def test_routes_do_not_advertise_internal_worker_as_skill(self):

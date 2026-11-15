@@ -630,7 +630,7 @@ def audit_result(
         return {
             "ok": False,
             "status": AuditStatus.FAILED.value,
-            "safe_error": "TAPD classification requires an analysis or clarification route.",
+            "safe_error": "TAPD classification requires an analysis, clarification or pull request route.",
         }
     if origin_type == "web":
         if not result.get("consumed_work_item_event_ids"):

@@ -120,6 +120,7 @@ class TapdActionScopeTests(unittest.TestCase):
                 {
                     "output_type": "classification_result",
                     "recommended_route": route,
+                    "branch_slug": "fix-login",
                     "consumed_event_fingerprints": ["tapd-comment:tapd.example/100/1"],
                     "planned_github_actions": [],
                 },
@@ -128,8 +129,10 @@ class TapdActionScopeTests(unittest.TestCase):
                 origin_type="tapd",
             )
 
-        self.assertIn("analysis or clarification", classify("new-pr")["safe_error"])
-        self.assertNotIn("analysis or clarification", classify("comment-analysis").get("safe_error", ""))
+        for route in ("vote", "review-pr", "review-comment"):
+            self.assertIn("analysis, clarification or pull request", classify(route)["safe_error"])
+        for route in ("comment-analysis", "waiting-for-user", "new-pr", "update-existing-pr"):
+            self.assertTrue(classify(route)["ok"], route)
 
 
 if __name__ == "__main__":
