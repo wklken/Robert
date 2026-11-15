@@ -18,6 +18,13 @@ DIRECT_INTENTS = frozenset(
     {"analysis", "discussion", "requirement_analysis", "bug_fix", "small_change", "add_tests", "pr_followup_fix"}
 )
 LABEL_NOTICE = "tapd_repository_label"
+MULTIPLE_PRS_NOTICE = "tapd_multiple_pull_requests"
+PR_MERGED_NOTICE = "tapd_pr_merged"
+PR_CLOSED_NOTICE = "tapd_pr_closed"
+REMEDIATION_RESOLVED_NOTICE = "tapd_remediation_resolved"
+REMEDIATION_STOPPED_NOTICE = "tapd_remediation_stopped"
+REMEDIATION_BUDGET_NOTICE = "tapd_remediation_budget_exhausted"
+PR_REVIEW_NOTICE = "tapd_pr_review_submitted"
 _BLOCKS = frozenset(
     {"blockquote", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "li", "ol", "p", "pre", "table", "tr", "ul"}
 )
@@ -165,9 +172,6 @@ def authorize_comment(comment, project, *, mention_name, automatic_ids, known):
         project=project,
         known=known,
     )
-
-
-MULTIPLE_PRS_NOTICE = "tapd_multiple_pull_requests"
 
 
 def notice_id(kind, dedupe_key):

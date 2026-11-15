@@ -22,6 +22,8 @@ from robert_agent.persistence.stores import pr_ci_observations as db_write_pr_ci
 from robert_agent.persistence.stores import pr_remediation_episodes as db_write_pr_remediation_episodes
 
 from datetime import datetime, timezone
+from robert_agent.work import tapd_notices, tapd_policy
+
 import hashlib
 import json
 import subprocess
@@ -266,6 +268,17 @@ def _transition(conn, episode, new_status, reason, now):
     _audit_transition(conn, episode, old_status, new_status, reason, now)
     if new_status == RemediationStatus.EXHAUSTED.value:
         _notify_exhausted_episode(conn, episode, reason, now)
+        kind = (
+            tapd_policy.REMEDIATION_BUDGET_NOTICE
+            if reason in {"max_attempts", "max_wall_minutes", "max_total_tokens", "max_cost_usd"}
+            else tapd_policy.REMEDIATION_STOPPED_NOTICE
+        )
+    elif new_status == RemediationStatus.RESOLVED.value:
+        kind = tapd_policy.REMEDIATION_RESOLVED_NOTICE
+    else:
+        kind = None
+    if kind:
+        tapd_notices.record_pr_notices(conn, episode["workstream_id"], kind, (episode["episode_id"],), now)
     return {
         "episode_id": episode["episode_id"],
         "old_status": old_status,

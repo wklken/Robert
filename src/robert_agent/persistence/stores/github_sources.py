@@ -245,3 +245,13 @@ def upsert_tapd_source(
             "p10": metadata_json,
         },
     )
+
+
+def record_tapd_review_sync(conn, source_id, closed_at):
+    source = tables["github_sources"]
+    stmt = (
+        update(source)
+        .where(source.c.source_id == source_id, source.c.state == "closed")
+        .values(metadata_json=func.json_set(source.c.metadata_json, "$.tapd_reviews_closed_at", closed_at))
+    )
+    return statements.write(conn, stmt)

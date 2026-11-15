@@ -27,11 +27,12 @@ from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import work_items as db_write_work_items
 from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from robert_agent.delivery.application import outcomes as publication_outcomes
+from robert_agent.adapters.github import discovery as github_discovery
 from robert_agent.adapters.github import sources as github_sources
 from robert_agent.persistence import transactions as transactions
 from robert_agent.execution.application import monitor
 from robert_agent.work.application import commands as work_items
-from robert_agent.work import control_queries
+from robert_agent.work import control_queries, tapd_notices, tapd_policy
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.execution import operations as execution_operations
 from robert_agent.execution import ownership as execution_ownership
@@ -41,6 +42,7 @@ from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.work import queries as work_queries
 from robert_agent.workflows import pr_remediation as remediation
 import json
+import subprocess
 
 _TICKET_SOURCE_TYPES = frozenset({SourceType.ISSUE, SourceType.TAPD_STORY, SourceType.TAPD_BUG})
 
@@ -267,6 +269,9 @@ def _record_remote_terminal_state_locked(
         run_now,
         json.dumps(remote_payload, ensure_ascii=False, sort_keys=True),
     )
+    if source_type == SourceType.PULL_REQUEST:
+        kind = tapd_policy.PR_MERGED_NOTICE if audit_type == "remote_pr_merged" else tapd_policy.PR_CLOSED_NOTICE
+        tapd_notices.record_pr_notices(conn, workstream_id, kind, (number,), run_now)
     item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
     if item and source_type in _TICKET_SOURCE_TYPES and item["origin_source_id"] == source_id:
         facts = control_queries.lifecycle_facts(conn, item)
@@ -437,7 +442,29 @@ def _unanswered_tapd_round(conn, workstream_id, source_type, number):
     return (origin[0], task_id) if opened and unanswered else None
 
 
-def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
+def _reconcile_tapd_reviews(conn, repo_id, repo, runner, run_now, settings):
+    if not (settings or {}).get("enabled"):
+        return
+    rows = db_read_workstreams.find_tapd_pull_requests_for_review_sync(conn, repo_id)
+    for workstream_id, source_id, number, project_key, closed_at in rows:
+        if not tapd_policy.project_for(settings, project_key):
+            continue
+        conn.commit()
+        try:
+            review_ids = github_discovery.submitted_review_ids(repo["full_name"], number, runner)
+        except ControlDeadlineExceeded:
+            raise
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if review_ids is None:
+            continue
+        if review_ids:
+            tapd_notices.record_pr_notices(conn, workstream_id, tapd_policy.PR_REVIEW_NOTICE, review_ids, run_now)
+        if closed_at:
+            db_write_github_sources.record_tapd_review_sync(conn, source_id, closed_at)
+
+
+def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now, *, tapd_settings=None):
     rows = work_queries.remote_source_rows(conn, repo_id)
     reconciled = 0
     for workstream_id, task_id, source_id, source_key, source_type, number, provider, _state in rows:
@@ -525,4 +552,5 @@ def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
             if source_succeeded:
                 execution_notifications.update_failure(conn, "source_reconcile_failed", source_key, run_now)
             transactions.finish_isolation(conn, "reconcile_source")
+    _reconcile_tapd_reviews(conn, repo_id, repo, runner, run_now, tapd_settings)
     return reconciled

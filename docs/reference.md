@@ -455,7 +455,9 @@ report whether delivery is configured; notification metadata records its outcome
 TAPD ticket notices (`channel=tapd`) are delivered by the publication lane as
 ticket comments, separately from operator delivery. They share the same
 three-attempt/10-minute budget, may be repeated once after an unknown write, and
-are skipped once the ticket has ended.
+are skipped once the ticket has ended. PR status, remediation outcomes, and
+review reminders are deduplicated by PR and terminal state, episode outcome,
+and GitHub review ID respectively. The notice contains fixed text and a PR link.
 
 Maintenance records `reliability_health` events containing database/WAL/reusable
 bytes and bounded samples of delayed tasks, pending notifications and stale runs.

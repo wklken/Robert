@@ -92,15 +92,23 @@ Robert 提问后 workstream 进入等待。可信用户带标记的回复恢复�
 
 ## 通知
 
-标签和多 PR 提示保存为 `channel=tapd` 的 `notifications` 行，ID 由触发评论派生，重复观察不会产生第二行。
-发布通道在运营者消息之后投递，沿用三次、10 分钟的重试上限，写入结果未知时可能重复一条。
-单据已结束时跳过。通知只用固定模板，不带执行结果，也不构成授权；运营者消息通道的过滤和投递不受影响。
+Robert 在以下情况向原单据发通知：
+
+- 标签缺失、标签冲突或同仓库有多个打开的派生 PR 时，每条触发评论提示一次。
+- 派生 PR 合并或关闭时，每个终态通知一次。
+- CI 或冲突自动修复确认解决、停止或用尽预算时，按修复轮次及结果通知一次。
+- GitHub 上提交评审后，按 review ID 提醒一次。正文只提供 PR 链接和固定说明。
+
+通知存为 `channel=tapd` 的 `notifications` 行。发布通道在运营者消息之后投递，
+使用同样的三次、10 分钟重试上限。写入结果未知时可能重复投递一条。发送前检查单据已保存的状态，
+已结束就跳过。扫描会继续跟踪有待发通知的单据。通知不构成执行授权。
 
 源码：[TAPD CLI 适配器](../../src/robert_agent/adapters/tapd/client.py)、
 [评论与授权策略](../../src/robert_agent/work/tapd_policy.py)、
 [扫描](../../src/robert_agent/work/application/tapd_scan.py)、
 [受理](../../src/robert_agent/work/application/tapd_intake.py)、
 [回评与对账](../../src/robert_agent/delivery/application/tapd_comments.py)、
+[PR 通知记录](../../src/robert_agent/work/tapd_notices.py)、
 [通知投递](../../src/robert_agent/delivery/application/tapd_notifications.py)、
 [单据结束](../../src/robert_agent/work/application/source_lifecycle.py)、
 [提示说明](../../src/robert_agent/resources/prompts/guidance/tapd.md)。
