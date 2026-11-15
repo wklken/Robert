@@ -31,7 +31,6 @@ OVERLAP = timedelta(minutes=10)
 MAX_TEXT_CHARS = 20000
 MAX_COMMENT_CHARS = 4000
 MAX_SNAPSHOT_COMMENTS = 100
-LABEL_NOTICE = "tapd_repository_label"
 PROTOCOL_ERRORS = (tapd_client.TapdError, subprocess.TimeoutExpired, OSError, ValueError)
 _TIME = "%Y-%m-%d %H:%M:%S"
 
@@ -243,7 +242,7 @@ def _record_source(conn, project, settings, ticket, repo, label, automatic_ids, 
 
 
 def label_notice_id(fingerprint):
-    return "tapd-notice-" + hashlib.sha256(f"{LABEL_NOTICE}\0{fingerprint}".encode()).hexdigest()[:32]
+    return "tapd-notice-" + hashlib.sha256(f"{tapd_policy.LABEL_NOTICE}\0{fingerprint}".encode()).hexdigest()[:32]
 
 
 def _record_label_notices(conn, project, ticket, triggers, outcome, now):
@@ -262,7 +261,7 @@ def _record_label_notices(conn, project, ticket, triggers, outcome, now):
         db_write_notifications.insert_tapd_notification(
             conn,
             label_notice_id(fingerprint),
-            LABEL_NOTICE,
+            tapd_policy.LABEL_NOTICE,
             now,
             json.dumps(metadata, ensure_ascii=False, sort_keys=True),
         )

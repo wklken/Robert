@@ -10,6 +10,7 @@ from robert_agent.foundation.timestamps import utc_timestamp
 TAPD_TIMEZONE = timezone(timedelta(hours=8))
 ROUTE_IDS = frozenset({"classification-result", "comment-analysis", "waiting-for-user"})
 DIRECT_INTENTS = frozenset({"analysis", "discussion", "requirement_analysis"})
+LABEL_NOTICE = "tapd_repository_label"
 _BLOCKS = frozenset(
     {"blockquote", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "li", "ol", "p", "pre", "table", "tr", "ul"}
 )

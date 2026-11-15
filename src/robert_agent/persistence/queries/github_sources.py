@@ -184,6 +184,23 @@ def find_tapd_snapshots_for_workstream(conn, workstream_id):
     return statements.read(conn, query, {"p0": workstream_id})
 
 
+def find_ended_tapd_ticket(conn, source_type, project_key, external_id):
+    """A ticket is ended when any repository's source row stored the TAPD end state."""
+    sources = tables["github_sources"]
+    query = (
+        select(sql_constant(1))
+        .where(
+            sources.c["provider"] == sql_constant("tapd"),
+            sources.c["source_type"] == bindparam("p0"),
+            sources.c["project_key"] == bindparam("p1"),
+            sources.c["external_id"] == bindparam("p2"),
+            sources.c["state"] == sql_constant("closed"),
+        )
+        .limit(1)
+    )
+    return statements.read(conn, query, {"p0": source_type, "p1": project_key, "p2": external_id})
+
+
 def find_tapd_tracked_sources(conn, project_key):
     """Open TAPD sources whose workstream, work item or request is still unfinished."""
     source = tables["github_sources"].alias("gs")

@@ -46,6 +46,24 @@ def find_existing_ids(conn, notification_ids):
     return statements.read(conn, query, {"items": list(notification_ids)})
 
 
+def find_pending_tapd(conn, now, limit):
+    """TAPD ticket notices whose next bounded delivery attempt is due."""
+    notice = tables["notifications"]
+    retry_at = func.json_extract(notice.c.metadata_json, sql_constant("$.tapd_delivery.next_retry_at"))
+    query = (
+        select(notice.c.notification_id, notice.c.notification_type, notice.c.metadata_json)
+        .where(
+            notice.c.channel == sql_constant("tapd"),
+            notice.c.status == sql_constant("pending"),
+            or_(retry_at.is_(None), func.julianday(retry_at) <= func.julianday(bindparam("p0"))),
+        )
+        .order_by(notice.c.created_at, notice.c.notification_id)
+        .limit(limit)
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    return statements.read(conn, query, {"p0": now})
+
+
 def find_metadata_json_by_notification_id(conn, notification_id):
     query1 = (
         select(tables["notifications"].c["metadata_json"])
