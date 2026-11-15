@@ -147,7 +147,9 @@ class TapdAdmissionTests(TapdCycleCase):
         )
         self.assertTrue(record["ok"], record)
         with mock.patch.object(tapd_client, "client_for", return_value=self.client):
-            self.assertTrue(run_once.run_once(self.config_path, dry_run=False, skip_external=True)["ok"])
+            outcome = run_once.run_once(self.config_path, dry_run=False, skip_external=True, max_dispatches=0)
+        self.assertTrue(outcome["ok"], outcome)
+        self.assertEqual(outcome["dispatch_count"], 0)
         self.cycle()
         self.assertEqual(self.query("SELECT COUNT(*) FROM tasks"), [(2,)])
         self.assertEqual(
