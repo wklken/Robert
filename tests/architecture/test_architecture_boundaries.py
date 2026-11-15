@@ -68,6 +68,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             "robert_agent.worker_adapters",
             "robert_agent.foundation.commands",
             "robert_agent.foundation.timestamps",
+            "robert_agent.foundation.tapd_identity",
         )
         for name, dependencies in self.graph.items():
             if name.startswith("robert_agent.configuration."):
@@ -103,6 +104,16 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             if isinstance(node, ast.ImportFrom):
                 self.assertEqual(node.module, "datetime", (name, node.lineno))
             self.assertNotIsInstance(node, ast.Import)
+
+    def test_shared_tapd_identity_is_a_standard_library_leaf(self):
+        name = "robert_agent.foundation.tapd_identity"
+        self.assert_dependencies(name, ())
+        path = PACKAGE / "foundation/tapd_identity.py"
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                self.assertEqual(node.module, "urllib.parse", (name, node.lineno))
+            if isinstance(node, ast.Import):
+                self.assertEqual([alias.name for alias in node.names], ["re"], (name, node.lineno))
 
     def test_leaf_capabilities_do_not_import_their_callers(self):
         lower = (

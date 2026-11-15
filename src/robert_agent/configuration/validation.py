@@ -9,6 +9,7 @@ import yaml
 
 from robert_agent import worker_adapters
 from robert_agent.configuration import supervision as supervision_policy
+from robert_agent.configuration import tapd as tapd_config
 from robert_agent.configuration.loading import load_config
 from robert_agent.configuration.routes import load_route_policies, resolve_route_config
 from robert_agent.configuration.schema import apply_schema
@@ -190,6 +191,7 @@ def _normalize(config, path, skip_external):
             raise ValueError("messaging.allowed_senders must use exact sender IDs")
         if set(messaging["repos"]) - {repo["full_name"] for repo in result["repos"]}:
             raise ValueError("messaging.repos must reference configured repositories")
+    result["tapd"] = tapd_config.normalize(config["tapd"], repositories={repo["full_name"] for repo in result["repos"]})
     return result
 
 
