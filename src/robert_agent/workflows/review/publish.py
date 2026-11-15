@@ -152,8 +152,13 @@ def reconcile(action, scope, run_command):
     command = ["gh", "api", f"repos/{repo}/pulls/{number}/reviews?per_page=100", "--paginate", "--slurp"]
     try:
         completed = run_command(command, capture_output=True, text=True)
-        if getattr(completed, "returncode", 0) != 0:
-            return _result("unknown", "review_query_failed")
+    except ControlDeadlineExceeded:
+        raise
+    except Exception as exc:
+        return _result("unknown", "review_query_failed", error_type=type(exc).__name__)
+    if getattr(completed, "returncode", 0) != 0:
+        return _result("unknown", "review_query_failed")
+    try:
         response = json.loads(getattr(completed, "stdout", ""))
         reviews = list(_objects(response))
         for review in reviews:
@@ -166,10 +171,8 @@ def reconcile(action, scope, run_command):
             ):
                 raise ValueError("malformed PR review record")
         matches = [review for review in reviews if isinstance(review.get("body"), str) and marker in review["body"]]
-    except ControlDeadlineExceeded:
-        raise
     except Exception as exc:
-        return _result("unknown", "review_query_failed", error_type=type(exc).__name__)
+        return _result("unknown", "review_response_malformed", error_type=type(exc).__name__)
     if not matches:
         return _result("confirmed_absent", "review_lookup_complete_absent")
     if len(matches) != 1:

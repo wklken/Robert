@@ -89,9 +89,14 @@ def reconcile(action, scope, run_command):
             "--paginate",
             "--slurp",
         ]
-        completed = run_command(query, capture_output=True, text=True)
+        try:
+            completed = run_command(query, capture_output=True, text=True)
+        except ControlDeadlineExceeded:
+            raise
+        except (OSError, SubprocessError):
+            return {"status": "unknown", "reason_code": "vote_query_failed", "evidence": {}}
         if completed.returncode:
-            raise ValueError("query failed")
+            return {"status": "unknown", "reason_code": "vote_query_failed", "evidence": {}}
         comments = list(review_publish._objects(json.loads(completed.stdout)))
         if any(
             not c.get("id")
