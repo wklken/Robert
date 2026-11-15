@@ -9,7 +9,6 @@ from robert_agent.persistence import transactions as db_transactions
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import dispatch_requests as dispatch_queries
-from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 from robert_agent.persistence.stores import attempts as db_write_attempts
 from robert_agent.persistence.stores import tasks as db_write_tasks
@@ -108,8 +107,7 @@ def audit_completed_results(
         if not evidence.inspection_due(observation, run_now):
             continue
         payload = results.load_result_payload(conn, result_row)
-        origin_row = db_records.first(db_read_work_items.find_origin_type_by_workstream_id(conn, workstream_id))
-        origin_type = origin_row[0] if origin_row else "github"
+        origin_type = result_scope.origin_type(conn, payload["task_id"], workstream_id)
         recovery_config = None if dry_run else config_result
         if not conn.in_transaction:
             db_transactions.begin(conn, immediate=True)

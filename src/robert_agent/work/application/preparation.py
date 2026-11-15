@@ -230,7 +230,7 @@ def _refresh_prepared_task_locked(
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo["full_name"],
-            "sources": work_queries.sources_for_workstream(conn, event["workstream_id"]),
+            "sources": work_queries.sources_for_task(conn, event["workstream_id"], related_events),
         }
     )
     prompt_input = worker_prompt_input(
@@ -476,7 +476,7 @@ def create_task_attempt_and_prompt(
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo["full_name"],
-            "sources": work_queries.sources_for_workstream(conn, workstream_id),
+            "sources": work_queries.sources_for_task(conn, workstream_id, related_events),
         }
     )
     rendered = None
@@ -780,7 +780,7 @@ def create_resume_attempt_and_prompt(
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo_full_name,
-            "sources": work_queries.sources_for_workstream(conn, workstream_id),
+            "sources": work_queries.sources_for_task(conn, workstream_id, events),
         }
     )
     rendered = None

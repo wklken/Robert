@@ -632,6 +632,19 @@ def audit_result(
             "status": AuditStatus.FAILED.value,
             "safe_error": "TAPD classification requires an analysis, clarification or pull request route.",
         }
+    if origin_type == SourceProvider.TAPD and result.get("output_type") in {
+        OutputType.NEW_PR,
+        OutputType.UPDATE_EXISTING_PR,
+    }:
+        types = [action.get("type") for action in result.get("planned_github_actions", [])]
+        comments = [index for index, kind in enumerate(types) if kind == GitHubActionType.COMMENT]
+        others = [index for index, kind in enumerate(types) if kind != GitHubActionType.COMMENT]
+        if not comments or (others and min(comments) < max(others)):
+            return {
+                "ok": False,
+                "status": AuditStatus.FAILED.value,
+                "safe_error": "TAPD pull request results end with a comment on the TAPD ticket after the pull request actions.",
+            }
     if origin_type == "web":
         if not result.get("consumed_work_item_event_ids"):
             return {

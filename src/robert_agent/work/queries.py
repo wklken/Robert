@@ -1,5 +1,6 @@
 """Read task and source facts without importing the runtime driver."""
 
+from robert_agent.foundation.contracts.work import SourceProvider
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_sources as db_read_github_sources
 from robert_agent.persistence.queries import task_events as db_read_task_events
@@ -95,12 +96,19 @@ def tapd_discussions(conn, workstream_id):
     ]
 
 
-def sources_for_workstream(conn, workstream_id):
+def tapd_driven(events):
+    return any(event.get("provider") == SourceProvider.TAPD for event in events)
+
+
+def sources_for_task(conn, workstream_id, events):
+    """A TAPD request answers only on TAPD; any other task never sees a TAPD source."""
+    tapd = tapd_driven(events)
     return [
         {"source_type": source_type, "number": number}
-        if provider == "github"
+        if provider == SourceProvider.GITHUB
         else {"source_type": source_type, "provider": provider, "project_key": project_key, "external_id": external_id}
         for source_type, number, provider, project_key, external_id in (
             db_read_github_sources.find_for_sources_for_workstream(conn, workstream_id, workstream_id)
         )
+        if (provider == SourceProvider.TAPD) == tapd
     ]

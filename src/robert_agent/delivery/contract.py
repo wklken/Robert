@@ -535,8 +535,12 @@ def normalize(envelope, settings):
                     )
                 action["body"] += f"\n\n{'Fixes' if action['issue_resolution'] == 'complete' else 'Refs'} #{issue}"
                 action.pop("target_url", None)
+            tapd = any(item.get("provider") == SourceProvider.TAPD for item in scope.get("sources", []))
+            _require(not tapd or bool(scope.get("public_ref")), field, "Assigned PR target is unavailable.")
+            # GitHub must not learn the TAPD ticket; the public reference maps back locally.
+            origin = scope["public_ref"] if tapd else scope["workstream_id"]
             action["body"] += (
-                f"\n\n<!-- robert-workstream\norigin_workstream_id: {scope['workstream_id']}\nsource_issue: {issue or ''}\ntask_id: {envelope['task_id']}\ncreated_by: robert\n-->"
+                f"\n\n<!-- robert-workstream\norigin_workstream_id: {origin}\nsource_issue: {issue or ''}\ntask_id: {envelope['task_id']}\ncreated_by: robert\n-->"
             )
     if "remediation_evidence" in result:
         episode = settings.get("remediation_context") or {}
