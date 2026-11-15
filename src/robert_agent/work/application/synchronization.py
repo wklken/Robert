@@ -26,6 +26,7 @@ from robert_agent.adapters.github import read as github_read
 from robert_agent.adapters.github import recording as github_recording
 from robert_agent.adapters.github import budget as github_budget
 from robert_agent.work import scan_batches as scan_batches
+from robert_agent.work.application import tapd_scan
 
 from robert_agent.work import source_policy as source_policy
 
@@ -208,7 +209,7 @@ def scan_repo(config, repo, session, hints):
     return identifier
 
 
-def scan(config_path, *, runner=subprocess.run, refresh_context=False):
+def scan(config_path, *, runner=subprocess.run, refresh_context=False, tapd_runner=None):
     config = validate_config.validate_config(config_path, skip_external=True)
     if not config["ok"]:
         return config
@@ -265,8 +266,10 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
             raise
         except (subprocess.SubprocessError, OSError, ValueError, db_errors.Error):
             failures.append({"repo": repo["full_name"], "reason": "repo_scan_failed"})
+    tapd = {} if refresh_context else tapd_scan.scan(config, runner=tapd_runner)
     intervals = [session.poll_interval_seconds for session in sessions.values() if session.poll_interval_seconds]
     return {
+        **({"tapd": tapd} if tapd.get("enabled") else {}),
         "ok": not failures,
         "status": "scanned",
         "context_refresh": refresh_context,

@@ -36,6 +36,16 @@ def find_task_id_and_notification_type_and_status_and_metadata_json_by_notificat
     return statements.read(conn, query1, {"p0": notification_id})
 
 
+def find_existing_ids(conn, notification_ids):
+    notice = tables["notifications"]
+    query = (
+        select(notice.c["notification_id"])
+        .where(notice.c["notification_id"].in_(bindparam("items", expanding=True)))
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    return statements.read(conn, query, {"items": list(notification_ids)})
+
+
 def find_metadata_json_by_notification_id(conn, notification_id):
     query1 = (
         select(tables["notifications"].c["metadata_json"])

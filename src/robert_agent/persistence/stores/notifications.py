@@ -451,3 +451,32 @@ def set_delivery_state(conn, notification_id, delivery_json):
         .values(metadata_json=func.json_set(notice.c.metadata_json, "$.delivery", func.json(delivery_json)))
     )
     return statements.write(conn, stmt)
+
+
+def insert_tapd_notification(conn, notification_id, notification_type, created_at, metadata_json):
+    """A repeated observation of the same dedupe key keeps the first row."""
+    stmt = insert(tables["notifications"]).values(
+        notification_id=bindparam("p0"),
+        notification_type=bindparam("p1"),
+        channel=sql_constant("tapd"),
+        status=sql_constant("pending"),
+        created_at=bindparam("p2"),
+        metadata_json=bindparam("p3"),
+    )
+    stmt = stmt.on_conflict_do_nothing(index_elements=["notification_id"])
+    return statements.write(
+        conn, stmt, {"p0": notification_id, "p1": notification_type, "p2": created_at, "p3": metadata_json}
+    )
+
+
+def record_tapd_delivery(conn, notification_id, status, delivery_json):
+    notice = tables["notifications"]
+    stmt = (
+        update(notice)
+        .where(notice.c.notification_id == bindparam("p0"), notice.c.channel == sql_constant("tapd"))
+        .values(
+            status=bindparam("p1"),
+            metadata_json=func.json_set(notice.c.metadata_json, "$.tapd_delivery", func.json(bindparam("p2"))),
+        )
+    )
+    return statements.write(conn, stmt, {"p0": notification_id, "p1": status, "p2": delivery_json})
