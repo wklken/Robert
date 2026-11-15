@@ -87,6 +87,14 @@ def remote_source_rows(conn, repo_id):
     return db_read_workstreams.find_for_remote_source_rows(conn, repo_id)
 
 
+def tapd_discussions(conn, workstream_id):
+    """Return the stored ticket snapshot of each TAPD source in the workstream."""
+    return [
+        {**(json.loads(metadata_json or "{}").get("tapd") or {}), "url": html_url}
+        for html_url, metadata_json in db_read_github_sources.find_tapd_snapshots_for_workstream(conn, workstream_id)
+    ]
+
+
 def sources_for_workstream(conn, workstream_id):
     return [
         {"source_type": source_type, "number": number}

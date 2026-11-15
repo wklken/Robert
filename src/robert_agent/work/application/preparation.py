@@ -65,6 +65,13 @@ def insert_file_artifact(conn, task_id, attempt_id, artifact_type, path, run_now
     )
 
 
+def attach_tapd_discussions(conn, runtime_context, workstream_id, events):
+    """Only a task driven by a TAPD request sees ticket content."""
+    if any(event.get("provider") == SourceProvider.TAPD for event in events):
+        runtime_context["origin_type"] = SourceProvider.TAPD.value
+        runtime_context["tapd_discussions"] = work_queries.tapd_discussions(conn, workstream_id)
+
+
 def upsert_route_decision(conn, task_id, route_result, run_now):
     required_skills = route_result.get("required_skills", [])
     recommended_skills = route_result.get("recommended_skills", [])
@@ -219,6 +226,7 @@ def _refresh_prepared_task_locked(
     github_context["current_event_fingerprint"] = event["event_fingerprint"]
     runtime_context = attempt_context.runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
+    attach_tapd_discussions(conn, runtime_context, event["workstream_id"], related_events)
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo["full_name"],
@@ -464,6 +472,7 @@ def create_task_attempt_and_prompt(
         db_write_workstream_sources.insert_for_create_task_attempt_and_prompt(
             conn, workstream_id, related_source_id, workstream.source_relationship(related_event), run_now
         )
+    attach_tapd_discussions(conn, runtime_context, workstream_id, related_events)
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo["full_name"],
@@ -766,6 +775,7 @@ def create_resume_attempt_and_prompt(
     prompt_path = prompt_dir / f"{attempt_id}.prompt.md"
     github_context = attempt_context.write_github_context_artifacts(prompt_dir, attempt_id, events)
     runtime_context["github_context"] = github_context
+    attach_tapd_discussions(conn, runtime_context, workstream_id, events)
     repo_full_name = db_records.first(db_read_repos.find_full_name_by_repo_id(conn, repo_id))[0]
     runtime_context["publication_targets"] = result_contract.target_urls(
         {

@@ -70,6 +70,11 @@ class TapdAdmissionTests(pipeline_fixture.RepositoryCycleFixture):
         self.assertEqual(route_id, "comment-analysis")
         self.assertEqual(self.query("SELECT origin_type FROM work_items"), [("tapd",)])
         self.assertEqual(self.query("SELECT COUNT(*) FROM task_events"), [(1,)])
+        (prompt,) = self.data_dir.glob("artifacts/*/prompt.md")
+        text = prompt.read_text(encoding="utf-8")
+        self.assertIn("tapd-request", text)
+        self.assertIn("@robert-wklken in body", text)
+        self.assertIn("Code changes are not enabled for TAPD requests", text)
 
     def test_code_change_request_from_tapd_goes_to_classification(self):
         self.scan(comment("2", "@robert-wklken 请修复这个报错并提交 PR"))

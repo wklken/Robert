@@ -165,6 +165,25 @@ def find_for_sources_for_workstream(conn, workstream_id, workstream_id_2):
     return statements.read(conn, query2, {"p0": workstream_id, "p1": workstream_id_2})
 
 
+def find_tapd_snapshots_for_workstream(conn, workstream_id):
+    """Return each TAPD source in the workstream with its stored ticket snapshot."""
+    sources = tables["github_sources"]
+    members = union(
+        select(tables["workstreams"].c["primary_source_id"]).where(
+            tables["workstreams"].c["workstream_id"] == bindparam("p0")
+        ),
+        select(tables["workstream_sources"].c["source_id"]).where(
+            tables["workstream_sources"].c["workstream_id"] == bindparam("p0")
+        ),
+    )
+    query = (
+        select(sources.c["html_url"], sources.c["metadata_json"])
+        .where(sources.c["provider"] == sql_constant("tapd"), sources.c["source_id"].in_(members))
+        .order_by(sources.c["source_key"].asc())
+    )
+    return statements.read(conn, query, {"p0": workstream_id})
+
+
 def find_tapd_tracked_sources(conn, project_key):
     """Open TAPD sources whose workstream, work item or request is still unfinished."""
     source = tables["github_sources"].alias("gs")
