@@ -234,6 +234,19 @@ Major table groups:
 Schema initialization is idempotent and applies guarded migrations. Do not edit
 rows manually while Robert is running.
 
+Each source row records its provider. GitHub sources keep their Issue or pull
+request number; TAPD story and bug sources have no number and store their TAPD
+project and item IDs instead. A workstream can hold a unique public reference
+(`rbt-` followed by lowercase letters and digits). Branches and workspaces for
+sources without a number are named by this reference.
+
+If the source tables still predate provider identities, initialization rebuilds
+them in one transaction and checks row counts and foreign keys before committing.
+It first copies the database to `<database>.pre-source-providers`. The copy does
+not include `<database>.results/`. Initialization refuses and changes nothing while
+a lease is active, an attempt is running or stale, or a review or vote model process has
+not been proven to exit; the error names the blocking records.
+
 ```bash
 robert status --config ~/.config/robert/config.yml --output json
 robert task show TASK_ID --config ~/.config/robert/config.yml --output json

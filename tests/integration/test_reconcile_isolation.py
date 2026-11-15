@@ -63,7 +63,7 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
         self.seed()
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
-                "INSERT INTO github_sources SELECT 'second',repo_id,'github:example/backend!124',source_type,124,html_url,title,state,author_login,source_updated_at,metadata_json FROM github_sources"
+                "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,title,state,author_login,source_updated_at,metadata_json) SELECT 'second',repo_id,'github:example/backend!124',source_type,124,html_url,title,state,author_login,source_updated_at,metadata_json FROM github_sources"
             )
             conn.execute(
                 "INSERT INTO workstreams(workstream_id,repo_id,primary_source_id,lifecycle,created_at,updated_at) VALUES ('second','repo:example/backend','second','completed','now','now')"
@@ -185,7 +185,7 @@ class ReconcileIsolationTests(ReconcileIsolationFixture):
         self.seed()
         with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
-                "INSERT INTO github_sources SELECT 'second',repo_id,'github:example/backend!124',source_type,124,html_url,title,state,author_login,source_updated_at,metadata_json FROM github_sources"
+                "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,html_url,title,state,author_login,source_updated_at,metadata_json) SELECT 'second',repo_id,'github:example/backend!124',source_type,124,html_url,title,state,author_login,source_updated_at,metadata_json FROM github_sources"
             )
             conn.execute(
                 "INSERT INTO workstreams(workstream_id,repo_id,primary_source_id,lifecycle,created_at,updated_at) VALUES ('second','repo:example/backend','second','completed','now','now')"

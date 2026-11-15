@@ -87,15 +87,26 @@ class GitHubSource(Base):
     repo_id: Mapped[str] = mapped_column(Text, ForeignKey("repos.repo_id", ondelete="CASCADE"))
     source_key: Mapped[str] = mapped_column(Text, unique=True)
     source_type: Mapped[str] = mapped_column(Text)
-    number: Mapped[int] = mapped_column(Integer)
+    number: Mapped[int | None] = mapped_column(Integer)
     html_url: Mapped[str | None] = mapped_column(Text)
     title: Mapped[str] = mapped_column(Text, server_default="")
     state: Mapped[str] = mapped_column(Text, server_default="open")
     author_login: Mapped[str | None] = mapped_column(Text)
     source_updated_at: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column(Text, server_default="{}")
+    provider: Mapped[str] = mapped_column(Text, server_default="github")
+    project_key: Mapped[str | None] = mapped_column(Text)
+    external_id: Mapped[str | None] = mapped_column(Text)
 
-    __table_args__ = (CheckConstraint("source_type IN ('issue', 'pull_request')"),)
+    __table_args__ = (
+        CheckConstraint("source_type IN ('issue', 'pull_request', 'tapd_story', 'tapd_bug')"),
+        CheckConstraint("provider IN ('github', 'tapd')"),
+        CheckConstraint(
+            "(provider = 'github' AND source_type IN ('issue', 'pull_request') AND number IS NOT NULL "
+            "AND project_key IS NULL AND external_id IS NULL) OR (provider = 'tapd' AND source_type IN "
+            "('tapd_story', 'tapd_bug') AND number IS NULL AND project_key IS NOT NULL AND external_id IS NOT NULL)"
+        ),
+    )
 
 
 class GitHubEvent(Base):
@@ -137,9 +148,16 @@ class Workstream(Base):
     created_at: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[str] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column(Text, server_default="{}")
+    public_ref: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         CheckConstraint("lifecycle IN ('active', 'completed', 'waiting_for_user', 'failed', 'canceled')"),
+        Index(
+            "idx_workstreams_public_ref",
+            "public_ref",
+            unique=True,
+            sqlite_where=text("public_ref IS NOT NULL"),
+        ),
     )
 
 
@@ -272,7 +290,7 @@ class WorkItem(Base):
 
     __table_args__ = (
         CheckConstraint("priority IN ('P0', 'P1', 'P2', 'P3')"),
-        CheckConstraint("origin_type IN ('web', 'github')"),
+        CheckConstraint("origin_type IN ('web', 'github', 'tapd')"),
         CheckConstraint("routing_mode IN ('auto', 'manual')"),
         CheckConstraint("version >= 1"),
         CheckConstraint(

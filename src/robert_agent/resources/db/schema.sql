@@ -42,14 +42,21 @@ CREATE TABLE IF NOT EXISTS github_sources (
   source_id TEXT PRIMARY KEY,
   repo_id TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
   source_key TEXT NOT NULL UNIQUE,
-  source_type TEXT NOT NULL CHECK (source_type IN ('issue', 'pull_request')),
-  number INTEGER NOT NULL,
+  source_type TEXT NOT NULL CHECK (source_type IN ('issue', 'pull_request', 'tapd_story', 'tapd_bug')),
+  number INTEGER,
   html_url TEXT,
   title TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL DEFAULT 'open',
   author_login TEXT,
   source_updated_at TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}'
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  provider TEXT NOT NULL DEFAULT 'github' CHECK (provider IN ('github', 'tapd')),
+  project_key TEXT,
+  external_id TEXT,
+  CHECK ((provider = 'github' AND source_type IN ('issue', 'pull_request') AND number IS NOT NULL
+          AND project_key IS NULL AND external_id IS NULL)
+      OR (provider = 'tapd' AND source_type IN ('tapd_story', 'tapd_bug') AND number IS NULL
+          AND project_key IS NOT NULL AND external_id IS NOT NULL))
 );
 
 CREATE TABLE IF NOT EXISTS github_events (
@@ -75,7 +82,8 @@ CREATE TABLE IF NOT EXISTS workstreams (
   active_task_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}'
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  public_ref TEXT
 );
 
 CREATE TABLE IF NOT EXISTS workstream_sources (
@@ -155,7 +163,7 @@ CREATE TABLE IF NOT EXISTS work_items (
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   priority TEXT NOT NULL DEFAULT 'P2' CHECK (priority IN ('P0', 'P1', 'P2', 'P3')),
-  origin_type TEXT NOT NULL CHECK (origin_type IN ('web', 'github')),
+  origin_type TEXT NOT NULL CHECK (origin_type IN ('web', 'github', 'tapd')),
   origin_source_id TEXT REFERENCES github_sources(source_id) ON DELETE SET NULL,
   routing_mode TEXT NOT NULL DEFAULT 'auto' CHECK (routing_mode IN ('auto', 'manual')),
   requested_worker TEXT,
