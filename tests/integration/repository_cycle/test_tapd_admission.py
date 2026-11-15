@@ -123,6 +123,41 @@ class TapdAdmissionTests(TapdCycleCase):
             [("context_only",)],
         )
 
+    def test_mention_during_execution_waits_for_the_next_round(self):
+        self.scan(comment("1", "@robert-wklken 请分析这个需求"))
+        self.cycle()
+        self.scan(comment("2", "@robert-wklken 也分析一下兼容性", "2026-11-20 10:20:00"))
+        self.cycle()
+        self.assertEqual(self.query("SELECT COUNT(*) FROM tasks"), [(1,)])
+        ((task_id, attempt_id),) = self.query("SELECT task_id, attempt_id FROM attempts")
+        record = submission.record_result(
+            self.data_dir / "dd.sqlite3",
+            {
+                "task_id": task_id,
+                "attempt_id": attempt_id,
+                "output_type": "comment_analysis",
+                "submission": {
+                    "planned_github_actions": [{"type": "comment", "body": "结论：可以做"}],
+                    "consumed_event_fingerprints": ["tapd-comment:tapd.example/100/1"],
+                    "verification": [],
+                    "handoff": "answered",
+                    "used_skills": [],
+                },
+            },
+        )
+        self.assertTrue(record["ok"], record)
+        with mock.patch.object(tapd_client, "client_for", return_value=self.client):
+            self.assertTrue(run_once.run_once(self.config_path, dry_run=False, skip_external=True)["ok"])
+        self.cycle()
+        self.assertEqual(self.query("SELECT COUNT(*) FROM tasks"), [(2,)])
+        self.assertEqual(
+            self.query(
+                "SELECT e.event_fingerprint FROM task_events te JOIN github_events e USING(event_id) "
+                "WHERE te.task_id != '" + task_id + "'"
+            ),
+            [("tapd-comment:tapd.example/100/2",)],
+        )
+
     def test_only_a_marked_reply_resumes_a_waiting_request(self):
         self.scan(comment("1", "@robert-wklken 请分析这个需求"))
         self.cycle()
