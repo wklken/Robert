@@ -1,6 +1,6 @@
 """Reauthorize preserved requests and append input under execution ownership."""
 
-from robert_agent.foundation.contracts.work import TaskKind
+from robert_agent.foundation.contracts.work import SourceProvider, TaskKind
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import tasks as db_read_tasks
@@ -37,7 +37,7 @@ def _json_object(value):
     return parsed if isinstance(parsed, dict) else {}
 
 
-def ordinary_dispatch_allowed(conn, task_id, repo, config=None):
+def ordinary_dispatch_allowed(conn, task_id, repo, config=None, *, publishing=False):
     row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
     if not row or row[0] != TaskKind.HUMAN_REQUEST.value:
         return True  # System remediation is governed by its Episode policy.
@@ -66,6 +66,9 @@ def ordinary_dispatch_allowed(conn, task_id, repo, config=None):
             repo,
             conn=conn,
             config=config,
+            finishing_pr_publication=(
+                publishing and event.get("provider") == SourceProvider.TAPD and bool(event.get("existing_pr_number"))
+            ),
             known_workstreams=[]
             if event.get("event_type") in {"assigned", "review_request", "notification"}
             else [event["workstream_id"]],

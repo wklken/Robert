@@ -22,10 +22,13 @@ _LABEL_REASONS = {
 
 def notice_body(notification_type, metadata, mention_name):
     """Fixed templates only: a notice never carries execution output or grants authority."""
-    if notification_type != tapd_policy.LABEL_NOTICE or metadata.get("reason") not in _LABEL_REASONS:
+    if notification_type == tapd_policy.LABEL_NOTICE and metadata.get("reason") in _LABEL_REASONS:
+        labels = "、".join(metadata.get("labels") or [])
+        text = f"{_LABEL_REASONS[metadata['reason']]}请只保留以下标签中的一个，再发一条提及 {mention_name} 的评论：{labels}"
+    elif notification_type == tapd_policy.MULTIPLE_PRS_NOTICE:
+        text = f"这张单据在同一仓库有多个打开的 PR。请关闭多余的 PR，再发一条提及 {mention_name} 的评论。"
+    else:
         return None
-    labels = "、".join(metadata.get("labels") or [])
-    text = f"{_LABEL_REASONS[metadata['reason']]}请只保留以下标签中的一个，再发一条提及 {mention_name} 的评论：{labels}"
     return f"{tapd_policy.automatic_prefix(mention_name)}\n\n{tapd_policy.neutralize_mentions(text, mention_name)}"
 
 

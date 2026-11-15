@@ -1,6 +1,7 @@
 """Persist source events and read their associated task state."""
 
-from robert_agent.foundation.contracts.work import SourceProvider, TaskLifecycle, WorkstreamLifecycle
+from robert_agent.foundation.contracts.delivery import GitHubActionType
+from robert_agent.foundation.contracts.work import SourceProvider, SourceType, TaskLifecycle, WorkstreamLifecycle
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_events as db_read_github_events
@@ -13,7 +14,7 @@ from robert_agent.persistence.stores import github_sources as db_write_github_so
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.work.application import commands as work_items
 from robert_agent.work import control_queries
-from robert_agent.foundation import values
+from robert_agent.foundation import tapd_identity, values
 from robert_agent.work import policies as work_policies
 from robert_agent.work import queries as work_queries
 import json
@@ -62,8 +63,11 @@ def task_review_input_policy(conn, task_id):
 def insert_source_and_event(conn, repo_id, event, run_now):
     source_id = values.github_source_id(event["source_key"])
     if event.get("provider") == SourceProvider.TAPD:
-        # The scan already wrote both rows; admission never rewrites a first observation.
-        return source_id, values.github_event_id(event["event_fingerprint"])
+        # Preserve the scanned comment and authority inputs, adding the
+        # controller-selected queue context used by handoffs and dispatch.
+        event_id = values.github_event_id(event["event_fingerprint"])
+        db_write_github_events.record_tapd_admission_context(conn, event_id, json.dumps(event, sort_keys=True))
+        return source_id, event_id
     db_write_github_sources.insert_source_and_event(
         conn,
         source_id,
@@ -113,6 +117,22 @@ def operator_canceled_item(conn, item):
     return bool(db_records.first(db_read_work_item_events.find_for_operator_canceled_item(conn, item["work_item_id"])))
 
 
+def _blocks_followup(conn, action):
+    if action["action_type"] != GitHubActionType.COMMENT or not tapd_identity.parse_ticket_url(action["target_url"]):
+        return True
+    row = db_records.first(
+        db_read_tasks.find_lifecycle_and_task_kind_and_metadata_json_by_task_id(conn, action["task_id"])
+    )
+    # An unknown receipt remains visible for read-only reconciliation. The PR
+    # terminal transition already revoked this comment's authority to write.
+    return not (
+        row
+        and row[0] == TaskLifecycle.CANCELED
+        and (values.json_object(row[2]).get("remote_reconciliation") or {}).get("status")
+        in {"remote_pr_merged", "remote_pr_closed"}
+    )
+
+
 def github_followup_allows_new_subject(conn, repo, event, parent_task_id):
     """Admit a fresh trusted request, preserving the prior execution's state."""
     if (
@@ -152,12 +172,15 @@ def github_followup_allows_new_subject(conn, repo, event, parent_task_id):
     if not item or (item["canceled_at"] and (not remote_canceled or operator_canceled_item(conn, item))):
         return False
     facts = control_queries.lifecycle_facts(conn, item)
+    ticket_closed = facts["source_closed"] and not (
+        item["origin_type"] == SourceProvider.TAPD and event.get("source_type") == SourceType.PULL_REQUEST
+    )
     if (
         facts["running"]
-        or facts["actions"]
+        or any(_blocks_followup(conn, action) for action in facts["actions"])
         or facts["cleanup_pending"]
         or facts["workflow_attention"]
-        or facts["source_closed"]
+        or ticket_closed
     ):
         return False
     return not db_records.first(db_read_tasks.github_followup_allows_new_subject_filtered(conn, facts["streams"]))

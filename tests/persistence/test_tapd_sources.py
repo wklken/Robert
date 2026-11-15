@@ -147,7 +147,7 @@ class TapdSourcePersistenceTests(unittest.TestCase):
             rows = workstream_queries.find_for_remote_source_rows(conn, "repo-1")
             conn.execute("UPDATE workstreams SET lifecycle = 'completed', active_task_id = NULL")
             recovery = event_queries.scan_repo_filtered(conn, ["alice"], "repo-1", "robot")
-            sources = work_queries.sources_for_workstream(conn, "w1")
+            sources = work_queries.sources_for_task(conn, "w1", [{"provider": "tapd"}])
         self.assertEqual([tuple(row)[6:] for row in rows], [("tapd", "open")])
         self.assertEqual(recovery, [])
         self.assertEqual(

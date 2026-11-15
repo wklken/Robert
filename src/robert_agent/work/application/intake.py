@@ -1,6 +1,6 @@
 """Admit ordered requests and prepare available work under existing task fences."""
 
-from robert_agent.foundation.contracts.work import FactClassification
+from robert_agent.foundation.contracts.work import FactClassification, SourceProvider
 
 from robert_agent.persistence import transactions as db_transactions
 from robert_agent.execution.application import dispatch as dispatcher
@@ -235,6 +235,11 @@ def admit_requests(
             continue
         if work_policies.is_driving_context_event(event):
             waiting_task = source_events.waiting_task_state(conn, event["workstream_id"])
+            is_tapd = work_queries.tapd_driven([event])
+            if waiting_task and is_tapd != work_queries.tapd_driven(
+                work_queries.task_events(conn, waiting_task["task_id"])
+            ):
+                continue
             if waiting_task:
                 if not execution_ownership.waiting_reply_allowed(conn, waiting_task["task_id"], run_now):
                     continue
@@ -337,6 +342,10 @@ def admit_requests(
                 known_workstreams.add(task_info["workstream_id"])
                 continue
             if event["workstream_id"] in active_workstreams:
+                if is_tapd and event.get("has_open_dd_pr"):
+                    # Select the queue again once it is ready, without adding
+                    # TAPD text or authority to the task currently using it.
+                    continue
                 appended = work_admission.append_event_to_active_task(conn, event, "context", run_now)
                 if appended:
                     if admission is not None:
@@ -397,7 +406,11 @@ def admit_requests(
                 conn, repo, event, retry_parent_id
             ):
                 continue
-            retry_context = work_queries.failed_parent_context_events(conn, retry_parent_id)
+            retry_context = [
+                prior
+                for prior in work_queries.failed_parent_context_events(conn, retry_parent_id)
+                if (prior.get("provider") == SourceProvider.TAPD) == is_tapd
+            ]
             # A completed request's issue title describes old work. Infer
             # this new instruction on its own; ambiguous questions go to
             # classification instead of inheriting an old "bug"/"报错".
@@ -406,9 +419,9 @@ def admit_requests(
                 if retry_context
                 else {
                     **event,
-                    "intent": discover.infer_intent(
-                        None, event.get("body"), event["event_type"], repo["github_account"]
-                    ),
+                    "intent": event.get("intent")
+                    if is_tapd
+                    else discover.infer_intent(None, event.get("body"), event["event_type"], repo["github_account"]),
                 }
             )
             retry_related = (

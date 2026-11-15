@@ -19,9 +19,15 @@ class FakeClient:
         self.written = []
         self.fail_reads = False
         self.write_error = None
+        self.rejected = []
+        self.reject_writes = 0
 
     def add_comment(self, workspace_id, kind, external_id, body):
         """Store the body as TAPD returns it: Markdown paragraphs become HTML paragraphs."""
+        if self.reject_writes:
+            self.reject_writes -= 1
+            self.rejected.append(body)
+            raise TapdError("command_failed")
         self.written.append(body)
         comment_id = str(9000 + len(self.written))
         html = "".join(f"<p>{part}</p>" for part in body.split("\n\n"))

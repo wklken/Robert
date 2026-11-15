@@ -460,6 +460,7 @@ def run_repo_pipeline(
             repo_id=repo_id,
             config_result=config_result,
             known_workstreams=known_workstreams,
+            now=run_now,
         )
 
         run_journal.mark_repo_run_step(conn, run_id, repo_id, "route", "running", run_now)

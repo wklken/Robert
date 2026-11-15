@@ -1,14 +1,18 @@
 """Publish Robert's TAPD comments and find them again by their visible receipt."""
 
 import hashlib
+import json
 import subprocess
 
 from robert_agent.adapters.tapd import client as tapd_client
 from robert_agent.delivery import values as publication_values
 from robert_agent.foundation import tapd_identity
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.stores import github_actions as db_write_github_actions
 from robert_agent.work import tapd_policy
 
 RECEIPT_LABEL = "回执"
+PULL_REQUEST_LABEL = "PR："
 PROTOCOL_ERRORS = (tapd_client.TapdError, subprocess.TimeoutExpired, OSError, ValueError)
 
 
@@ -40,6 +44,18 @@ def ticket_body(body, marker, mention_name):
     """TAPD drops HTML comments, so the receipt is a visible final paragraph."""
     text = tapd_policy.neutralize_mentions(body.replace(marker, "").strip(), mention_name)
     return f"{tapd_policy.automatic_prefix(mention_name)}\n\n{text}\n\n{RECEIPT_LABEL} {receipt_token(marker)}"
+
+
+def link_pull_request(conn, action):
+    """Fix the round's PR link into the body; call only before the action has a publication intent."""
+    url = db_read_github_actions.find_pull_request_url_for_action(conn, action["action_id"])
+    metadata = publication_values.decode_json(action["metadata_json"])
+    if not url or url in metadata.get("body", ""):
+        return action
+    metadata["body"] = f"{metadata['body']}\n\n{PULL_REQUEST_LABEL}{url}"
+    metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+    db_write_github_actions.set_metadata_json_by_action_id(conn, metadata_json, action["action_id"])
+    return {**action, "metadata_json": metadata_json}
 
 
 def ticket_target(url, settings):

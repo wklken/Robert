@@ -384,11 +384,13 @@ def comment_marker(task_id, attempt_id, index):
 def target_urls(scope):
     """Canonical candidates shared by prompt rendering and submission errors."""
     urls = set()
-    for item in scope.get("sources", []):
+    sources = scope.get("sources", [])
+    tapd_only = any(item.get("provider") == SourceProvider.TAPD for item in sources)
+    for item in sources:
         if item.get("provider") == SourceProvider.TAPD:
             host, workspace_id = item["project_key"].split("/", 1)
             urls.add(tapd_ticket_url(host, workspace_id, TAPD_KINDS[item["source_type"]], item["external_id"]))
-        elif item.get("source_type") in {"issue", "pull_request"}:
+        elif not tapd_only and item.get("source_type") in {"issue", "pull_request"}:
             kind = "issues" if item["source_type"] == "issue" else "pull"
             urls.add(f"https://github.com/{scope['repo']}/{kind}/{item['number']}")
     return sorted(urls)

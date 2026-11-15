@@ -1,6 +1,12 @@
 """Shared queries operations for github_actions."""
 
-from robert_agent.foundation.contracts.delivery import AuditStatus, GitHubActionType, PublicationStatus, PublishStatus
+from robert_agent.foundation.contracts.delivery import (
+    AuditStatus,
+    OutputType,
+    GitHubActionType,
+    PublicationStatus,
+    PublishStatus,
+)
 from robert_agent.foundation.contracts.execution import AttemptStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind, RecoveryStatus
 
@@ -169,6 +175,46 @@ def find_for_prepare_publication_intent_2(conn, action_id):
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query1, {"p0": action_id})
+
+
+def find_pull_request_url_for_action(conn, action_id):
+    """The confirmed PR of the action's result, else the PR its task's workstream tracks."""
+    actions = tables["github_actions"]
+    sibling = actions.alias("sibling")
+    opened = (
+        select(sibling.c["target_url"])
+        .select_from(actions.join(sibling, sibling.c["result_id"] == actions.c["result_id"]))
+        .where(
+            actions.c["action_id"] == bindparam("p0"),
+            sibling.c["action_type"] == sql_constant(GitHubActionType.OPEN_PR.value),
+            sibling.c["publish_status"] == sql_constant(PublishStatus.PUBLISHED.value),
+        )
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    rows = statements.read(conn, opened, {"p0": action_id})
+    if rows:
+        return rows[0][0]
+    tasks, workstreams, sources, repos, results = (
+        tables[name] for name in ("tasks", "workstreams", "github_sources", "repos", "worker_results")
+    )
+    tracked = (
+        select(repos.c["full_name"], sources.c["number"])
+        .select_from(
+            actions.join(tasks, tasks.c["task_id"] == actions.c["task_id"])
+            .join(results, results.c.result_id == actions.c.result_id)
+            .join(workstreams, workstreams.c["workstream_id"] == tasks.c["workstream_id"])
+            .join(sources, sources.c["source_id"] == workstreams.c["primary_source_id"])
+            .join(repos, repos.c["repo_id"] == sources.c["repo_id"])
+        )
+        .where(
+            actions.c["action_id"] == bindparam("p0"),
+            sources.c["source_type"] == sql_constant("pull_request"),
+            results.c.output_type == OutputType.UPDATE_EXISTING_PR.value,
+        )
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    rows = statements.read(conn, tracked, {"p0": action_id})
+    return f"https://github.com/{rows[0][0]}/pull/{rows[0][1]}" if rows else None
 
 
 def find_for_skip_pending_result_actions(conn, result_id, excluding_action_id):

@@ -2,6 +2,7 @@
 
 from robert_agent.context.memory_policy import redact_memory_delta
 from robert_agent.foundation.contracts.delivery import GitHubActionType
+from robert_agent.foundation.contracts.work import SourceProvider
 from robert_agent.persistence.queries import github_actions as action_queries
 from robert_agent.supervision.receipts import matches as receipt_matches
 
@@ -392,7 +393,9 @@ def retrieve_memories(conn, repo_id, workstream_id, route_result, events, limit=
         scores[memory_id] = scores.get(memory_id, 0) + score
     if not scores:
         return []
-    rows = db_read_project_memory_entries.retrieve_memories_filtered(conn, scores)
+    rows = db_read_project_memory_entries.retrieve_memories_filtered(
+        conn, scores, include_tapd=bool(events and events[0].get("provider") == SourceProvider.TAPD)
+    )
     memories = []
     for row in rows:
         (

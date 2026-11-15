@@ -54,7 +54,11 @@ def prepare_worktree(repo, event, route_result, dry_run):
         repo,
         {**route_result, "workspace_mode": workspace_mode},
         {
-            "number": event["number"] if workspace_mode in _PULL_REQUEST_MODES else source_reference(event),
+            "number": (
+                event.get("existing_pr_number") or event["number"]
+                if workspace_mode in _PULL_REQUEST_MODES
+                else source_reference(event)
+            ),
             "branch_slug": (event.get("branch_slug") or event.get("title") or "task"),
             "head_branch": event.get("existing_pr_head_branch"),
         },

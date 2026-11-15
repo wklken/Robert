@@ -88,6 +88,19 @@ def remote_source_rows(conn, repo_id):
     return db_read_workstreams.find_for_remote_source_rows(conn, repo_id)
 
 
+def tapd_origin(conn, workstream_id):
+    row = db_records.first(db_read_github_sources.find_tapd_origin_for_workstream(conn, workstream_id))
+    if row:
+        return dict(zip(("project_key", "external_id", "url", "source_type"), row))
+
+
+def tapd_pull_requests(conn, ticket_workstream_id):
+    return [
+        {"number": number, "url": url, "state": state}
+        for number, url, state in db_read_workstreams.find_recent_derived_pull_requests(conn, ticket_workstream_id, 10)
+    ]
+
+
 def tapd_discussions(conn, workstream_id):
     """Return the stored ticket snapshot of each TAPD source in the workstream."""
     return [
@@ -96,8 +109,17 @@ def tapd_discussions(conn, workstream_id):
     ]
 
 
+def task_events(conn, task_id):
+    events = [json.loads(payload or "{}") for (payload,) in db_read_task_events.find_for_for_result(conn, task_id)]
+    row = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, task_id))
+    trigger = json.loads(row[0] or "{}").get("request_event_fingerprint") if row else None
+    if trigger:
+        events.sort(key=lambda event: event.get("event_fingerprint") != trigger)
+    return events
+
+
 def tapd_driven(events):
-    return any(event.get("provider") == SourceProvider.TAPD for event in events)
+    return bool(events and events[0].get("provider") == SourceProvider.TAPD)
 
 
 def sources_for_task(conn, workstream_id, events):

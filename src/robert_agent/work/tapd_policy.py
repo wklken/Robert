@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
+import hashlib
 import re
 
 from robert_agent.foundation.timestamps import utc_timestamp
@@ -164,6 +165,13 @@ def authorize_comment(comment, project, *, mention_name, automatic_ids, known):
         project=project,
         known=known,
     )
+
+
+MULTIPLE_PRS_NOTICE = "tapd_multiple_pull_requests"
+
+
+def notice_id(kind, dedupe_key):
+    return "tapd-notice-" + hashlib.sha256(f"{kind}\0{dedupe_key}".encode()).hexdigest()[:32]
 
 
 def project_for(config, project_key):

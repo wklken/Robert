@@ -4,6 +4,7 @@ import json
 import sys
 
 from robert_agent.foundation.commands import emit
+from robert_agent.foundation.contracts.work import SourceProvider
 
 
 def resolve_workstream_id(event):
@@ -11,6 +12,8 @@ def resolve_workstream_id(event):
 
 
 def source_relationship(event):
+    if event.get("provider") == SourceProvider.TAPD and event.get("has_open_dd_pr"):
+        return "related"
     metadata = event.get("metadata") or {}
     if event.get("source_type") == "pull_request" and (
         event.get("origin_workstream_id") or metadata.get("dd_workstream")
