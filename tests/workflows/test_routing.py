@@ -16,6 +16,24 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(result["route_id"], "update-existing-pr")
         self.assertNotIn("open_pr", result["allowed_github_actions"])
 
+    def test_tapd_requests_stay_on_analysis_and_clarification_routes(self):
+        from robert_agent.workflows import routing
+
+        event = {"provider": "tapd", "source_type": "tapd_story", "number": None}
+        for intent, expected in (
+            ("analysis", "comment-analysis"),
+            ("bug_fix", "classification-result"),
+            (None, "classification-result"),
+        ):
+            with self.subTest(intent=intent):
+                self.assertEqual(routing.effective_route(None, {}, {**event, "intent": intent})["route_id"], expected)
+        self.assertEqual(
+            routing.effective_route(None, {}, event, route_id="waiting-for-user")["route_id"], "waiting-for-user"
+        )
+        blocked = routing.effective_route(None, {}, event, route_id="new-pr")
+        self.assertEqual((blocked["route_id"], blocked["allowed_github_actions"]), ("waiting-for-user", ["comment"]))
+        self.assertEqual(routing.effective_route(None, {}, {"intent": "bug_fix"})["route_id"], "new-pr")
+
     def test_routes_do_not_advertise_internal_worker_as_skill(self):
         from robert_agent.workflows import routes as route
 

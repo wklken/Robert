@@ -8,6 +8,8 @@ import re
 from robert_agent.foundation.timestamps import utc_timestamp
 
 TAPD_TIMEZONE = timezone(timedelta(hours=8))
+ROUTE_IDS = frozenset({"classification-result", "comment-analysis", "waiting-for-user"})
+DIRECT_INTENTS = frozenset({"analysis", "discussion", "requirement_analysis"})
 _BLOCKS = frozenset(
     {"blockquote", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "li", "ol", "p", "pre", "table", "tr", "ul"}
 )
@@ -159,8 +161,8 @@ def project_for(config, project_key):
     return None
 
 
-def reauthorize(event, config, *, known_workstreams):
-    """Check a saved request against current configuration only; never re-read TAPD."""
+def reauthorize(event, config, *, known_workstreams, ended=False):
+    """Check a saved request against current configuration and the stored end state; never re-read TAPD."""
     project = project_for(config, event.get("project_key"))
     rule = next(
         (
@@ -170,10 +172,14 @@ def reauthorize(event, config, *, known_workstreams):
         ),
         None,
     )
-    if not project or not rule:
+    if not (config or {}).get("enabled") or not project or not rule:
         return {**event, **_decision("ignored_untrusted_trigger")}
+    if ended:
+        return {**event, "state": "closed", **_decision("ignored_current_state_closed")}
     return {
         **event,
+        "state": "open",
+        "tapd_trusted_user": project["trusted_user"],
         **_authority(
             author=event.get("actor_login"),
             created=event.get("comment_created"),

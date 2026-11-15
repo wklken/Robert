@@ -2,7 +2,13 @@
 
 from robert_agent.foundation.contracts.delivery import OutputType
 from robert_agent.foundation.contracts.execution import AttemptStatus, RoundStatus
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskKind, TaskLifecycle, WorkstreamLifecycle
+from robert_agent.foundation.contracts.work import (
+    REMEDIATION_TASK_KINDS,
+    SourceProvider,
+    TaskKind,
+    TaskLifecycle,
+    WorkstreamLifecycle,
+)
 
 from robert_agent.persistence import transactions as db_transactions
 
@@ -433,21 +439,24 @@ def create_task_attempt_and_prompt(
     runtime_context["github_context"] = github_context
 
     db_write_workstreams.insert_for_create_task_attempt_and_prompt(
-        conn, workstream_id, repo_id, source_id, lifecycle, task_id, run_now, run_now
+        conn, workstream_id, repo_id, source_id, lifecycle, task_id, run_now, run_now, event.get("public_ref")
     )
+    origin_type = event.get("provider") or SourceProvider.GITHUB.value
     item = work_items.ensure_github_work_item(
         conn,
         repo_id=repo_id,
         source_id=source_id,
         workstream_id=workstream_id,
-        actor_identity=event.get("actor_login") or "github",
+        actor_identity=event.get("actor_login") or origin_type,
         route_confidence=route_result.get("confidence", "low"),
         route_id=route_result["route_id"],
         now=run_now,
+        origin_type=origin_type,
     )
-    if item["origin_type"] == "github" and item["canceled_at"] and new_request_event is not None:
+    source_origin = item["origin_type"] in set(SourceProvider)
+    if source_origin and item["canceled_at"] and new_request_event is not None:
         db_write_work_items.update_for_create_task_attempt_and_prompt(conn, run_now, item["work_item_id"])
-    if item["origin_type"] == "github" and item["completed_at"] and not item["canceled_at"]:
+    if source_origin and item["completed_at"] and not item["canceled_at"]:
         db_write_work_items.update_for_create_task_attempt_and_prompt_2(conn, run_now, item["work_item_id"])
     participants.record_review_participant(conn, workstream_id, event, route_result, run_now)
     for related_event in related_events:

@@ -126,15 +126,19 @@ class AuthorizationTests(unittest.TestCase):
             "mentions_dd": True,
             "automatic": False,
         }
-        config = {"mention_name": NAME, "projects": [project()]}
+        config = {"enabled": True, "mention_name": NAME, "projects": [project()]}
+        accepted = tapd_policy.reauthorize(event, config, known_workstreams=())
         self.assertEqual(
-            tapd_policy.reauthorize(event, config, known_workstreams=())["authorization_status"], "authorized_trigger"
+            (accepted["authorization_status"], accepted["tapd_trusted_user"]), ("authorized_trigger", "alice")
         )
         self.assertEqual(
             tapd_policy.reauthorize(event, config, known_workstreams=[event["workstream_id"]])["authorization_status"],
             "accepted_context",
         )
+        ended = tapd_policy.reauthorize(event, config, known_workstreams=(), ended=True)
+        self.assertEqual((ended["authorization_status"], ended["state"]), ("ignored_current_state_closed", "closed"))
         for changed in (
+            {"enabled": False},
             {"projects": [project(trusted_user="bob")]},
             {"projects": [project(label_rules=[{"label": "repo-a", "repository": "owner/repo-b"}])]},
             {"projects": [project(accept_after="2026-11-21T00:00:00+08:00")]},

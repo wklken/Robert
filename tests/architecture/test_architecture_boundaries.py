@@ -81,7 +81,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                     )
 
     def test_pure_policies_have_no_application_dependencies(self):
-        self.assert_dependencies("robert_agent.work.policies", ())
+        self.assert_dependencies("robert_agent.work.policies", {"robert_agent.foundation.contracts.work"})
         self.assert_dependencies("robert_agent.delivery.policies", {"robert_agent.foundation.contracts.delivery"})
         self.assert_dependencies(
             "robert_agent.work.inputs", {"robert_agent.work.errors", "robert_agent.foundation.contracts.work"}

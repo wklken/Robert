@@ -1,6 +1,6 @@
 """Persist source events and read their associated task state."""
 
-from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+from robert_agent.foundation.contracts.work import SourceProvider, TaskLifecycle, WorkstreamLifecycle
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_events as db_read_github_events
@@ -61,6 +61,9 @@ def task_review_input_policy(conn, task_id):
 
 def insert_source_and_event(conn, repo_id, event, run_now):
     source_id = values.github_source_id(event["source_key"])
+    if event.get("provider") == SourceProvider.TAPD:
+        # The scan already wrote both rows; admission never rewrites a first observation.
+        return source_id, values.github_event_id(event["event_fingerprint"])
     db_write_github_sources.insert_source_and_event(
         conn,
         source_id,

@@ -11,6 +11,7 @@ from robert_agent.work.application import discovery
 from robert_agent.work.application import intake
 from robert_agent.work.application import remediation_requests
 from robert_agent.work.application import source_lifecycle
+from robert_agent.work.application import tapd_intake
 from robert_agent.execution import leases as execution_leases
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.foundation import values
@@ -453,6 +454,13 @@ def run_repo_pipeline(
         if discovered is None:
             return summary
         decisions, known_workstreams, active_workstreams = discovered
+        decisions = decisions + tapd_intake.collect_decisions(
+            conn,
+            repo=repo,
+            repo_id=repo_id,
+            config_result=config_result,
+            known_workstreams=known_workstreams,
+        )
 
         run_journal.mark_repo_run_step(conn, run_id, repo_id, "route", "running", run_now)
         route_failures = intake.admit_requests(

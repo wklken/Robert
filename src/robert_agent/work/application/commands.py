@@ -262,6 +262,7 @@ def ensure_github_work_item(
     route_confidence,
     now,
     route_id=None,
+    origin_type="github",
 ):
     existing = resolve_work_item_for_workstream(conn, workstream_id)
     if existing:
@@ -296,11 +297,12 @@ def ensure_github_work_item(
         title,
         root_source_id,
         root_workstream_id,
-        f"github:{root_source_id}",
+        f"{origin_type}:{root_source_id}",
         created_by,
         activated_at,
         created_at,
         now,
+        origin_type,
     )
     item = db_records.first(
         db_read_work_items.find_for_ensure_github_work_item(conn, root_workstream_id, root_source_id)
@@ -308,14 +310,14 @@ def ensure_github_work_item(
     if not item:
         raise WorkItemConflictError("GitHub work item identity conflicts with existing data")
     item_payload = _item_from_row(item)
-    event_type = "operator_decision_required" if decision_required else "github_intake"
+    event_type = "operator_decision_required" if decision_required else f"{origin_type}_intake"
     _insert_event(
         conn,
         item_payload["work_item_id"],
         event_type=event_type,
-        actor_kind="github",
+        actor_kind=origin_type,
         actor_identity=created_by,
-        idempotency_key=f"github-intake:{root_source_id}",
+        idempotency_key=f"{origin_type}-intake:{root_source_id}",
         metadata={
             "route_confidence": route_confidence,
             "source_id": source_id,

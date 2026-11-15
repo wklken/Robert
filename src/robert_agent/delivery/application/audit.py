@@ -9,7 +9,7 @@ from robert_agent.foundation.contracts.delivery import (
     ReviewAction,
     VerificationStatus,
 )
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskKind
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, SourceProvider, TaskKind
 
 import argparse
 import json
@@ -708,7 +708,7 @@ def audit_result(
                 "status": AuditStatus.FAILED.value,
                 "safe_error": question_error,
             }
-        if origin_type == "github" and GitHubActionType.COMMENT.value not in actual_types:
+        if origin_type in set(SourceProvider) and GitHubActionType.COMMENT.value not in actual_types:
             return {
                 "ok": False,
                 "status": AuditStatus.FAILED.value,

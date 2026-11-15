@@ -1,7 +1,7 @@
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
 from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskLifecycle
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, SourceProvider, TaskLifecycle
 
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import errors as db_errors
@@ -410,7 +410,9 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
             error = None
             if operator_question is None:
                 error = "waiting_for_user requires operator_question"
-            elif (not origin or origin[0] == "github") and not any(a.get("type") == "comment" for a in actions):
+            elif (not origin or origin[0] in set(SourceProvider)) and not any(
+                a.get("type") == "comment" for a in actions
+            ):
                 error = "GitHub waiting_for_user requires a public comment action"
             if error:
                 return {
