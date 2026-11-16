@@ -74,7 +74,9 @@ def pull_request_write_guard(conn, action, run_command):
     if url.netloc != "github.com" or len(parts) != 4 or parts[2] != "pull" or not parts[3].isdigit():
         return _failure("Invalid GitHub pull request for TAPD comment", retryable=False)
     repo = f"{parts[0]}/{parts[1]}"
-    state = github_sources.read_source_state(repo, "pull_request", int(parts[3]), run_command)
+    state = github_sources.read_source_state(
+        repo, "pull_request", int(parts[3]), run_command, require_explicit_state=True
+    )
     if state and (state.get("state") == "closed" or state.get("merged") or state.get("merged_at")):
         return {"ok": True, "status": PR_TERMINAL, "safe_error": "Pull request closed before the TAPD comment"}
     if not state or state.get("state") != "open":

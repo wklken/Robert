@@ -3,12 +3,14 @@
 from robert_agent.adapters.github import client as github_client
 
 
-def read_source_state(repo_full_name, source_type, number, runner):
+def read_source_state(repo_full_name, source_type, number, runner, *, require_explicit_state=False):
     issue_payload = github_client.try_read_json(
         ["gh", "api", f"repos/{repo_full_name}/issues/{number}"],
         runner=runner,
     )
     if not isinstance(issue_payload, dict):
+        return None
+    if require_explicit_state and issue_payload.get("state") not in ("open", "closed"):
         return None
     remote = {
         "state": issue_payload.get("state") or "open",

@@ -8,6 +8,7 @@ import subprocess
 import unittest
 from unittest import mock
 
+from robert_agent.adapters.github import client as github_client
 from robert_agent.adapters.github import sources as github_sources
 from robert_agent.adapters.tapd import client as tapd_client
 from robert_agent.configuration import validation
@@ -120,6 +121,21 @@ class TapdPullRequestCase(TapdCycleCase):
 
 
 class TapdNewPullRequestTests(TapdPullRequestCase):
+    def test_result_comment_is_deferred_if_github_does_not_confirm_pr_state(self):
+        self.request_fix()
+        self.open_pull_request()
+        with (
+            mock.patch.object(tapd_client, "client_for", return_value=self.client),
+            mock.patch.object(github_client, "try_read_json", return_value={}),
+        ):
+            run_once.run_once(self.config_path, dry_run=False, skip_external=True, max_dispatches=0)
+
+        self.assertEqual(self.client.written, [])
+        self.assertEqual(
+            self.query("SELECT publish_status FROM github_actions WHERE action_type = 'comment'"),
+            [("not_published",)],
+        )
+
     def test_result_comment_rechecks_pr_before_retry_without_a_prior_terminal_observation(self):
         self.request_fix()
         self.open_pull_request()
