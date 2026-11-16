@@ -46,6 +46,21 @@ def find_existing_ids(conn, notification_ids):
     return statements.read(conn, query, {"items": list(notification_ids)})
 
 
+def pending_tapd_notice_exists(source):
+    notice = tables["notifications"]
+    return (
+        select(1)
+        .where(
+            notice.c.channel == "tapd",
+            notice.c.status == "pending",
+            func.json_extract(notice.c.metadata_json, "$.project_key") == source.c.project_key,
+            func.json_extract(notice.c.metadata_json, "$.external_id") == source.c.external_id,
+        )
+        .correlate(source)
+        .exists()
+    )
+
+
 def find_delivered_tapd_comment_ids(conn, project_key):
     notice = tables["notifications"]
     comment_id = func.json_extract(notice.c.metadata_json, "$.tapd_delivery.comment_id")

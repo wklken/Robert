@@ -15,8 +15,8 @@ from robert_agent.configuration import validation
 from robert_agent.delivery.application import scope
 from robert_agent.delivery.application import submission, tapd_comments, tapd_notifications
 from robert_agent.runtime import cycle as run_once
-from robert_agent.work.application import remediation_requests, source_lifecycle
-from robert_agent.workflows import pr_health
+from robert_agent.work.application import remediation_requests, source_lifecycle, synchronization
+from robert_agent.workflows import pr_health, pr_remediation
 from tests.support.repository_cycle import _verification_evidence
 from tests.support.tapd import STORY, comment
 from tests.support.tapd_cycle import TapdCycleCase
@@ -107,7 +107,7 @@ class TapdPullRequestCase(TapdCycleCase):
                 "WHERE action_type = 'comment'"
             )
 
-    def reconcile(self, remote_state):
+    def reconcile(self, remote_state, *, review_runner=None):
         config = validation.validate_config(self.config_path, skip_external=True)
         (repo,) = config["repos"]
         with (
@@ -116,7 +116,14 @@ class TapdPullRequestCase(TapdCycleCase):
         ):
             (repo_id,) = conn.execute("SELECT repo_id FROM repos").fetchone()
             for _ in range(2):
-                source_lifecycle.reconcile_remote_source_states(conn, repo_id, repo, None, "2026-11-20T04:10:00+00:00")
+                source_lifecycle.reconcile_remote_source_states(
+                    conn,
+                    repo_id,
+                    repo,
+                    review_runner,
+                    "2026-11-20T04:10:00+00:00",
+                    tapd_settings=config["tapd"] if review_runner else None,
+                )
             conn.commit()
 
 
@@ -413,6 +420,185 @@ class TapdDerivedQueueTests(TapdPullRequestCase):
         )
         self.assertFalse(denied["ok"], denied)
         self.assertEqual(denied["reason_code"], "action_scope")
+
+
+class TapdPrNoticeTests(TapdPullRequestCase):
+    def start_pr(self):
+        self.request_fix()
+        self.open_pull_request()
+        self.assertTrue(self.publish()["ok"])
+
+    def notice_types(self):
+        return [kind for (kind,) in self.query("SELECT notification_type FROM notifications WHERE channel = 'tapd'")]
+
+    def deliver(self, now="2026-11-20T04:20:00+00:00"):
+        config = validation.validate_config(self.config_path, skip_external=True)
+        publisher = tapd_comments.Publisher(config["tapd"], self.data_dir, client=self.client)
+        return tapd_notifications.deliver_pending(config, publisher=publisher, now=now)
+
+    def test_repeated_merge_observation_publishes_one_notice(self):
+        self.start_pr()
+        self.reconcile(MERGED)
+        self.reconcile(MERGED)
+        self.assertEqual(self.notice_types(), ["tapd_pr_merged"])
+        self.assertEqual(self.deliver().get("delivered"), 1)
+        self.assertNotIn("delivered", self.deliver())
+        self.assertIn("已合并", self.client.written[-1])
+        self.assertIn(PR_URL, self.client.written[-1])
+
+    def test_unmerged_close_is_notified_only_if_ticket_is_open(self):
+        self.start_pr()
+        closed = {**MERGED, "merged": False, "merged_at": None}
+        self.reconcile(closed)
+        self.reconcile(closed)
+        self.assertEqual(self.notice_types(), ["tapd_pr_closed"])
+        self.client.status[STORY] = "status_3"
+        self.scan()
+        self.assertEqual(self.deliver().get("skipped"), 1)
+        self.assertEqual(len(self.client.written), 1)
+        self.assertEqual(self.query("SELECT status FROM notifications WHERE channel = 'tapd'"), [("skipped",)])
+
+    def test_each_submitted_review_sends_only_one_link_reminder(self):
+        self.start_pr()
+        reviews = [
+            {"id": 10, "state": "COMMENTED", "submitted_at": "2026-11-20T04:01:00Z", "body": "Private review text"},
+            {"id": 11, "state": "PENDING", "submitted_at": None, "body": "Unsubmitted draft"},
+            {"id": 12, "state": "APPROVED", "submitted_at": "2026-11-20T04:03:00Z"},
+        ]
+
+        def runner(args, **kwargs):
+            self.assertEqual(args, ["gh", "api", "repos/example/backend/pulls/10/reviews", "--paginate", "--slurp"])
+            return subprocess.CompletedProcess(args, 0, json.dumps([reviews]), "")
+
+        self.reconcile({"state": "open", "html_url": PR_URL}, review_runner=runner)
+        self.assertEqual(self.notice_types(), ["tapd_pr_review_submitted"] * 2)
+        self.assertEqual(self.deliver().get("delivered"), 2)
+        self.reconcile({"state": "open", "html_url": PR_URL}, review_runner=runner)
+        self.assertNotIn("delivered", self.deliver())
+        self.assertEqual(
+            self.client.written[1:],
+            [f"robert-wklken：\n\n关联的 PR 有新的评审。\n\n{PR_URL}"] * 2,
+        )
+
+    def test_background_scan_replays_final_review_without_other_github_activity(self):
+        self.start_pr()
+        self.reconcile(MERGED)
+        config = validation.validate_config(self.config_path, skip_external=True)
+        (repo,) = config["repos"]
+        review = {"id": 42, "state": "APPROVED", "submitted_at": "2026-11-20T04:02:00Z"}
+        session = mock.Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps([[review]]), ""))
+        session.collect_events.return_value = []
+        self.assertIsNotNone(synchronization.scan_repo(config, repo, session, []))
+        self.assertEqual(
+            session.call_args.args[0],
+            [
+                "gh",
+                "api",
+                f"repos/{repo['full_name']}/pulls/10/reviews",
+                "--paginate",
+                "--slurp",
+            ],
+        )
+
+        outcome = run_once.run_once(
+            self.config_path, dry_run=True, skip_external=True, skip_publish=True, consume_observations=True
+        )
+        self.assertTrue(outcome["ok"], outcome)
+        self.assertCountEqual(self.notice_types(), ["tapd_pr_merged", "tapd_pr_review_submitted"])
+
+    def test_closed_pr_review_read_retries_until_its_last_review_is_observed(self):
+        self.start_pr()
+        calls = 0
+
+        def runner(args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise subprocess.CalledProcessError(1, args, stderr="temporary error")
+            review = {"id": 42, "state": "CHANGES_REQUESTED", "submitted_at": "2026-11-20T04:02:00Z"}
+            return subprocess.CompletedProcess(args, 0, json.dumps([[review]]), "")
+
+        self.reconcile(MERGED, review_runner=runner)
+        self.reconcile(MERGED, review_runner=runner)
+        self.assertEqual(calls, 2)
+        self.assertCountEqual(self.notice_types(), ["tapd_pr_merged", "tapd_pr_review_submitted"])
+
+    def test_pending_merge_notice_keeps_tracking_the_ended_ticket(self):
+        self.start_pr()
+        self.reconcile(MERGED)
+        self.client.status[STORY] = "status_3"
+        self.scan()
+        self.assertEqual(self.deliver().get("skipped"), 1)
+        self.assertEqual(len(self.client.written), 1)
+
+    def test_notice_retry_budget_stops_after_three_failures(self):
+        self.start_pr()
+        self.reconcile(MERGED)
+        self.client.reject_writes = 4
+        self.assertEqual(self.deliver("2026-11-20T04:20:00+00:00").get("pending"), 1)
+        self.assertEqual(self.deliver("2026-11-20T04:20:20+00:00").get("pending"), 1)
+        self.assertEqual(self.deliver("2026-11-20T04:20:40+00:00").get("failed"), 1)
+        self.assertNotIn("failed", self.deliver("2026-11-20T04:21:00+00:00"))
+        self.assertEqual(len(self.client.rejected), 3)
+
+    def test_remediation_outcomes_use_the_episode_and_keep_local_notices(self):
+        self.start_pr()
+        config = validation.validate_config(self.config_path, skip_external=True)
+        (repo,) = config["repos"]
+        repo["pr_automation"]["conflict"]["enabled"] = True
+        with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            (repo_id,) = conn.execute("SELECT repo_id FROM repos").fetchone()
+            stream = {"workstream_id": PR_WORKSTREAM, "repo_id": repo_id, "number": 10}
+            snapshot = {"state": "open", "head_sha": "original", "base_sha": "base", "mergeable": False}
+            now = "2026-11-20T04:10:00+00:00"
+            pr_remediation.upsert_health_episodes(
+                conn,
+                repo=repo,
+                workstream=stream,
+                snapshot=snapshot,
+                ci_summary=None,
+                now=now,
+            )
+            (episode,) = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()
+            self.assertTrue(
+                pr_remediation.record_publish_result(
+                    conn,
+                    episode_id=episode,
+                    publish_status="published",
+                    result_head_sha="fixed",
+                    now=now,
+                )
+            )
+            for _ in range(2):
+                pr_remediation.upsert_health_episodes(
+                    conn,
+                    repo=repo,
+                    workstream=stream,
+                    snapshot={**snapshot, "head_sha": "fixed", "mergeable": True},
+                    ci_summary=None,
+                    now=now,
+                )
+            pr_remediation.upsert_health_episodes(
+                conn,
+                repo=repo,
+                workstream=stream,
+                snapshot={**snapshot, "head_sha": "new-conflict"},
+                ci_summary=None,
+                now=now,
+            )
+            (attempt_limit,) = conn.execute(
+                "SELECT episode_id FROM pr_remediation_episodes WHERE observed_head_sha = 'new-conflict'"
+            ).fetchone()
+            for _ in range(2):
+                pr_remediation.exhaust_episode(conn, episode_id=attempt_limit, reason="max_attempts", now=now)
+        self.assertCountEqual(self.notice_types(), ["tapd_remediation_resolved", "tapd_remediation_budget_exhausted"])
+        self.assertEqual(
+            self.query("SELECT notification_type, status FROM notifications WHERE channel = 'local'"),
+            [("pr_remediation_exhausted", "recorded")],
+        )
+        self.assertEqual(self.deliver().get("delivered"), 2)
+        self.assertTrue(all(PR_URL in body for body in self.client.written[1:]))
 
 
 if __name__ == "__main__":

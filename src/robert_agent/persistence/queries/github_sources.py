@@ -5,6 +5,7 @@ from functools import cache
 from robert_agent.foundation.contracts.work import WorkstreamLifecycle
 from robert_agent.persistence.expressions import sql_constant
 from robert_agent.persistence.queries import github_events as event_queries
+from robert_agent.persistence.queries import notifications as notification_queries
 
 from sqlalchemy import (
     select,
@@ -189,13 +190,23 @@ def find_tapd_origin_for_workstream(conn, workstream_id):
     """Read the ticket owning this workstream or its directly derived pull request."""
     stream = tables["workstreams"]
     origin = stream.alias("origin")
-    source = tables["github_sources"]
+    source, repo = tables["github_sources"], tables["repos"]
+    primary = source.alias("primary_source")
     query = (
-        select(source.c.project_key, source.c.external_id, source.c.html_url, source.c.source_type)
+        select(
+            source.c.project_key,
+            source.c.external_id,
+            source.c.html_url,
+            source.c.source_type,
+            source.c.state,
+            primary.c.number,
+            repo.c.full_name,
+        )
         .select_from(
-            stream.outerjoin(origin, origin.c.workstream_id == stream.c.origin_workstream_id).join(
-                source, source.c.source_id == func.coalesce(origin.c.primary_source_id, stream.c.primary_source_id)
-            )
+            stream.join(primary, primary.c.source_id == stream.c.primary_source_id)
+            .join(repo, repo.c.repo_id == stream.c.repo_id)
+            .outerjoin(origin, origin.c.workstream_id == stream.c.origin_workstream_id)
+            .join(source, source.c.source_id == func.coalesce(origin.c.primary_source_id, stream.c.primary_source_id))
         )
         .where(stream.c.workstream_id == workstream_id, source.c.provider == "tapd")
     )
@@ -286,6 +297,7 @@ def find_tapd_tracked_sources(conn, project_key):
                 open_derived.exists(),
                 unfinished.exists(),
                 event_queries.tapd_unprocessed_exists(source),
+                notification_queries.pending_tapd_notice_exists(source),
             ),
         )
         .order_by(source.c["source_key"].asc())

@@ -27,7 +27,7 @@ from robert_agent.adapters.github import recording as github_recording
 from robert_agent.adapters.github import budget as github_budget
 from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 from robert_agent.work import scan_batches as scan_batches
-from robert_agent.work import wakeup
+from robert_agent.work import tapd_policy, wakeup
 from robert_agent.work.application import tapd_scan
 
 from robert_agent.work import source_policy as source_policy
@@ -89,6 +89,18 @@ def scan_repo(config, repo, session, hints):
         # or its historical authorization without fresh source reads.
         trusted = list(repo.get("trusted_actors") or [])
         unlinked = db_read_github_events.scan_repo_filtered(conn, trusted, repo_id, repo["github_account"])
+        tapd = config.get("tapd") or {}
+        review_targets = (
+            [
+                number
+                for _stream, _source, number, project_key, _closed_at in db_read_workstreams.find_tapd_pull_requests_for_review_sync(
+                    conn, repo_id
+                )
+                if tapd_policy.project_for(tapd, project_key)
+            ]
+            if tapd.get("enabled")
+            else []
+        )
     hints = list(hints)
     recovery_events = [json.loads(encoded) for (encoded,) in unlinked]
     for raw in [
@@ -135,6 +147,14 @@ def scan_repo(config, repo, session, hints):
                         max_summary_chars=ci["max_failure_summary_chars"],
                         runner=recorded,
                     )
+        # A newly closed PR's final review read must follow its state observation.
+        for number in review_targets:
+            try:
+                discover.submitted_review_ids(repo["full_name"], number, recorded)
+            except ControlDeadlineExceeded:
+                raise
+            except (OSError, subprocess.TimeoutExpired):
+                continue
         events = session.collect_events(
             repo,
             known_workstreams=known,
@@ -189,7 +209,7 @@ def scan_repo(config, repo, session, hints):
         )
         # Empty polling is not local work. Tracked or pending sources still
         # need a batch for closure, remediation and current-authority checks.
-        if events or sources or pending_rows:
+        if events or sources or pending_rows or review_targets:
             identifier = scan_batches.save_batch(
                 db_path, repo_id, context, events, recorded.responses, complete_sources=covered
             )

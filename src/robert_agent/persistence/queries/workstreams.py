@@ -10,6 +10,7 @@ from robert_agent.persistence.expressions import sql_constant
 from sqlalchemy import (
     select,
     bindparam,
+    case,
     and_,
     or_,
     not_,
@@ -91,6 +92,38 @@ def find_recent_derived_pull_requests(conn, origin_workstream_id, limit):
         )
         .order_by(stream.c.updated_at.desc(), source.c.number.desc())
         .limit(limit)
+    )
+    return statements.read(conn, query)
+
+
+def find_tapd_pull_requests_for_review_sync(conn, repo_id):
+    stream = tables["workstreams"]
+    origin = stream.alias("origin")
+    pr = tables["github_sources"]
+    ticket = pr.alias("ticket")
+    terminal = func.coalesce(func.json_extract(pr.c.metadata_json, "$.remote_state.closed_at"), "closed")
+    sync = func.coalesce(func.json_extract(pr.c.metadata_json, "$.tapd_reviews_closed_at"), "")
+    query = (
+        select(
+            stream.c.workstream_id,
+            pr.c.source_id,
+            pr.c.number,
+            ticket.c.project_key,
+            case((pr.c.state == "closed", terminal), else_=None),
+        )
+        .select_from(
+            stream.join(pr, pr.c.source_id == stream.c.primary_source_id)
+            .join(origin, origin.c.workstream_id == stream.c.origin_workstream_id)
+            .join(ticket, ticket.c.source_id == origin.c.primary_source_id)
+        )
+        .where(
+            stream.c.repo_id == repo_id,
+            ticket.c.provider == "tapd",
+            ticket.c.state == "open",
+            pr.c.source_type == SourceType.PULL_REQUEST.value,
+            or_(pr.c.state == "open", and_(pr.c.state == "closed", sync != terminal)),
+        )
+        .order_by(pr.c.number)
     )
     return statements.read(conn, query)
 

@@ -261,7 +261,10 @@ TAPD 请求由扫描通道写入来源行和事件，授权状态在第一次观
 workstream、路由和准备流程。存在一个打开的派生 PR 时，TAPD 请求进入该 PR 的
 workstream。修改路由复用同一分支，回评目标仍是原单据。发布审核检查 GitHub 动作和
 本次推送的提交信息中的 TAPD 标识。PR 创建确认后即建立本地关联，后续回评使用
-已保存的正文及 PR 链接。详见 [TAPD 来源](features/tapd.md)。
+已保存的正文及 PR 链接。PR 终态、修复轮次终态和已提交的 GitHub review 通过
+[`work/tapd_notices.py`](../src/robert_agent/work/tapd_notices.py) 查找原单据，
+按事件身份写入 TAPD 通知。发布通道使用固定文案和 PR 链接，独立于运营者消息投递。
+详见 [TAPD 来源](features/tapd.md)。
 
 源码：[authorize_event](../src/robert_agent/security/authorization.py)、[plan_event](../src/robert_agent/work/streams.py)、
 [route_task](../src/robert_agent/workflows/routes.py)、[仓库用例编排](../src/robert_agent/application/repository_cycle.py)（`run_repo_pipeline`）、

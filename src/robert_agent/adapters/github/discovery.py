@@ -141,6 +141,25 @@ def _api_items(repo, api_path, runner):
     return _flatten_items(payload)
 
 
+def submitted_review_ids(repo, number, runner):
+    """Read immutable IDs of submitted PR reviews without exposing their text."""
+    reviews = _api_items(repo, f"pulls/{number}/reviews", runner)
+    if reviews is None:
+        return None
+    states = {"APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"}
+    return sorted(
+        {
+            item["id"]
+            for item in reviews
+            if isinstance(item, dict)
+            and item.get("state") in states
+            and item.get("submitted_at")
+            and type(item.get("id")) is int
+            and item["id"] > 0
+        }
+    )
+
+
 def _login(payload, key):
     value = payload.get(key)
     if isinstance(value, dict):

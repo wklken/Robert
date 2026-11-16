@@ -2,6 +2,7 @@
 
 from contextlib import closing
 import json
+import re
 
 from robert_agent.delivery.application import tapd_comments
 from robert_agent.execution import retry as retry_policy
@@ -19,6 +20,16 @@ _LABEL_REASONS = {
     "conflict": "这张单据有多个仓库标签，无法确定在哪个仓库处理。",
 }
 
+_PR_TEMPLATES = {
+    tapd_policy.PR_MERGED_NOTICE: "关联的 PR 已合并。",
+    tapd_policy.PR_CLOSED_NOTICE: "关联的 PR 已关闭。",
+    tapd_policy.REMEDIATION_RESOLVED_NOTICE: "关联 PR 的自动修复已确认解决。",
+    tapd_policy.REMEDIATION_STOPPED_NOTICE: "关联 PR 的自动修复已停止，请查看 PR。",
+    tapd_policy.REMEDIATION_BUDGET_NOTICE: "关联 PR 的自动修复已用尽预算，请查看 PR。",
+    tapd_policy.PR_REVIEW_NOTICE: "关联的 PR 有新的评审。",
+}
+_PR_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*")
+
 
 def notice_body(notification_type, metadata, mention_name):
     """Fixed templates only: a notice never carries execution output or grants authority."""
@@ -27,6 +38,11 @@ def notice_body(notification_type, metadata, mention_name):
         text = f"{_LABEL_REASONS[metadata['reason']]}请只保留以下标签中的一个，再发一条提及 {mention_name} 的评论：{labels}"
     elif notification_type == tapd_policy.MULTIPLE_PRS_NOTICE:
         text = f"这张单据在同一仓库有多个打开的 PR。请关闭多余的 PR，再发一条提及 {mention_name} 的评论。"
+    elif notification_type in _PR_TEMPLATES:
+        url = metadata.get("pr_url")
+        if not isinstance(url, str) or not _PR_URL.fullmatch(url):
+            return None
+        text = f"{_PR_TEMPLATES[notification_type]}\n\n{url}"
     else:
         return None
     return f"{tapd_policy.automatic_prefix(mention_name)}\n\n{tapd_policy.neutralize_mentions(text, mention_name)}"

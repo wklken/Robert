@@ -91,7 +91,7 @@ def remote_source_rows(conn, repo_id):
 def tapd_origin(conn, workstream_id):
     row = db_records.first(db_read_github_sources.find_tapd_origin_for_workstream(conn, workstream_id))
     if row:
-        return dict(zip(("project_key", "external_id", "url", "source_type"), row))
+        return dict(zip(("project_key", "external_id", "url", "source_type", "state", "pr_number", "repo"), row))
 
 
 def tapd_pull_requests(conn, ticket_workstream_id):
