@@ -54,6 +54,74 @@ class TapdBackportTests(TapdCycleCase):
         self.cycle()
         self.assertEqual(self.backport_tasks(), [])
 
+    def test_quoted_and_code_commands_stay_context_after_scan_and_admission(self):
+        history = "cherry-pick #10 to release/1.25"
+        contexts = (
+            f"<blockquote>{history}</blockquote>",
+            f"<pre>{history}</pre>",
+            f"<p><code>{history}</code></p>",
+            f"\n\n    {history}",
+        )
+        self.scan(
+            *(comment(str(index), "@robert-wklken 请分析历史记录\n" + body) for index, body in enumerate(contexts, 2))
+        )
+        saved = self.query("SELECT authorization_status,payload_json FROM github_events")
+        self.assertEqual(len(saved), len(contexts))
+        for authorization, payload in saved:
+            self.assertEqual(authorization, "authorized_trigger")
+            self.assertIn(history, json.loads(payload)["body"])
+            self.assertIsNone(json.loads(payload)["backport_request"])
+        self.cycle()
+        tasks = self.backport_tasks()
+        self.assertTrue(tasks)
+        self.assertEqual({task[2] for task in tasks}, {"comment-analysis"})
+        self.assertTrue(all(not json.loads(task[5]).get("target_base_branch") for task in tasks))
+        self.assertEqual(
+            self.query("SELECT COUNT(*) FROM github_events WHERE event_fingerprint LIKE '%:backport:%'"), [(0,)]
+        )
+
+    def test_body_command_is_saved_and_admitted_without_quoted_targets(self):
+        self.scan(
+            comment(
+                "2",
+                "<p>@robert-wklken cherry-pick #10 to release/1.25, release/1.26</p>"
+                "<blockquote>cherry-pick #11 to release/old</blockquote>",
+            )
+        )
+        ((payload,),) = self.query("SELECT payload_json FROM github_events")
+        event = json.loads(payload)
+        self.assertEqual(event.get("backport_request"), {"source_pr": 10, "targets": ["release/1.25", "release/1.26"]})
+        self.cycle()
+        tasks = self.backport_tasks()
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(
+            {json.loads(task[5])["target_base_branch"] for task in tasks}, {"release/1.25", "release/1.26"}
+        )
+        self.scan()
+        self.cycle()
+        self.assertEqual(self.backport_tasks(), tasks)
+
+    def test_legacy_event_without_parsed_request_does_not_reparse_display_body(self):
+        self.scan(
+            comment(
+                "2",
+                "<p>@robert-wklken 请分析历史记录</p><blockquote>cherry-pick #10 to release/1.25</blockquote>",
+            )
+        )
+        with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
+            event_id, payload = conn.execute("SELECT event_id,payload_json FROM github_events").fetchone()
+            event = json.loads(payload)
+            event.pop("backport_request", None)
+            conn.execute("UPDATE github_events SET payload_json=? WHERE event_id=?", (json.dumps(event), event_id))
+        self.cycle()
+        tasks = self.backport_tasks()
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0][2], "comment-analysis")
+        self.assertFalse(json.loads(tasks[0][5]).get("target_base_branch"))
+        self.assertEqual(
+            self.query("SELECT COUNT(*) FROM github_events WHERE event_fingerprint LIKE '%:backport:%'"), [(0,)]
+        )
+
     def submit_target(self, task, *, output="new_pr"):
         task_id, stream_id, _route, worktree, branch, metadata = task
         base = json.loads(metadata)["target_base_branch"]

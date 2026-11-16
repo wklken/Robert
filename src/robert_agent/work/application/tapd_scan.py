@@ -22,6 +22,7 @@ from robert_agent.persistence.stores import github_events as db_write_github_eve
 from robert_agent.persistence.stores import github_sources as db_write_github_sources
 from robert_agent.persistence.stores import notifications as db_write_notifications
 from robert_agent.persistence.stores import tapd_scan_state as db_write_tapd_scan_state
+from robert_agent.work import backports
 from robert_agent.work import queries as work_queries
 from robert_agent.work import repositories as work_repositories
 from robert_agent.work import tapd_policy
@@ -146,6 +147,7 @@ def _event(project, settings, ticket, comment, decision, *, repository, label, s
     kind, external_id = ticket.item.kind, ticket.item.external_id
     parsed = tapd_policy.parse_comment(comment.body, settings["mention_name"])
     body, _clipped = _clip(parsed.text, MAX_TEXT_CHARS)
+    request = backports.parse_request(comment.body, settings["mention_name"])
     return {
         "provider": "tapd",
         "repo": repository,
@@ -162,6 +164,7 @@ def _event(project, settings, ticket, comment, decision, *, repository, label, s
         "actor_kind": "tapd_user",
         "actor_login": comment.author,
         "body": body,
+        "backport_request": asdict(request) if request else None,
         "url": tapd_identity.ticket_url(host, workspace_id, kind, external_id),
         "title": ticket.item.title,
         "state": "closed" if ticket.ended else "open",

@@ -102,7 +102,13 @@ def collect_decisions(conn, *, repo, repo_id, config_result, known_workstreams, 
             continue
         if ticket_stream not in refs:
             refs[ticket_stream] = _public_ref(conn, ticket_stream)
-        request = backports.parse_request(event.get("body"), settings["mention_name"])
+        # The display body has lost quote/code boundaries and cannot authorize target branches.
+        saved_request = event.get("backport_request")
+        request = (
+            backports.BackportRequest(saved_request["source_pr"], tuple(saved_request["targets"]))
+            if saved_request
+            else None
+        )
         if request and not event.get("backport"):
             fingerprints = expand_backport(
                 conn,
