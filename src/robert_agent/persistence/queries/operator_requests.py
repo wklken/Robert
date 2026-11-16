@@ -1,7 +1,7 @@
 from robert_agent.foundation.contracts.work import TaskKind, TaskLifecycle, WakeupStatus
 
 from robert_agent.persistence.expressions import sql_constant
-from sqlalchemy import select, and_, not_, null, func, LABEL_STYLE_NONE
+from sqlalchemy import select, and_, not_, null, func, case, LABEL_STYLE_NONE
 
 from robert_agent.persistence.predicates import runnable_task
 
@@ -59,7 +59,13 @@ def pending_tasks(conn, repo_ids=(), task_id=None):
             )
             .join(
                 table6,
-                (table6.c["source_id"] == table2.c["primary_source_id"]),
+                (
+                    table6.c["source_id"]
+                    == case(
+                        (table5.c["origin_type"] == "tapd", table5.c["origin_source_id"]),
+                        else_=table2.c["primary_source_id"],
+                    )
+                ),
                 isouter=False,
             )
         )

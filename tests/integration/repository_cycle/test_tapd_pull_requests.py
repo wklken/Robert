@@ -1,6 +1,7 @@
 """TAPD development requests open or update one derived PR and answer on the ticket."""
 
 from contextlib import closing
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import sqlite3
@@ -14,8 +15,10 @@ from robert_agent.adapters.tapd import client as tapd_client
 from robert_agent.configuration import validation
 from robert_agent.delivery.application import scope
 from robert_agent.delivery.application import submission, tapd_comments, tapd_notifications
+from robert_agent.readmodels import board
 from robert_agent.runtime import cycle as run_once
-from robert_agent.work.application import remediation_requests, source_lifecycle, synchronization
+from robert_agent.runtime import loop
+from robert_agent.work.application import commands, remediation_requests, source_lifecycle, synchronization, tapd_scan
 from robert_agent.workflows import pr_health, pr_remediation
 from tests.support.repository_cycle import _verification_evidence
 from tests.support.tapd import STORY, comment
@@ -634,6 +637,157 @@ class TapdDerivedQueueTests(TapdPullRequestCase):
         )
         self.assertFalse(denied["ok"], denied)
         self.assertEqual(denied["reason_code"], "action_scope")
+
+
+class TapdDerivedOperatorReplyTests(TapdPullRequestCase):
+    def setUp(self):
+        super().setUp()
+        self.db = self.data_dir / "dd.sqlite3"
+        self.request_fix()
+        self.open_pull_request()
+        self.assertTrue(self.publish()["ok"])
+        self.scan(comment("3", "@robert-wklken please fix the logout bug", "2026-11-20 12:00:00"))
+        self.cycle()
+        ((self.parent, attempt, self.workspace, self.branch),) = self.query(
+            "SELECT t.task_id, a.attempt_id, a.worktree_path, a.branch_name "
+            "FROM tasks t JOIN attempts a USING(task_id) WHERE t.workstream_id = ?",
+            (PR_WORKSTREAM,),
+        )
+        recorded = submission.record_result(
+            self.db,
+            {
+                "task_id": self.parent,
+                "attempt_id": attempt,
+                "output_type": "waiting_for_user",
+                "submission": {
+                    "planned_github_actions": [{"type": "comment", "body": "Which logout behavior should I use?"}],
+                    "consumed_event_fingerprints": ["tapd-comment:tapd.example/100/3"],
+                    "operator_question": {"kind": "scope_decision", "summary": "Which logout behavior?"},
+                    "verification": [_verification_evidence()],
+                    "handoff": "Waiting for logout behavior.",
+                    "used_skills": [],
+                },
+            },
+        )
+        self.assertTrue(recorded["ok"], recorded)
+        self.assertTrue(self.publish()["ok"])
+        ((self.item_id, self.repo_id),) = self.query("SELECT work_item_id, repo_id FROM work_items")
+        self.context = commands.CommandContext(
+            actor_kind="operator",
+            actor_identity="local-operator",
+            allowed_repo_ids=frozenset({self.repo_id}),
+            allowed_workers=frozenset({"default"}),
+        )
+        item = board.get_work_item_detail(self.db, self.item_id)
+        self.reply = commands.execute_command(
+            self.db,
+            self.item_id,
+            context=self.context,
+            command="reply",
+            expected_version=item["version"],
+            idempotency_key="confirm-logout",
+            body="Clear the session on logout.",
+        )
+        self.task = self.reply["task_id"]
+        ((requested,),) = self.query("SELECT created_at FROM wakeups WHERE task_id=?", (self.task,))
+        self.requested = datetime.fromisoformat(requested)
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            (metadata,) = conn.execute("SELECT metadata_json FROM github_sources WHERE provider='tapd'").fetchone()
+            metadata = json.loads(metadata)
+            metadata["tapd"]["observed_at"] = (self.requested - timedelta(seconds=1)).isoformat()
+            conn.execute("UPDATE github_sources SET metadata_json=? WHERE provider='tapd'", (json.dumps(metadata),))
+
+    def refresh(self):
+        config = validation.validate_config(self.config_path, skip_external=True)
+        return tapd_scan.scan_project(
+            self.db,
+            config["tapd"],
+            config["tapd"]["projects"][0],
+            {repo["full_name"]: repo for repo in config["repos"]},
+            self.client,
+            now=(self.requested + timedelta(seconds=1)).isoformat(),
+        )
+
+    def attempts(self):
+        return self.query("SELECT worktree_path, branch_name FROM attempts WHERE task_id=?", (self.task,))
+
+    def test_reply_uses_fresh_ticket_context_and_keeps_the_pr_workstream(self):
+        self.assertEqual(
+            self.query("SELECT workstream_id, parent_task_id FROM tasks WHERE task_id=?", (self.task,)),
+            [(PR_WORKSTREAM, self.parent)],
+        )
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertFalse(loop.has_runnable_local_work(conn, repo_id=self.repo_id, include_publication=False))
+        self.cycle()
+        self.assertEqual(self.attempts(), [])
+        observed = self.refresh()
+        self.assertFalse(observed["failures"], observed)
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertTrue(loop.has_runnable_local_work(conn, repo_id=self.repo_id, include_publication=False))
+        self.cycle()
+        self.assertEqual(self.attempts(), [(self.workspace, self.branch)])
+        self.assertEqual(
+            self.query("SELECT workstream_id, route_id FROM tasks WHERE task_id=?", (self.task,)),
+            [(PR_WORKSTREAM, "update-existing-pr")],
+        )
+        self.assertEqual(self.query("SELECT status FROM wakeups WHERE task_id=?", (self.task,)), [("consumed",)])
+        ((prompt,),) = self.query("SELECT path FROM artifacts WHERE task_id=? AND artifact_type='prompt'", (self.task,))
+        text = Path(prompt).read_text()
+        self.assertIn("origin_type: tapd", text)
+        self.assertIn("Clear the session on logout.", text)
+        self.assertIn("Which logout behavior should I use?", text)
+        self.assertIn("@robert-wklken please fix the logout bug", text)
+        self.assertIn("@robert-wklken in body", text)
+        replay = commands.execute_command(
+            self.db,
+            self.item_id,
+            context=self.context,
+            command="reply",
+            expected_version=self.reply["item"]["version"] - 1,
+            idempotency_key="confirm-logout",
+            body="Clear the session on logout.",
+        )
+        self.assertEqual(replay["task_id"], self.task)
+        self.cycle()
+        self.assertEqual(len(self.attempts()), 1)
+        self.assertEqual(self.query("SELECT COUNT(*) FROM tasks"), [(3,)])
+
+    def test_failed_ticket_refresh_does_not_launch_the_pr_reply(self):
+        self.client.fail_items.add(STORY)
+        observed = self.refresh()
+        self.assertTrue(observed["failures"], observed)
+        self.cycle()
+        self.assertEqual(self.attempts(), [])
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertFalse(loop.has_runnable_local_work(conn, repo_id=self.repo_id, include_publication=False))
+
+    def test_ended_ticket_stops_the_pr_reply(self):
+        self.client.status[STORY] = "status_3"
+        self.refresh()
+        self.cycle()
+        self.assertEqual(self.attempts(), [])
+        self.assertEqual(self.query("SELECT lifecycle FROM tasks WHERE task_id=?", (self.task,)), [("failed",)])
+        self.assertEqual(
+            self.query(
+                "SELECT json_extract(metadata_json, '$.reason_code') FROM work_item_events "
+                "WHERE event_type='execution_failed'"
+            ),
+            [("tapd_operator_source_closed",)],
+        )
+
+    def test_changed_trusted_user_stops_the_pr_reply(self):
+        self.refresh()
+        self.configure("bob")
+        self.cycle()
+        self.assertEqual(self.attempts(), [])
+        self.assertEqual(self.query("SELECT lifecycle FROM tasks WHERE task_id=?", (self.task,)), [("failed",)])
+        self.assertEqual(
+            self.query(
+                "SELECT json_extract(metadata_json, '$.reason_code') FROM work_item_events "
+                "WHERE event_type='execution_failed'"
+            ),
+            [("tapd_operator_authorization_unavailable",)],
+        )
 
 
 class TapdPrNoticeTests(TapdPullRequestCase):
