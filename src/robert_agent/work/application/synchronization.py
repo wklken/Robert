@@ -25,7 +25,9 @@ from robert_agent.foundation import tapd_identity
 from robert_agent.adapters.github import read as github_read
 from robert_agent.adapters.github import recording as github_recording
 from robert_agent.adapters.github import budget as github_budget
+from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 from robert_agent.work import scan_batches as scan_batches
+from robert_agent.work import wakeup
 from robert_agent.work.application import tapd_scan
 
 from robert_agent.work import source_policy as source_policy
@@ -209,14 +211,15 @@ def scan_repo(config, repo, session, hints):
     return identifier
 
 
-def _queue_tapd_observations(config, repos):
+def _wake_tapd_repositories(config, repos):
     from robert_agent.work import queries as work_queries
     from robert_agent.work import repositories as work_repositories
 
     db_path = config["db_path"]
-    batches = []
-    for repo in repos:
-        with closing(db_database.connect(db_path, timeout=5)) as conn:
+    now = wakeup.utc_now()
+    ready = 0
+    with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
+        for repo in repos:
             repo_id = work_repositories.lookup_id(conn, repo["full_name"])
             if not repo_id:
                 continue
@@ -229,11 +232,10 @@ def _queue_tapd_observations(config, repos):
             )
             if not pending and not ended:
                 continue
-            context = context_digest(repo, work_queries.load_known_workstreams(conn, repo_id), config=config)
-            if scan_batches.has_pending(conn, [repo_id], contexts={repo_id: context}):
-                continue
-        batches.append(scan_batches.save_batch(db_path, repo_id, context, [], {}))
-    return batches
+            wakeup.request_tapd_observation(conn, repo_id, now)
+            ready += 1
+    if ready:
+        wakeup_notifier.notify(db_path)
 
 
 def scan(config_path, *, runner=subprocess.run, refresh_context=False, tapd_runner=None):
@@ -295,7 +297,7 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False, tapd_runn
             failures.append({"repo": repo["full_name"], "reason": "repo_scan_failed"})
     tapd = {} if refresh_context else tapd_scan.scan(config, runner=tapd_runner)
     if tapd.get("enabled"):
-        batches.extend(_queue_tapd_observations(config, repos))
+        _wake_tapd_repositories(config, repos)
     intervals = [session.poll_interval_seconds for session in sessions.values() if session.poll_interval_seconds]
     return {
         **({"tapd": tapd} if tapd.get("enabled") else {}),

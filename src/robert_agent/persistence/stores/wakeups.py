@@ -12,6 +12,15 @@ from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
 
 
+def delete_tapd_observations(conn, wakeup_ids):
+    wakeup = tables["wakeups"]
+    stmt = delete(wakeup).where(
+        wakeup.c.wakeup_id.in_(bindparam("items", expanding=True)),
+        func.json_extract(wakeup.c.metadata_json, "$.kind") == "tapd_observation_ready",
+    )
+    return statements.write(conn, stmt, {"items": wakeup_ids})
+
+
 def update_for_publish_ready_actions(conn, value_1, task_id):
     stmt = (
         update(tables["wakeups"])
