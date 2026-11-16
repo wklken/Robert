@@ -437,11 +437,11 @@ def _unanswered_tapd_round(conn, workstream_id, source_type, number):
     return (origin[0], task_id) if opened and unanswered else None
 
 
-def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
+def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now, *, tapd_only=False):
     rows = work_queries.remote_source_rows(conn, repo_id)
     reconciled = 0
     for workstream_id, task_id, source_id, source_key, source_type, number, provider, _state in rows:
-        if provider not in set(SourceProvider):
+        if provider not in set(SourceProvider) or (tapd_only and provider != SourceProvider.TAPD):
             continue
         task_id = task_id or work_queries.latest_task_id(conn, workstream_id)
         conn.commit()

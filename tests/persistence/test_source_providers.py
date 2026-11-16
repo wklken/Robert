@@ -195,6 +195,10 @@ class LegacySourceTableRebuildTests(unittest.TestCase):
             ),
             "running attempt": ("UPDATE attempts SET status = 'running'", "attempt"),
             "stale attempt": ("UPDATE attempts SET status = 'stale'", "attempt"),
+            "submitted result without proof of exit": (
+                "UPDATE attempts SET status = 'completed', metadata_json = '{\"dispatch\":{\"pid\":12345}}'",
+                "attempt",
+            ),
             "unproven model child": (
                 "INSERT INTO review_sessions(round_id, repo, pr_number, workstream_id, trigger_fingerprint, "
                 "request_json, created_at, updated_at) VALUES ('round-1', 'example/backend', 7, 'ws', 'fp', '{}', "
