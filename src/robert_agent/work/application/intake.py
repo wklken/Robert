@@ -246,9 +246,10 @@ def admit_requests(
                 if not work_policies.is_trusted_actor(event, repo):
                     work_admission.append_event_to_active_task(conn, event, "context", run_now)
                     continue
-                work_items.record_github_response(
+                work_items.record_source_response(
                     conn,
                     event["workstream_id"],
+                    actor_kind=SourceProvider.TAPD.value if is_tapd else SourceProvider.GITHUB.value,
                     actor_identity=event.get("actor_login") or "unknown",
                     body=event.get("body") or "",
                     event_fingerprint=event["event_fingerprint"],
@@ -342,9 +343,14 @@ def admit_requests(
                 known_workstreams.add(task_info["workstream_id"])
                 continue
             if event["workstream_id"] in active_workstreams:
-                if is_tapd and event.get("has_open_dd_pr"):
+                active_task = work_queries.active_task_id(conn, event["workstream_id"])
+                if (
+                    is_tapd
+                    and event.get("has_open_dd_pr")
+                    and not (active_task and work_queries.tapd_driven(work_queries.task_events(conn, active_task)))
+                ):
                     # Select the queue again once it is ready, without adding
-                    # TAPD text or authority to the task currently using it.
+                    # TAPD text or authority to a GitHub or remediation task.
                     continue
                 appended = work_admission.append_event_to_active_task(conn, event, "context", run_now)
                 if appended:

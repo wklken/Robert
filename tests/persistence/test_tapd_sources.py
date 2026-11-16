@@ -162,13 +162,28 @@ class TapdSourcePersistenceTests(unittest.TestCase):
             ],
         )
 
-    def test_scan_watermark_round_trips_per_project(self):
+    def test_scan_state_round_trips_per_project(self):
         with connect(self.db) as conn:
-            self.assertEqual(scan_queries.find_watermark(conn, "tapd.example/100"), [])
-            scan_store.save_watermark(conn, "tapd.example/100", "2026-11-20 09:00:00", "7", NOW)
-            scan_store.save_watermark(conn, "tapd.example/100", "2026-11-20 09:05:00", "9", NOW)
-            rows = scan_queries.find_watermark(conn, "tapd.example/100")
-        self.assertEqual([tuple(row) for row in rows], [("2026-11-20 09:05:00", "9")])
+            self.assertEqual(scan_queries.find_state(conn, "tapd.example/100"), [])
+            scan_store.save_state(conn, "tapd.example/100", "2026-11-20 09:00:00", "7", '[{"comment_id": "7"}]', NOW)
+            scan_store.save_state(conn, "tapd.example/100", "2026-11-20 09:05:00", "9", "[]", NOW)
+            rows = scan_queries.find_state(conn, "tapd.example/100")
+        self.assertEqual([tuple(row) for row in rows], [("2026-11-20 09:05:00", "9", "[]")])
+
+    def test_existing_scan_state_gains_an_empty_pending_list(self):
+        with connect(self.db) as conn:
+            conn.execute("DROP TABLE tapd_scan_state")
+            conn.execute(
+                "CREATE TABLE tapd_scan_state (project_key TEXT PRIMARY KEY, watermark_created TEXT NOT NULL, "
+                "watermark_comment_id TEXT NOT NULL, updated_at TEXT NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO tapd_scan_state VALUES ('tapd.example/100', '2026-11-20 09:00:00', '7', ?)", (NOW,)
+            )
+        storage.init_database(self.db)
+        with connect(self.db) as conn:
+            rows = scan_queries.find_state(conn, "tapd.example/100")
+        self.assertEqual([tuple(row) for row in rows], [("2026-11-20 09:00:00", "7", "[]")])
 
 
 if __name__ == "__main__":

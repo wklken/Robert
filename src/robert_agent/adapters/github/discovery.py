@@ -12,6 +12,7 @@ from robert_agent.foundation.commands import emit
 
 
 SOURCE_CONTEXT_VERSION = 4
+_COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 
 
 def _body_context(raw, *, legacy_empty_unknown=False):
@@ -141,21 +142,22 @@ def _api_items(repo, api_path, runner):
     return _flatten_items(payload)
 
 
-def submitted_review_ids(repo, number, runner):
-    """Read immutable IDs of submitted PR reviews without exposing their text."""
+def reviewed_revisions(repo, number, runner, *, own_login):
+    """Read the head commits that other accounts submitted reviews on, without exposing review text."""
     reviews = _api_items(repo, f"pulls/{number}/reviews", runner)
     if reviews is None:
         return None
     states = {"APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"}
     return sorted(
         {
-            item["id"]
+            item["commit_id"]
             for item in reviews
             if isinstance(item, dict)
             and item.get("state") in states
             and item.get("submitted_at")
-            and type(item.get("id")) is int
-            and item["id"] > 0
+            and isinstance(item.get("commit_id"), str)
+            and _COMMIT_SHA.fullmatch(item["commit_id"])
+            and str(_login(item, "user") or "").casefold() != own_login.casefold()
         }
     )
 

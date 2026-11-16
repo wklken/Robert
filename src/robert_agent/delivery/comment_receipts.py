@@ -1,6 +1,23 @@
 """Match comment effects by publisher and exact accepted content."""
 
 
+def comment_records(listing):
+    """Flatten a paginated comment listing, or return None when its shape proves nothing about absence."""
+    if not isinstance(listing, list):
+        return None
+    records = []
+    for page in listing:
+        for item in page if isinstance(page, list) else [page]:
+            if (
+                not isinstance(item, dict)
+                or not isinstance(item.get("body"), str)
+                or not isinstance(item.get("user"), (dict, type(None)))
+            ):
+                return None
+            records.append(item)
+    return records
+
+
 def match_comment(comments, expected_body, publisher, marker):
     matches = []
     for comment in comments:

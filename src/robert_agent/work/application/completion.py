@@ -407,6 +407,7 @@ def _create_child_task_for_recommended_route(
         repo,
         conn=conn,
         config=config_result,
+        already_running=True,
         known_workstreams=[]
         if child_event.get("event_type") in {"assigned", "review_request", "notification"}
         else [workstream_id],

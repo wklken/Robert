@@ -112,20 +112,56 @@ class TapdScanTests(unittest.TestCase):
         self.scan()
         self.assertEqual(self.events(), {"20": "ignored_context", "21": "authorized_trigger"})
 
-    def test_failed_ticket_read_keeps_the_watermark_and_a_rerun_records_each_request_once(self):
+    def test_failed_ticket_read_keeps_its_request_and_a_rerun_records_each_request_once(self):
         self.client.comments = [
             comment("30", "@robert-wklken story"),
             comment("31", "@robert-wklken bug", "2026-11-20 10:01:00", entry=BUG, kind="bug"),
         ]
         self.client.fail_items = {BUG}
         failed = self.scan()
-        with connect(self.db) as conn:
-            self.assertIsNone(conn.execute("SELECT * FROM tapd_scan_state").fetchone())
+        self.client.comments.append(comment("32", "later note", "2026-11-20 10:30:00", entry=BUG, kind="bug"))
+        self.scan()
         self.client.fail_items = set()
         self.scan()
         self.scan()
         self.assertEqual(failed["failures"], [{"stage": "ticket", "external_id": BUG, "reason": "command_failed"}])
-        self.assertEqual(self.events(), {"30": "authorized_trigger", "31": "authorized_trigger"})
+        self.assertEqual(
+            self.events(), {"30": "authorized_trigger", "31": "authorized_trigger", "32": "ignored_context"}
+        )
+
+    def test_missing_ticket_keeps_its_request_until_the_ticket_can_be_read(self):
+        self.client.comments = [comment("33", "@robert-wklken bug", entry=BUG, kind="bug")]
+        self.client.missing_items = {BUG}
+        missing = self.scan()
+        self.client.comments.append(comment("34", "later note", "2026-11-20 10:30:00"))
+        self.scan()
+        self.client.missing_items = set()
+        self.scan()
+        self.assertEqual(missing["failures"], [{"stage": "ticket", "external_id": BUG, "reason": "not_found"}])
+        self.assertEqual(self.events(), {"33": "authorized_trigger"})
+
+    def test_failed_scan_does_not_let_an_edit_turn_an_observed_comment_into_a_request(self):
+        self.client.comments = [
+            comment("35", "plain note"),
+            comment("36", "@robert-wklken bug", "2026-11-20 10:01:00", entry=BUG, kind="bug"),
+        ]
+        self.client.fail_items = {BUG}
+        self.scan()
+        self.client.fail_items = set()
+        self.client.comments[0] = comment("35", "@robert-wklken plain note", modified="2026-11-20 10:30:00")
+        self.scan()
+        self.assertEqual(self.events(), {"36": "authorized_trigger"})
+
+    def test_request_edited_before_its_failed_ticket_read_still_runs_on_retry(self):
+        self.client.comments = [
+            comment("37", "@robert-wklken bug", entry=BUG, kind="bug", modified="2026-11-20 10:05:00"),
+            comment("38", "plain note", "2026-11-20 10:30:00"),
+        ]
+        self.client.fail_items = {BUG}
+        self.scan()
+        self.client.fail_items = set()
+        self.scan()
+        self.assertEqual(self.events(), {"37": "authorized_trigger"})
 
     def test_tracked_ticket_refresh_records_end_state_and_new_context(self):
         self.client.comments = [comment("40", "@robert-wklken 开始")]

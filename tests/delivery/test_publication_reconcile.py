@@ -337,6 +337,27 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         self.assertEqual(result["status"], "unknown")
         self.assertEqual(result["reason_code"], "comment_marker_conflict")
 
+    def test_comment_listing_with_an_unexpected_shape_needs_operator_evidence(self):
+        action = {
+            "action_id": "action-1",
+            "action_type": "comment",
+            "target_url": "https://github.com/x/y/issues/1",
+            "metadata_json": json.dumps({"body": self.body}),
+        }
+        scope = {"repo": "x/y", "github_account": "bot", "sources": [{"source_type": "issue", "number": 1}]}
+        for listing in (
+            {"message": "Not Found"},
+            [[{"id": 1}]],
+            [["comment"]],
+            [{"id": 1, "body": self.body, "user": "bot"}],
+        ):
+            with self.subTest(listing=listing):
+                result = publication_reconcile.classify_remote_state(
+                    action, scope, lambda *_args, response=listing, **_kwargs: Completed(json.dumps(response))
+                )
+                self.assertEqual((result["status"], result["reason_code"]), ("unknown", "comment_response_malformed"))
+                self.assertFalse(publication_reconcile.read_failed(result))
+
     def test_open_pr_matching_marker_and_owner_confirms_effect(self):
         body = "<!-- robert-workstream task_id=task-1 -->\nPR"
         action = {

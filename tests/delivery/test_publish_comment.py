@@ -1,6 +1,8 @@
 from contextlib import closing
 import json
+from pathlib import Path
 import sqlite3
+import tempfile
 from tests.support.publication import PublicationFixture
 
 
@@ -64,6 +66,33 @@ class PublishCommentTests(PublicationFixture):
                 "https://github.com/x/y/issues/1#issuecomment-987",
             ),
         )
+
+    def test_unrecognized_duplicate_preflight_listing_never_writes(self):
+        from robert_agent.delivery.application import publish
+
+        class Completed:
+            returncode = 0
+            stderr = ""
+
+            def __init__(self, stdout):
+                self.stdout = stdout
+
+        for listing in ('{"message": "Server Error"}', "<html>", '[[{"id": 1}]]'):
+            with self.subTest(listing=listing), tempfile.TemporaryDirectory() as root:
+                self.root = Path(root)
+                db_path = self.root / "dd.sqlite3"
+                self._init_summary_db(db_path)
+                calls = []
+
+                def fake_run(command, listing=listing, calls=calls, **kwargs):
+                    calls.append(command)
+                    return Completed(listing)
+
+                result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
+
+                self.assertFalse(result["ok"], result)
+                self.assertEqual(len(calls), 1, calls)
+                self.assertIn("comment_response_malformed", result["failures"][0]["safe_error"])
 
     def test_publish_revalidates_comment_target_against_audited_scope(self):
         from robert_agent.delivery.application import publish

@@ -451,15 +451,17 @@ def _reconcile_tapd_reviews(conn, repo_id, repo, runner, run_now, settings):
             continue
         conn.commit()
         try:
-            review_ids = github_discovery.submitted_review_ids(repo["full_name"], number, runner)
+            revisions = github_discovery.reviewed_revisions(
+                repo["full_name"], number, runner, own_login=repo["github_account"]
+            )
         except ControlDeadlineExceeded:
             raise
         except (OSError, subprocess.TimeoutExpired):
             continue
-        if review_ids is None:
+        if revisions is None:
             continue
-        if review_ids:
-            tapd_notices.record_pr_notices(conn, workstream_id, tapd_policy.PR_REVIEW_NOTICE, review_ids, run_now)
+        if revisions:
+            tapd_notices.record_pr_notices(conn, workstream_id, tapd_policy.PR_REVIEW_NOTICE, revisions, run_now)
         if closed_at:
             db_write_github_sources.record_tapd_review_sync(conn, source_id, closed_at)
 

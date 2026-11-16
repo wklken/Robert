@@ -15,6 +15,7 @@ class FakeClient:
         self.status = {STORY: "status_17", BUG: "new"}
         self.comments = []
         self.fail_items = set()
+        self.missing_items = set()
         self.author_calls = []
         self.written = []
         self.fail_reads = False
@@ -51,6 +52,8 @@ class FakeClient:
     def get_item(self, workspace_id, kind, external_id):
         if external_id in self.fail_items:
             raise TapdError("command_failed")
+        if external_id in self.missing_items:
+            raise TapdError("not_found")
         return TapdItem(
             kind, external_id, "Ticket", self.status[external_id], self.labels[external_id], "@robert-wklken in body",
             "1120001234000000001" if kind == "story" else None, False, None,

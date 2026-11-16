@@ -6,10 +6,10 @@ from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
 
 
-def find_watermark(conn, project_key):
+def find_state(conn, project_key):
     table = tables["tapd_scan_state"]
     query = (
-        select(table.c["watermark_created"], table.c["watermark_comment_id"])
+        select(table.c["watermark_created"], table.c["watermark_comment_id"], table.c["pending_json"])
         .select_from(table)
         .where(table.c["project_key"] == bindparam("p0"))
         .set_label_style(LABEL_STYLE_NONE)
