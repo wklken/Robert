@@ -442,6 +442,9 @@ def worker_prompt_input(
             )
         )
 
+    if context.get("backport"):
+        authority["backport"] = context["backport"]
+
     guidance = ["worker-boundaries"]
     current = (context.get("github_context") or {}).get("current_event_fingerprint")
     request = (
@@ -453,6 +456,8 @@ def worker_prompt_input(
         guidance.append("issue-dispatch")
     if discussions:
         guidance.append("tapd")
+    if context.get("backport"):
+        guidance.append("backport")
     values = {}
     command = ()
     if not restricted:

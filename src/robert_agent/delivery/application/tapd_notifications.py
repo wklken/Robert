@@ -37,7 +37,10 @@ def notice_body(notification_type, metadata, mention_name):
         labels = "、".join(metadata.get("labels") or [])
         text = f"{_LABEL_REASONS[metadata['reason']]}请只保留以下标签中的一个，再发一条提及 {mention_name} 的评论：{labels}"
     elif notification_type == tapd_policy.MULTIPLE_PRS_NOTICE:
-        text = f"这张单据在同一仓库有多个打开的 PR。请关闭多余的 PR，再发一条提及 {mention_name} 的评论。"
+        text = (
+            f"这张单据的请求匹配到多个打开的 PR，无法确定目标。回移请使用 "
+            f"@{mention_name} cherry-pick #来源PR to 目标分支；同一目标仍有多个 PR 时，请先消除歧义。"
+        )
     elif notification_type in _PR_TEMPLATES:
         url = metadata.get("pr_url")
         if not isinstance(url, str) or not _PR_URL.fullmatch(url):

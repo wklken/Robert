@@ -316,9 +316,14 @@ def _record_remote_terminal_state_locked(
                 metadata={"source_key": source_key, "number": number},
                 now=run_now,
             )
-            if item["origin_type"] != SourceProvider.TAPD or not work_queries.active_task_id(
-                conn, item["workstream_id"]
-            ):
+            unfinished = db_records.first(
+                db_read_tasks.record_remote_terminal_state_locked(
+                    conn,
+                    item["workstream_id"],
+                    item["workstream_id"],
+                )
+            )
+            if item["origin_type"] != SourceProvider.TAPD or not unfinished:
                 db_write_work_items.update_for_finalize_accepted_result(
                     conn, remote_state.get("merged_at") or run_now, run_now, item["work_item_id"]
                 )
@@ -426,7 +431,16 @@ def _unanswered_tapd_round(conn, workstream_id, source_type, number):
     if source_type != SourceType.PULL_REQUEST:
         return None
     origin = db_records.first(db_read_workstreams.find_origin_workstream_id_by_workstream_id(conn, workstream_id))
-    task_id = work_queries.active_task_id(conn, origin[0]) if origin and origin[0] else None
+    source = work_queries.tapd_origin(conn, workstream_id)
+    if not source:
+        return None
+    pr_url = f"https://github.com/{source['repo']}/pull/{number}"
+    opening = (
+        db_records.first(db_read_tasks.find_active_tapd_opening_task(conn, origin[0], pr_url))
+        if origin and origin[0]
+        else None
+    )
+    task_id = opening[1] if opening else None
     if not task_id or not work_queries.tapd_driven(work_queries.task_events(conn, task_id)):
         return None
     actions = db_read_github_actions.find_for_actions_for_task(conn, task_id)
@@ -439,7 +453,7 @@ def _unanswered_tapd_round(conn, workstream_id, source_type, number):
         kind == GitHubActionType.COMMENT and status != PublishStatus.PUBLISHED
         for _id, kind, _url, _external, _audit, status, _created in actions
     )
-    return (origin[0], task_id) if opened and unanswered else None
+    return (opening[0], task_id) if opened and unanswered else None
 
 
 def _reconcile_tapd_reviews(conn, repo_id, repo, runner, run_now, settings):

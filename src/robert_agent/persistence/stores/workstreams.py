@@ -128,6 +128,25 @@ def update_for_execute_command(conn, now, workstream_id):
     return statements.write(conn, stmt, {"p0": now, "p1": workstream_id})
 
 
+def ensure_tapd_delivery_stream(conn, *, workstream_id, repo_id, source_id, origin_id, public_ref, now):
+    """All target deliveries remain direct children of the ticket for lifecycle control."""
+    stmt = (
+        insert(tables["workstreams"])
+        .values(
+            workstream_id=workstream_id,
+            repo_id=repo_id,
+            primary_source_id=source_id,
+            origin_workstream_id=origin_id,
+            public_ref=public_ref,
+            lifecycle=WorkstreamLifecycle.COMPLETED.value,
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing(index_elements=["workstream_id"])
+    )
+    return statements.write(conn, stmt)
+
+
 def insert_for_materialize_open_pr_workstream(
     conn, pr_source_key, repo_id, pr_source_id, origin_workstream_id, run_now, run_now_6
 ):

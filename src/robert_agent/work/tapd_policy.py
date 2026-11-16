@@ -93,6 +93,14 @@ def _squeeze(text):
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
+def own_comment_text(body):
+    """Visible command text outside HTML/Markdown quotations and code."""
+    parser = _Visible()
+    parser.feed(body or "")
+    parser.close()
+    return _squeeze("".join(parser.own) if parser.tags else _plain_own_text(body or ""))
+
+
 def _marker(mention_name):
     return re.compile(rf"(?<![\w@])@(?ai:{re.escape(mention_name)})(?![\w-]|\.[\w-])")
 

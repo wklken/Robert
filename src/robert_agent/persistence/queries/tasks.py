@@ -1,6 +1,6 @@
 """Shared queries operations for tasks."""
 
-from robert_agent.foundation.contracts.delivery import AuditStatus, OutputType, PublishStatus
+from robert_agent.foundation.contracts.delivery import AuditStatus, GitHubActionType, OutputType, PublishStatus
 from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
 from robert_agent.foundation.contracts.work import TaskKind, TaskLifecycle, WorkstreamLifecycle
 
@@ -1115,6 +1115,26 @@ def record_remote_terminal_state_locked(conn, workstream_id, workstream_id_2):
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query3, {"p0": workstream_id, "p1": workstream_id_2})
+
+
+def find_active_tapd_opening_task(conn, ticket_stream, pr_url):
+    task, stream, action = tables["tasks"], tables["workstreams"], tables["github_actions"]
+    query = (
+        select(task.c.workstream_id, task.c.task_id)
+        .select_from(
+            task.join(stream, stream.c.active_task_id == task.c.task_id).join(
+                action, action.c.task_id == task.c.task_id
+            )
+        )
+        .where(
+            or_(stream.c.workstream_id == ticket_stream, stream.c.origin_workstream_id == ticket_stream),
+            action.c.action_type == GitHubActionType.OPEN_PR.value,
+            action.c.publish_status == PublishStatus.PUBLISHED.value,
+            action.c.target_url == pr_url,
+        )
+        .limit(1)
+    )
+    return statements.read(conn, query)
 
 
 def find_task_id_by_workstream_id_2(conn, workstream_id):

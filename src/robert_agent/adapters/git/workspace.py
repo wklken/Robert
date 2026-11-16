@@ -558,12 +558,15 @@ def plan_analysis_worktree(
         "mode": "analysis",
         "worktree_path": str(worktree_path),
         "branch_name": None,
+        "base_branch": base_branch,
+        "base_ref": f"upstream/{base_branch}",
         "commands": [" ".join(shlex.quote(part) for part in command) for command in commands],
     }
 
 
 def resolve_task_workspace(repo, route, source, dry_run):
     mode = route["workspace_mode"]
+    base_branch = source.get("base_branch") or repo["default_base_branch"]
     if mode == "none":
         return {
             "ok": True,
@@ -577,7 +580,7 @@ def resolve_task_workspace(repo, route, source, dry_run):
             worktree_root=repo["worktree_root"],
             source_number=source["number"],
             short_slug=source["branch_slug"],
-            base_branch=repo["default_base_branch"],
+            base_branch=base_branch,
             dry_run=dry_run,
         )
     if mode == "existing_pr":
@@ -586,7 +589,7 @@ def resolve_task_workspace(repo, route, source, dry_run):
             worktree_root=repo["worktree_root"],
             source_number=source["number"],
             short_slug=source["branch_slug"],
-            base_branch=repo["default_base_branch"],
+            base_branch=base_branch,
             existing_pr_head_branch=source["head_branch"],
             dry_run=dry_run,
         )
@@ -596,7 +599,7 @@ def resolve_task_workspace(repo, route, source, dry_run):
             worktree_root=repo["worktree_root"],
             source_number=source["number"],
             short_slug=source["branch_slug"],
-            base_branch=repo["default_base_branch"],
+            base_branch=base_branch,
             dry_run=dry_run,
         )
     if mode == "analysis":
@@ -604,7 +607,7 @@ def resolve_task_workspace(repo, route, source, dry_run):
             repo_root=repo["repo_root"],
             worktree_root=repo["worktree_root"],
             source_number=source["number"],
-            base_branch=repo["default_base_branch"],
+            base_branch=base_branch,
             dry_run=dry_run,
         )
     raise ValueError(f"unsupported workspace_mode: {mode}")
