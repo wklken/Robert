@@ -14,7 +14,7 @@ from robert_agent.configuration import validation
 from robert_agent.delivery.application import scope
 from robert_agent.delivery.application import submission, tapd_comments, tapd_notifications
 from robert_agent.runtime import cycle as run_once
-from robert_agent.work.application import remediation_requests, source_lifecycle
+from robert_agent.work.application import remediation_requests, source_lifecycle, synchronization
 from robert_agent.workflows import pr_health, pr_remediation
 from tests.support.repository_cycle import _verification_evidence
 from tests.support.tapd import STORY, comment
@@ -439,6 +439,32 @@ class TapdPrNoticeTests(TapdPullRequestCase):
             self.client.written[1:],
             [f"robert-wklken：\n\n关联的 PR 有新的评审。\n\n{PR_URL}"] * 2,
         )
+
+    def test_background_scan_replays_final_review_without_other_github_activity(self):
+        self.start_pr()
+        self.reconcile(MERGED)
+        config = validation.validate_config(self.config_path, skip_external=True)
+        (repo,) = config["repos"]
+        review = {"id": 42, "state": "APPROVED", "submitted_at": "2026-11-20T04:02:00Z"}
+        session = mock.Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps([[review]]), ""))
+        session.collect_events.return_value = []
+        self.assertIsNotNone(synchronization.scan_repo(config, repo, session, []))
+        self.assertEqual(
+            session.call_args.args[0],
+            [
+                "gh",
+                "api",
+                f"repos/{repo['full_name']}/pulls/10/reviews",
+                "--paginate",
+                "--slurp",
+            ],
+        )
+
+        outcome = run_once.run_once(
+            self.config_path, dry_run=True, skip_external=True, skip_publish=True, consume_observations=True
+        )
+        self.assertTrue(outcome["ok"], outcome)
+        self.assertCountEqual(self.notice_types(), ["tapd_pr_merged", "tapd_pr_review_submitted"])
 
     def test_closed_pr_review_read_retries_until_its_last_review_is_observed(self):
         self.start_pr()
