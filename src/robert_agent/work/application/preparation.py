@@ -2,7 +2,13 @@
 
 from robert_agent.foundation.contracts.delivery import OutputType
 from robert_agent.foundation.contracts.execution import AttemptStatus, RoundStatus
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskKind, TaskLifecycle, WorkstreamLifecycle
+from robert_agent.foundation.contracts.work import (
+    REMEDIATION_TASK_KINDS,
+    SourceProvider,
+    TaskKind,
+    TaskLifecycle,
+    WorkstreamLifecycle,
+)
 
 from robert_agent.persistence import transactions as db_transactions
 
@@ -57,6 +63,13 @@ def insert_file_artifact(conn, task_id, attempt_id, artifact_type, path, run_now
     db_write_artifacts.record_dispatch_artifacts(
         conn, values.new_id("artifact"), task_id, attempt_id, artifact_type, str(path_obj), bytes_size, run_now
     )
+
+
+def attach_tapd_discussions(conn, runtime_context, workstream_id, events):
+    """Only a task driven by a TAPD request sees ticket content."""
+    if any(event.get("provider") == SourceProvider.TAPD for event in events):
+        runtime_context["origin_type"] = SourceProvider.TAPD.value
+        runtime_context["tapd_discussions"] = work_queries.tapd_discussions(conn, workstream_id)
 
 
 def upsert_route_decision(conn, task_id, route_result, run_now):
@@ -213,6 +226,7 @@ def _refresh_prepared_task_locked(
     github_context["current_event_fingerprint"] = event["event_fingerprint"]
     runtime_context = attempt_context.runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
+    attach_tapd_discussions(conn, runtime_context, event["workstream_id"], related_events)
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo["full_name"],
@@ -433,21 +447,24 @@ def create_task_attempt_and_prompt(
     runtime_context["github_context"] = github_context
 
     db_write_workstreams.insert_for_create_task_attempt_and_prompt(
-        conn, workstream_id, repo_id, source_id, lifecycle, task_id, run_now, run_now
+        conn, workstream_id, repo_id, source_id, lifecycle, task_id, run_now, run_now, event.get("public_ref")
     )
+    origin_type = event.get("provider") or SourceProvider.GITHUB.value
     item = work_items.ensure_github_work_item(
         conn,
         repo_id=repo_id,
         source_id=source_id,
         workstream_id=workstream_id,
-        actor_identity=event.get("actor_login") or "github",
+        actor_identity=event.get("actor_login") or origin_type,
         route_confidence=route_result.get("confidence", "low"),
         route_id=route_result["route_id"],
         now=run_now,
+        origin_type=origin_type,
     )
-    if item["origin_type"] == "github" and item["canceled_at"] and new_request_event is not None:
+    source_origin = item["origin_type"] in set(SourceProvider)
+    if source_origin and item["canceled_at"] and new_request_event is not None:
         db_write_work_items.update_for_create_task_attempt_and_prompt(conn, run_now, item["work_item_id"])
-    if item["origin_type"] == "github" and item["completed_at"] and not item["canceled_at"]:
+    if source_origin and item["completed_at"] and not item["canceled_at"]:
         db_write_work_items.update_for_create_task_attempt_and_prompt_2(conn, run_now, item["work_item_id"])
     participants.record_review_participant(conn, workstream_id, event, route_result, run_now)
     for related_event in related_events:
@@ -455,6 +472,7 @@ def create_task_attempt_and_prompt(
         db_write_workstream_sources.insert_for_create_task_attempt_and_prompt(
             conn, workstream_id, related_source_id, workstream.source_relationship(related_event), run_now
         )
+    attach_tapd_discussions(conn, runtime_context, workstream_id, related_events)
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo["full_name"],
@@ -757,6 +775,7 @@ def create_resume_attempt_and_prompt(
     prompt_path = prompt_dir / f"{attempt_id}.prompt.md"
     github_context = attempt_context.write_github_context_artifacts(prompt_dir, attempt_id, events)
     runtime_context["github_context"] = github_context
+    attach_tapd_discussions(conn, runtime_context, workstream_id, events)
     repo_full_name = db_records.first(db_read_repos.find_full_name_by_repo_id(conn, repo_id))[0]
     runtime_context["publication_targets"] = result_contract.target_urls(
         {

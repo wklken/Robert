@@ -624,6 +624,14 @@ CREATE TABLE IF NOT EXISTS github_scan_reads (
   PRIMARY KEY(repo_id,command_key)
 );
 
+-- One TAPD comment discovery watermark per project; advanced with the events it covers.
+CREATE TABLE IF NOT EXISTS tapd_scan_state (
+  project_key TEXT PRIMARY KEY,
+  watermark_created TEXT NOT NULL,
+  watermark_comment_id TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Supervision records supplement the business state and do not own tasks.
 CREATE TABLE IF NOT EXISTS supervision_checkpoints (
   scope_type TEXT NOT NULL,

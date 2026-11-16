@@ -34,6 +34,16 @@ def find_lifecycle_by_workstream_id(conn, issue_workstream_id):
     return statements.read(conn, query1, {"p0": issue_workstream_id})
 
 
+def find_public_ref_by_workstream_id(conn, workstream_id):
+    table = tables["workstreams"]
+    query = (
+        select(table.c["public_ref"])
+        .where(table.c["workstream_id"] == bindparam("p0"))
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    return statements.read(conn, query, {"p0": workstream_id})
+
+
 def find_repo_id_by_workstream_id(conn, workstream_id):
     query1 = (
         select(tables["workstreams"].c["repo_id"])
@@ -547,6 +557,8 @@ def find_for_remote_source_rows(conn, repo_id):
             table2.c["source_key"],
             table2.c["source_type"],
             table2.c["number"],
+            table2.c["provider"],
+            table2.c["state"],
         )
         .select_from(
             table1.join(

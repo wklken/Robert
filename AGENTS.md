@@ -50,7 +50,7 @@ Paths below are relative to `src/robert_agent/`.
 | `readmodels/` | Read-only dashboard, board, status, execution, usage and history projections | No HTTP dependency and no lifecycle mutations |
 | `models/` | Static SQLAlchemy table mappings preserving existing storage encodings | No I/O or imports of persistence or domain callers |
 | `persistence/` | Shared queries, writes, conditional mutations, transactions, schema and SQLite dialect mechanics | No reverse imports of domain/use-case callers; return materialized records or affected counts |
-| `adapters/` | GitHub, Git, processes, notifications and native services | External protocols; no reverse imports of their application callers |
+| `adapters/` | GitHub, Git, TAPD CLI, processes, notifications and native services | External protocols; no reverse imports of their application callers |
 | `runtime/` | Cycle, loop, daemon, scanner, supervisor and child entrypoints | Scheduling, resource lifetime and invoking use cases; no business SQL |
 | `application/` | Cross-domain repository-cycle composition | Explicit coordination only; domain-owned use cases live under their own domain |
 | `interfaces/web/`, `cli/`, `worker/`, `integrations/` | HTTP/CLI/Worker/OpenClaw input and output contracts | Translate input, authenticate and call use cases; no business SQL in HTTP |
@@ -69,8 +69,12 @@ Paths below are relative to `src/robert_agent/`.
   Stored strings, schema constraints and protocol values must stay aligned.
 - `foundation/timestamps.py` is a standard-library-only leaf for timezone-aware
   UTC parsing and exact comparisons. Configuration, persistence and supervision
-  share it for notification activation boundaries; it must not acquire I/O or
-  domain dependencies.
+ share it for notification activation boundaries; it must not acquire I/O or
+ domain dependencies.
+- `foundation/tapd_identity.py` is a standard-library-only leaf for TAPD host,
+ project key, ticket URL, source key and comment fingerprint syntax. Configuration,
+ the TAPD adapter, source owners and `delivery.contract` import it directly; it
+ must not acquire I/O or domain dependencies.
 - Group by domain first, then split a domain into responsibility/layer submodules.
   Reuse the domain's existing input types, errors, policies, facts and public
   capabilities. Do not scatter another implementation of the same concept into

@@ -27,6 +27,7 @@ structural validation and defaults. SQLite is the execution engine.
 | `skills` | Skill search paths. |
 | `routes` | Worker, ordinary automatic model/effort overrides, skills, native review/vote settings. |
 | `repos` | Checkouts, worktrees, branch, trust, task capacity, route overrides and opt-in PR automation. |
+| `tapd` | Optional [TAPD source](features/tapd.md): CLI executable, mention name, and per-project trusted user, start time and label-to-repository rules; no credentials. |
 
 A complete minimal example follows. Replace repository paths, branch, account
 and trusted actor with your deployment values:
@@ -236,7 +237,8 @@ rows manually while Robert is running.
 
 Each source row records its provider. GitHub sources keep their Issue or pull
 request number; TAPD story and bug sources have no number and store their TAPD
-project and item IDs instead. A workstream can hold a unique public reference
+project and item IDs instead. `tapd_scan_state` keeps one comment watermark per
+TAPD project. A workstream can hold a unique public reference
 (`rbt-` followed by lowercase letters and digits). Branches and workspaces for
 sources without a number are named by this reference.
 
@@ -453,6 +455,11 @@ three-attempt/10-minute budget. Without configuration, notifications remain loca
 recording a notification does not mean it was delivered. Delivery attempts run
 outside database transactions with a bounded per-cycle time budget. Health events
 report whether delivery is configured; notification metadata records its outcome.
+
+TAPD ticket notices (`channel=tapd`) are delivered by the publication lane as
+ticket comments, separately from operator delivery. They share the same
+three-attempt/10-minute budget, may be repeated once after an unknown write, and
+are skipped once the ticket has ended.
 
 Maintenance records `reliability_health` events containing database/WAL/reusable
 bytes and bounded samples of delayed tasks, pending notifications and stale runs.

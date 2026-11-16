@@ -850,3 +850,21 @@ def _lifecycle_facts_filtered_statement():
 
 def lifecycle_facts_filtered(conn, items):
     return statements.read(conn, _lifecycle_facts_filtered_statement(), {"items": items})
+
+
+def find_tapd_comment_ids(conn, url_prefix):
+    """Remote IDs of comments Robert recorded on one TAPD project's tickets.
+
+    The prefix is built from a canonical host and numeric workspace, so it has no LIKE wildcards.
+    """
+    action = tables["github_actions"]
+    query = (
+        select(action.c["external_id"])
+        .where(
+            action.c["action_type"] == sql_constant(GitHubActionType.COMMENT.value),
+            action.c["target_url"].startswith(bindparam("p0")),
+            action.c["external_id"].is_not(None),
+        )
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    return statements.read(conn, query, {"p0": url_prefix})

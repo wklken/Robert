@@ -11,11 +11,12 @@ from robert_agent.work.application import discovery
 from robert_agent.work.application import intake
 from robert_agent.work.application import remediation_requests
 from robert_agent.work.application import source_lifecycle
+from robert_agent.work.application import tapd_intake
 from robert_agent.execution import leases as execution_leases
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.foundation import values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
-from robert_agent.work import task_state
+from robert_agent.work import task_state, wakeup
 import subprocess
 from robert_agent.work.application import preparation
 
@@ -396,7 +397,12 @@ def run_repo_pipeline(
         summary["publish_failed_count"] = publish_result.get("failed_count", 0)
         summary["finalized_task_count"] = publish_result.get("finalized_task_count", 0)
 
+        tapd_observations = wakeup.tapd_observation_ids(conn, repo_id, run_now)
         if (fixture_path or skip_external) and observation is None:
+            if tapd_observations and (config_result.get("tapd") or {}).get("enabled"):
+                summary["reconciled_source_count"] = source_lifecycle.reconcile_remote_source_states(
+                    conn, repo_id, repo, None, run_now, tapd_only=True
+                )
             run_journal.mark_repo_run_step(
                 conn,
                 run_id,
@@ -453,6 +459,13 @@ def run_repo_pipeline(
         if discovered is None:
             return summary
         decisions, known_workstreams, active_workstreams = discovered
+        decisions = decisions + tapd_intake.collect_decisions(
+            conn,
+            repo=repo,
+            repo_id=repo_id,
+            config_result=config_result,
+            known_workstreams=known_workstreams,
+        )
 
         run_journal.mark_repo_run_step(conn, run_id, repo_id, "route", "running", run_now)
         route_failures = intake.admit_requests(
@@ -496,6 +509,7 @@ def run_repo_pipeline(
             )
             return summary
 
+        wakeup.finish_tapd_observations(conn, tapd_observations)
         run_journal.mark_repo_run_step(
             conn,
             run_id,

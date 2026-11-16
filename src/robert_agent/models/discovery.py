@@ -52,3 +52,12 @@ class GitHubScanRead(Base):
     command_key: Mapped[str] = mapped_column(Text, primary_key=True)
     response_json: Mapped[str | None] = mapped_column(Text)
     observed_at: Mapped[float] = mapped_column(REAL)
+
+
+class TapdScanState(Base):
+    __tablename__ = "tapd_scan_state"
+
+    project_key: Mapped[str | None] = mapped_column(Text, primary_key=True, nullable=True)
+    watermark_created: Mapped[str] = mapped_column(Text)
+    watermark_comment_id: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text)

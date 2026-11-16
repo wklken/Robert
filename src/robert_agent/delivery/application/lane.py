@@ -13,6 +13,7 @@ from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.adapters.github import read as github_read
 
 from robert_agent.adapters.github import budget as github_budget
+from robert_agent.delivery.application import tapd_notifications
 
 
 def publish(config_path, *, dry_run=False):
@@ -35,6 +36,7 @@ def publish(config_path, *, dry_run=False):
             repo_ids.append(row[0])
     if not dry_run:
         notify.deliver_pending(config["db_path"], repo_ids=repo_ids, config=config)
+        tapd_notifications.deliver_pending(config)
         session = github_read.GitHubReadSession(
             config["db_path"],
             account=config["repos"][0]["github_account"],

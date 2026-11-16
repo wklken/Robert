@@ -1,7 +1,12 @@
-"""Reconcile terminal GitHub source state with owned work."""
+"""Reconcile terminal GitHub and TAPD source state with owned work."""
 
 from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, WorkstreamLifecycle
+from robert_agent.foundation.contracts.work import (
+    REMEDIATION_TASK_KINDS,
+    SourceProvider,
+    SourceType,
+    WorkstreamLifecycle,
+)
 
 from robert_agent.persistence.queries import attempts as db_read_attempts
 
@@ -34,6 +39,23 @@ from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.work import queries as work_queries
 from robert_agent.workflows import pr_remediation as remediation
 import json
+
+_TICKET_SOURCE_TYPES = frozenset({SourceType.ISSUE, SourceType.TAPD_STORY, SourceType.TAPD_BUG})
+
+
+def _stored_tapd_state(conn, source_id):
+    """The scan lane owns TAPD reads; a failed read never marks a ticket ended."""
+    row = db_records.first(db_read_github_sources.find_metadata_json_and_state_by_source_id(conn, source_id))
+    if not row or row[1] != "closed":
+        return None
+    snapshot = values.json_object(row[0]).get("tapd") or {}
+    return {
+        "state": "closed",
+        "state_reason": "completed",
+        "tapd_status": snapshot.get("status"),
+        "updated_at": snapshot.get("observed_at"),
+        "closed_at": snapshot.get("observed_at"),
+    }
 
 
 def _remote_terminal_state(source_type, remote_state):
@@ -238,7 +260,7 @@ def _record_remote_terminal_state_locked(
         json.dumps(remote_payload, ensure_ascii=False, sort_keys=True),
     )
     item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
-    if item and source_type == "issue" and item["origin_source_id"] == source_id:
+    if item and source_type in _TICKET_SOURCE_TYPES and item["origin_source_id"] == source_id:
         facts = control_queries.lifecycle_facts(conn, item)
         unfinished = db_records.first(
             db_read_tasks.record_remote_terminal_state_locked(conn, item["workstream_id"], item["workstream_id"])
@@ -257,7 +279,11 @@ def _record_remote_terminal_state_locked(
                 item["work_item_id"],
                 event_type="completed" if workstream_lifecycle == WorkstreamLifecycle.COMPLETED else "canceled",
                 idempotency_key=f"issue-closed:{source_key}:{remote_state.get('closed_at') or run_now}",
-                body="GitHub issue closed: " + (remote_state.get("state_reason") or "closed"),
+                body=(
+                    "GitHub issue closed: " + (remote_state.get("state_reason") or "closed")
+                    if source_type == SourceType.ISSUE
+                    else "TAPD ticket ended: " + (remote_state.get("tapd_status") or "closed")
+                ),
                 resolves_event_id=(decision["event_id"] if hasattr(decision, "keys") else decision[0])
                 if decision
                 else None,
@@ -379,16 +405,22 @@ def record_current_state_closed_source_if_needed(conn, repo_id, source_id, event
     )
 
 
-def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
+def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now, *, tapd_only=False):
     rows = work_queries.remote_source_rows(conn, repo_id)
     reconciled = 0
-    for workstream_id, task_id, source_id, source_key, source_type, number in rows:
+    for workstream_id, task_id, source_id, source_key, source_type, number, provider, _state in rows:
+        if provider not in set(SourceProvider) or (tapd_only and provider != SourceProvider.TAPD):
+            continue
         task_id = task_id or work_queries.latest_task_id(conn, workstream_id)
         conn.commit()
         db_transactions.savepoint(conn, "reconcile_source")
         source_succeeded = False
         try:
-            remote_state = github_sources.read_source_state(repo["full_name"], source_type, number, runner)
+            remote_state = (
+                _stored_tapd_state(conn, source_id)
+                if provider == SourceProvider.TAPD
+                else github_sources.read_source_state(repo["full_name"], source_type, number, runner)
+            )
             if not remote_state:
                 continue
             terminal = _remote_terminal_state(source_type, remote_state)

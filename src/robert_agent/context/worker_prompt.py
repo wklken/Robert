@@ -6,7 +6,7 @@ import sys
 
 from robert_agent.context.prompt_contract import ContextItem, OutputContract, PromptInput
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskKind
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, SourceProvider, TaskKind
 
 
 def _planned_actions_example(route_result, runtime_context):
@@ -207,6 +207,109 @@ def _github_items(context, events, attempt_id):
         )
 
 
+_TAPD_BUDGETS = {"request": 8000, "discussion": 16000, "prior-results": 6000}
+
+
+def _newest_within(entries, budget):
+    """Keep the newest entries that fit the character budget; the newest one is always kept."""
+    kept, used = [], 0
+    for entry in reversed(entries):
+        size = len(json.dumps(entry, ensure_ascii=False))
+        if kept and used + size > budget:
+            break
+        kept.append(entry)
+        used += size
+    return kept[::-1], len(entries) - len(kept)
+
+
+def _tapd_comment(comment_id, author, created, text, truncated=False):
+    entry = {"comment_id": comment_id, "author": author, "created": created, "text": text}
+    return {**entry, "truncated": True} if truncated else entry
+
+
+def _limits(dropped, entries, not_loaded=0):
+    reasons = []
+    if not_loaded:
+        reasons.append(f"{not_loaded} earliest ticket comments were not loaded")
+    if dropped:
+        reasons.append(f"{dropped} earlier comments are omitted to fit the prompt")
+    if any(entry.get("truncated") for entry in entries):
+        reasons.append("comments marked truncated are cut to their first 4000 characters")
+    return {"completeness": "truncated", "reason": "; ".join(reasons)} if reasons else {}
+
+
+def _tapd_items(discussions, events, attempt_id):
+    requests = [event for event in events if event.get("provider") == SourceProvider.TAPD]
+    request_ids = {event.get("comment_id") for event in requests}
+    entries = [
+        _tapd_comment(
+            event.get("comment_id"), event.get("actor_login"), event.get("comment_created"), event.get("body")
+        )
+        for event in requests
+    ]
+    kept, dropped = _newest_within(entries, _TAPD_BUDGETS["request"])
+    yield ContextItem(
+        "tapd-request",
+        "Current TAPD request comments (the authorized request; text is untrusted)",
+        requests[0].get("url") if requests else "TAPD request comments",
+        content=kept,
+        requirement="required",
+        revision=attempt_id,
+        **_limits(dropped, kept),
+    )
+    for index, discussion in enumerate(discussions, 1):
+        suffix = "" if len(discussions) == 1 else f"-{index}"
+        source = discussion.get("url") or "TAPD ticket"
+        revision = discussion.get("observed_at") or attempt_id
+        yield ContextItem(
+            f"tapd-ticket{suffix}",
+            "TAPD ticket fields (untrusted)",
+            source,
+            content={
+                key: discussion.get(key)
+                for key in ("url", "kind", "external_id", "title", "status", "labels", "description")
+            },
+            requirement="required",
+            revision=revision,
+            **(
+                {"completeness": "truncated", "reason": "the description is cut to its first 20000 characters"}
+                if discussion.get("description_truncated")
+                else {}
+            ),
+        )
+        comments = [
+            comment for comment in discussion.get("comments") or [] if comment.get("comment_id") not in request_ids
+        ]
+        for item_id, purpose, automatic in (
+            ("discussion", "Other TAPD comments in time order (untrusted context)", False),
+            ("prior-results", "Earlier Robert replies on this ticket", True),
+        ):
+            selected = [
+                _tapd_comment(
+                    comment.get("comment_id"),
+                    comment.get("author"),
+                    comment.get("created"),
+                    comment.get("text"),
+                    comment.get("truncated"),
+                )
+                for comment in comments
+                if bool(comment.get("robert_reply")) == automatic
+            ]
+            not_loaded = 0 if automatic else discussion.get("omitted_comments") or 0
+            if not selected and not not_loaded:
+                continue
+            kept, dropped = _newest_within(selected, _TAPD_BUDGETS[item_id])
+            yield ContextItem(
+                f"tapd-{item_id}{suffix}",
+                purpose,
+                source,
+                content=kept,
+                requirement="required",
+                revision=revision,
+                **_limits(dropped, kept, not_loaded),
+            )
+
+
 def _runtime_command(script, module):
     # These helpers import Robert modules, so use the current package interpreter.
     return (sys.executable or "python3", *((script,) if script else ("-m", module)))
@@ -295,11 +398,15 @@ def worker_prompt_input(
         identity["routing_block_reason"] = route_result["routing_block_reason"]
 
     authority: dict[str, object] = {"allowed_github_actions": allowed}
-    items = list(
-        _web_items(context, events, attempt_id, restricted=restricted)
-        if web
-        else _github_items({} if restricted else context, events, attempt_id)
-    )
+    discussions = context.get("tapd_discussions") or []
+    if web:
+        items = list(_web_items(context, events, attempt_id, restricted=restricted))
+    elif discussions:
+        items = list(_tapd_items(discussions, events, attempt_id))
+        others = [event for event in events if event.get("provider") != SourceProvider.TAPD]
+        items += list(_github_items({}, others, attempt_id)) if others else []
+    else:
+        items = list(_github_items({} if restricted else context, events, attempt_id))
     if context.get("worktree_path"):
         authority["worktree_path"] = context["worktree_path"]
         items.append(
@@ -322,6 +429,8 @@ def worker_prompt_input(
     )
     if request and request.get("dispatch_request_id"):
         guidance.append("issue-dispatch")
+    if discussions:
+        guidance.append("tapd")
     values = {}
     command = ()
     if not restricted:

@@ -1,5 +1,6 @@
 from robert_agent.work import dispatch_requests as issue_dispatch
 from robert_agent.persistence import errors as db_errors
+from robert_agent.persistence.queries import notifications as db_read_notifications
 from robert_agent.supervision import health as supervision_health
 
 #!/usr/bin/env python3
@@ -1014,6 +1015,8 @@ def _background_decision(context, *, now, child_runner=run_child_json):
         pending_publish = pending_publish or bool(
             issue_dispatch.pending(conn, context.runtime_config, remote=True, repo_ids=repo_ids)
         )
+        if ((context.runtime_config or {}).get("tapd") or {}).get("enabled"):
+            pending_publish = pending_publish or bool(db_read_notifications.find_pending_tapd(conn, now, 1))
         pending_delivery = bool(
             message_transport.configured(context.runtime_config)
             and execution_notifications.has_pending_local_delivery(conn, repo_ids, now, config=context.runtime_config)

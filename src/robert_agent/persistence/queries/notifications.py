@@ -36,6 +36,46 @@ def find_task_id_and_notification_type_and_status_and_metadata_json_by_notificat
     return statements.read(conn, query1, {"p0": notification_id})
 
 
+def find_existing_ids(conn, notification_ids):
+    notice = tables["notifications"]
+    query = (
+        select(notice.c["notification_id"])
+        .where(notice.c["notification_id"].in_(bindparam("items", expanding=True)))
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    return statements.read(conn, query, {"items": list(notification_ids)})
+
+
+def find_delivered_tapd_comment_ids(conn, project_key):
+    notice = tables["notifications"]
+    comment_id = func.json_extract(notice.c.metadata_json, "$.tapd_delivery.comment_id")
+    query = select(comment_id).where(
+        notice.c.channel == "tapd",
+        notice.c.status == "delivered",
+        func.json_extract(notice.c.metadata_json, "$.project_key") == project_key,
+        comment_id.is_not(None),
+    )
+    return statements.read(conn, query)
+
+
+def find_pending_tapd(conn, now, limit):
+    """TAPD ticket notices whose next bounded delivery attempt is due."""
+    notice = tables["notifications"]
+    retry_at = func.json_extract(notice.c.metadata_json, sql_constant("$.tapd_delivery.next_retry_at"))
+    query = (
+        select(notice.c.notification_id, notice.c.notification_type, notice.c.metadata_json)
+        .where(
+            notice.c.channel == sql_constant("tapd"),
+            notice.c.status == sql_constant("pending"),
+            or_(retry_at.is_(None), func.julianday(retry_at) <= func.julianday(bindparam("p0"))),
+        )
+        .order_by(notice.c.created_at, notice.c.notification_id)
+        .limit(limit)
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    return statements.read(conn, query, {"p0": now})
+
+
 def find_metadata_json_by_notification_id(conn, notification_id):
     query1 = (
         select(tables["notifications"].c["metadata_json"])

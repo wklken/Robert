@@ -9,6 +9,8 @@ an unbounded body, command output, or credential into Robert state.
 from robert_agent.delivery.comment_receipts import match_comment
 from robert_agent.delivery.application import scope as publication_scope
 from robert_agent.delivery.application import guards as publication_guards
+from robert_agent.delivery.application import tapd_comments
+from robert_agent.foundation import tapd_identity
 
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 
@@ -260,6 +262,24 @@ def _reconcile_comment(action, action_scope, run_command):
     return _result(receipt["status"], receipt["reason_code"])
 
 
+def _reconcile_tapd_comment(action, tapd):
+    marker = _marker(_decode_json(action.get("metadata_json")).get("body"), COMMENT_MARKER_RE)
+    target = tapd_comments.ticket_target(action.get("target_url"), tapd.settings) if tapd else None
+    if not marker:
+        return _result("unknown", "comment_marker_missing")
+    if not target:
+        return _result("unknown", "comment_target_malformed")
+    try:
+        found = tapd_comments.receipts(tapd.client(), target, marker, tapd.settings["mention_name"])
+    except tapd_comments.PROTOCOL_ERRORS:
+        return _result("unknown", "tapd_comment_query_failed")
+    if len(found) > 1:
+        return _result("unknown", "comment_marker_conflict")
+    if found:
+        return _result("confirmed_effect", "tapd_receipt_match", external_id=found[0], target_url=action["target_url"])
+    return _result("confirmed_absent", "comment_lookup_complete_absent")
+
+
 def _reconcile_open_pr(action, action_scope, run_command):
     metadata = _decode_json(action.get("metadata_json"))
     scope = action_scope if isinstance(action_scope, dict) else {}
@@ -452,12 +472,14 @@ def _remote_branch(action, action_scope, run_command, *, push_remote=None):
     return _result("unknown", "remote_sha_conflict", remote_sha=remote_sha)
 
 
-def classify_remote_state(action, action_scope, run_command, *, conn=None):
+def classify_remote_state(action, action_scope, run_command, *, conn=None, tapd=None):
     """Classify one action without changing SQLite or remote state."""
 
     if not isinstance(action_scope, dict):
         return _result("unknown", "audited_scope_missing")
     action_type = action.get("action_type")
+    if action_type == GitHubActionType.COMMENT and tapd_identity.parse_ticket_url(action.get("target_url")):
+        return _reconcile_tapd_comment(action, tapd)
     if vote_publish.is_vote(action):
         return vote_publish.reconcile(action, action_scope, run_command)
     if action_type == GitHubActionType.SUBMIT_PR_REVIEW:

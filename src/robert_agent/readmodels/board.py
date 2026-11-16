@@ -1,7 +1,7 @@
 """Deterministic read models for the DD repository task board."""
 
 from robert_agent.foundation.contracts.execution import BindingStatus
-from robert_agent.foundation.contracts.work import ACTIVE_TASK_LIFECYCLES, TaskLifecycle, WorkCommand
+from robert_agent.foundation.contracts.work import ACTIVE_TASK_LIFECYCLES, SourceProvider, TaskLifecycle, WorkCommand
 
 import base64
 import json
@@ -272,7 +272,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
     elif (
         task
         and task["lifecycle"] == TaskLifecycle.DETECTED
-        and row["origin_type"] == "github"
+        and row["origin_type"] in set(SourceProvider)
         and not running
         and not publication_in_progress
         and not any(a["type"] == "operator_decision_required" for a in attention)

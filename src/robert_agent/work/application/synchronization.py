@@ -21,10 +21,14 @@ from robert_agent.workflows import pr_health
 from robert_agent.persistence.schema import database as storage
 from robert_agent.configuration import command as validate_config
 from robert_agent.foundation.commands import ControlDeadlineExceeded
+from robert_agent.foundation import tapd_identity
 from robert_agent.adapters.github import read as github_read
 from robert_agent.adapters.github import recording as github_recording
 from robert_agent.adapters.github import budget as github_budget
+from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 from robert_agent.work import scan_batches as scan_batches
+from robert_agent.work import wakeup
+from robert_agent.work.application import tapd_scan
 
 from robert_agent.work import source_policy as source_policy
 
@@ -50,7 +54,7 @@ def context_digest(repo, known_workstreams, *, config=None):
         repo["full_name"],
         repo["github_account"],
         sorted(repo.get("trusted_actors", [])),
-        sorted(known_workstreams),
+        sorted(item for item in known_workstreams if not tapd_identity.is_source_key(item)),
         review_allowlist(config, repo),
         os.environ.get("GH_HOST", "github.com"),
     ]
@@ -65,12 +69,17 @@ def scan_repo(config, repo, session, hints):
     recorded = github_recording.RecordingRunner(session)
     with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
         repo_id = work_repositories.upsert_repo(conn, repo)
-        known = work_queries.load_known_workstreams(conn, repo_id)
+        known = {
+            workstream_id
+            for workstream_id in work_queries.load_known_workstreams(conn, repo_id)
+            if not tapd_identity.is_source_key(workstream_id)
+        }
         health_sources = {(row[0], row[1]) for row in db_read_workstreams.find_for_scan_repo(conn, repo_id)}
         sources = list(
             dict.fromkeys(
                 (row[4], row[5], (row[4], row[5]) in health_sources)
                 for row in work_queries.remote_source_rows(conn, repo_id)
+                if row[6] == "github"
             )
         )
         pending_rows = db_read_github_scan_batches.find_for_scan_repo(conn, repo_id)
@@ -202,7 +211,34 @@ def scan_repo(config, repo, session, hints):
     return identifier
 
 
-def scan(config_path, *, runner=subprocess.run, refresh_context=False):
+def _wake_tapd_repositories(config, repos):
+    from robert_agent.work import queries as work_queries
+    from robert_agent.work import repositories as work_repositories
+
+    db_path = config["db_path"]
+    now = wakeup.utc_now()
+    ready = 0
+    with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
+        for repo in repos:
+            repo_id = work_repositories.lookup_id(conn, repo["full_name"])
+            if not repo_id:
+                continue
+            pending = db_read_github_events.find_tapd_pending_triggers(conn, repo_id, 1)
+            ended = any(
+                provider == "tapd" and state == "closed"
+                for _stream, _task, _source, _key, _kind, _number, provider, state in work_queries.remote_source_rows(
+                    conn, repo_id
+                )
+            )
+            if not pending and not ended:
+                continue
+            wakeup.request_tapd_observation(conn, repo_id, now)
+            ready += 1
+    if ready:
+        wakeup_notifier.notify(db_path)
+
+
+def scan(config_path, *, runner=subprocess.run, refresh_context=False, tapd_runner=None):
     config = validate_config.validate_config(config_path, skip_external=True)
     if not config["ok"]:
         return config
@@ -259,8 +295,12 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
             raise
         except (subprocess.SubprocessError, OSError, ValueError, db_errors.Error):
             failures.append({"repo": repo["full_name"], "reason": "repo_scan_failed"})
+    tapd = {} if refresh_context else tapd_scan.scan(config, runner=tapd_runner)
+    if tapd.get("enabled"):
+        _wake_tapd_repositories(config, repos)
     intervals = [session.poll_interval_seconds for session in sessions.values() if session.poll_interval_seconds]
     return {
+        **({"tapd": tapd} if tapd.get("enabled") else {}),
         "ok": not failures,
         "status": "scanned",
         "context_refresh": refresh_context,

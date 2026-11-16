@@ -42,7 +42,7 @@ robert_agent/
   readmodels/                 # dashboard/board/status/workbench/history/usage
   models/                     # SQLAlchemy 2 mapped tables; existing column/storage contracts
   persistence/                # shared queries/stores/transactions/schema/dialects
-  adapters/                   # github/git/processes/notifications/services
+  adapters/                   # github/git/tapd/processes/notifications/services
   application/                # 只保留跨领域的 repository-cycle 组合
   runtime/                    # once/loop/daemon/scan/supervisor/paused monitor
   interfaces/web/             # HTTP、输入/CSRF、模板、服务启动
@@ -72,6 +72,10 @@ robert_agent/
 [`foundation/timestamps.py`](../src/robert_agent/foundation/timestamps.py) 只使用标准库，
 供配置校验、SQLite 方言函数与监督告警共用 UTC 时间解析和微秒比较。
 它不执行 I/O，也不依赖领域或用例；通知的启用时间边界在各条投递路径保持一致。
+
+[`foundation/tapd_identity.py`](../src/robert_agent/foundation/tapd_identity.py) 同样只使用标准库，
+定义 TAPD 主机、项目键、单据 URL、来源键和评论 fingerprint 的语法，供配置、适配器、
+来源 owner 和发布合同共用。
 
 稳定领域能力、纯策略、适配器和读模型不依赖应用用例、具体 workflow、runtime 或接口。
 领域 `application/` 与具体 workflow 属于应用层，按明确的模块依赖组合能力；跨领域
@@ -203,6 +207,7 @@ flowchart LR
 | 责任 | 主要模块 | 关键契约 |
 | --- | --- | --- |
 | 外部发现 | [runtime/scan.py](../src/robert_agent/runtime/scan.py)、[adapters/github/read.py](../src/robert_agent/adapters/github/read.py)、[adapters/github/discovery.py](../src/robert_agent/adapters/github/discovery.py) | 完整观察批次先落盘；缓存命中仍需本地授权 |
+| TAPD 来源 | [adapters/tapd/client.py](../src/robert_agent/adapters/tapd/client.py)、[work/tapd_policy.py](../src/robert_agent/work/tapd_policy.py)、[work/application/tapd_scan.py](../src/robert_agent/work/application/tapd_scan.py)、[work/application/tapd_intake.py](../src/robert_agent/work/application/tapd_intake.py)、[delivery/application/tapd_comments.py](../src/robert_agent/delivery/application/tapd_comments.py) | 授权在第一次观察时固定；复核不访问网络；回评按回执对账 |
 | 授权与协作线程 | [security/authorization.py](../src/robert_agent/security/authorization.py)、[work/streams.py](../src/robert_agent/work/streams.py) | 正文不能扩大权限；Issue 与 PR 保留各自主线 |
 | 路由与准备 | [workflows/routes.py](../src/robert_agent/workflows/routes.py)、[configuration/routes.py](../src/robert_agent/configuration/routes.py)、[context/skills.py](../src/robert_agent/context/skills.py)、[adapters/git/workspace.py](../src/robert_agent/adapters/git/workspace.py)、[context/prompts.py](../src/robert_agent/context/prompts.py) | 固定输出、动作权限与 workspace 策略；缺必需 Skill 时不启动 |
 | 执行与监督 | [adapters/processes/worker.py](../src/robert_agent/adapters/processes/worker.py)、[worker_adapters/](../src/robert_agent/worker_adapters/)、[execution/inspection.py](../src/robert_agent/execution/inspection.py)、[adapters/processes/identity.py](../src/robert_agent/adapters/processes/identity.py) | 环境白名单、进程身份、心跳、超时与退出证明 |
@@ -250,6 +255,11 @@ flowchart TD
 `route_task` 按来源、意图与已有 PR 选择分析、新 PR、更新 PR、源码评审、评审回复、
 投票或分类。配置不能扩大固定路由的 `allowed_github_actions`、`expected_output`、
 `verification_policy` 与 workspace 权限。
+
+TAPD 请求由扫描通道写入来源行和事件，授权状态在第一次观察时固定。仓库循环中的
+`tapd_intake.collect_decisions` 按当前配置与已保存的单据结束状态复核，再交给同一条
+workstream、路由和准备流程。TAPD 来源只能使用分类、分析和澄清路由，回评只能发到
+原单据。详见 [TAPD 来源](features/tapd.md)。
 
 源码：[authorize_event](../src/robert_agent/security/authorization.py)、[plan_event](../src/robert_agent/work/streams.py)、
 [route_task](../src/robert_agent/workflows/routes.py)、[仓库用例编排](../src/robert_agent/application/repository_cycle.py)（`run_repo_pipeline`）、
