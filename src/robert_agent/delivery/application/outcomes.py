@@ -15,6 +15,7 @@ from robert_agent.execution import operations as execution_operations
 from robert_agent.persistence import execution_control as execution_store
 
 from robert_agent.delivery.application import scope as publication_scope
+from robert_agent.delivery.application import tapd_comments
 from robert_agent.delivery import intents as intent_facts
 from robert_agent.delivery import notifications as publication_notifications
 from robert_agent.delivery import values as publication_values
@@ -107,7 +108,7 @@ def schedule_reconcile_retry(conn, action, reconciliation, now):
 def mark_skipped(conn, action, result, now):
     review_publish.record_outcome(conn, action, result.get("status"), now)
     vote_publish.record_outcome(conn, action, result.get("status"), now)
-    if result.get("status") == "superseded":
+    if result.get("status") in {"superseded", tapd_comments.PR_TERMINAL}:
         intent = intent_facts.load_intent(conn, action["action_id"])
         if intent and intent["status"] == PublicationStatus.EXECUTING:
             execution_store.transition_publication_intent(
@@ -115,7 +116,10 @@ def mark_skipped(conn, action, result, now):
                 intent["publication_id"],
                 PublicationStatus.CONFIRMED_ABSENT.value,
                 now,
-                remote_evidence={"reason_code": "publication_superseded", "status": "confirmed_absent"},
+                remote_evidence={
+                    "reason_code": "publication_superseded" if result["status"] == "superseded" else result["status"],
+                    "status": "confirmed_absent",
+                },
             )
     metadata = publication_values.decode_json(action["metadata_json"])
     metadata["publish"] = {

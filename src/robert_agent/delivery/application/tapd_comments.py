@@ -3,7 +3,9 @@
 import hashlib
 import json
 import subprocess
+from urllib.parse import urlparse
 
+from robert_agent.adapters.github import sources as github_sources
 from robert_agent.adapters.tapd import client as tapd_client
 from robert_agent.delivery import values as publication_values
 from robert_agent.foundation import tapd_identity
@@ -13,6 +15,7 @@ from robert_agent.work import tapd_policy
 
 RECEIPT_LABEL = "回执"
 PULL_REQUEST_LABEL = "PR："
+PR_TERMINAL = "tapd_pr_terminal"
 PROTOCOL_ERRORS = (tapd_client.TapdError, subprocess.TimeoutExpired, OSError, ValueError)
 
 
@@ -56,6 +59,27 @@ def link_pull_request(conn, action):
     metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
     db_write_github_actions.set_metadata_json_by_action_id(conn, metadata_json, action["action_id"])
     return {**action, "metadata_json": metadata_json}
+
+
+def pull_request_write_guard(conn, action, run_command):
+    if conn is None:
+        return None
+    notice_pr = db_read_github_actions.find_pull_request_url_for_action(
+        conn, action["action_id"], include_other_pr_results=True
+    )
+    if not notice_pr:
+        return None
+    url = urlparse(notice_pr)
+    parts = url.path.strip("/").split("/")
+    if url.netloc != "github.com" or len(parts) != 4 or parts[2] != "pull" or not parts[3].isdigit():
+        return _failure("Invalid GitHub pull request for TAPD comment", retryable=False)
+    repo = f"{parts[0]}/{parts[1]}"
+    state = github_sources.read_source_state(repo, "pull_request", int(parts[3]), run_command)
+    if state and (state.get("state") == "closed" or state.get("merged") or state.get("merged_at")):
+        return {"ok": True, "status": PR_TERMINAL, "safe_error": "Pull request closed before the TAPD comment"}
+    if not state or state.get("state") != "open":
+        return _failure("Could not confirm the GitHub pull request is still open")
+    return None
 
 
 def ticket_target(url, settings):

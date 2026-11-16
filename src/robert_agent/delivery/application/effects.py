@@ -752,7 +752,10 @@ def publish_action(
             action,
             tapd,
             marker,
-            scope_guard=lambda: publication_guards.publication_scope_guard(conn, action, recovery_guard),
+            scope_guard=lambda: (
+                tapd_comments.pull_request_write_guard(conn, action, run_command)
+                or publication_guards.publication_scope_guard(conn, action, recovery_guard)
+            ),
         )
     if action["action_type"] == GitHubActionType.COMMENT and vote_publish.is_vote(action):
         return vote_publish.publish(
