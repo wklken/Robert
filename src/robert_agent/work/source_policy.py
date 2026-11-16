@@ -53,7 +53,9 @@ def refresh_pending_events(events, pending, covered, repo):
     return list(merged.values())
 
 
-def reauthorize_saved_request(event, repo, *, known_workstreams=(), conn=None, config=None):
+def reauthorize_saved_request(
+    event, repo, *, known_workstreams=(), conn=None, config=None, finishing_pr_publication=False
+):
     if event.get("provider") == SourceProvider.TAPD:
         source_id = values.github_source_id(event["source_key"])
         state = db_records.first(db_read_github_sources.find_state_by_source_id(conn, source_id)) if conn else None
@@ -61,7 +63,7 @@ def reauthorize_saved_request(event, repo, *, known_workstreams=(), conn=None, c
             event,
             (config or {}).get("tapd"),
             known_workstreams=known_workstreams,
-            ended=bool(state) and state[0] == "closed",
+            ended=bool(state) and state[0] == "closed" and not finishing_pr_publication,
         )
     if event.get("dispatch_request_id"):
         if conn is None:

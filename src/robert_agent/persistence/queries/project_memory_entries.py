@@ -80,7 +80,7 @@ def find_for_knowledge_proposal_repos(conn):
     return statements.read(conn, query1, {})
 
 
-def retrieve_memories_filtered(conn, items):
+def retrieve_memories_filtered(conn, items, *, include_tapd=False):
     query1 = (
         select(
             tables["project_memory_entries"].c["memory_id"],
@@ -100,6 +100,17 @@ def retrieve_memories_filtered(conn, items):
         .correlate_except(tables["project_memory_entries"])
         .set_label_style(LABEL_STYLE_NONE)
     )
+    if not include_tapd:
+        result = tables["worker_results"]
+        entry = tables["project_memory_entries"]
+        source = func.json_each(result.c.metadata_json, "$.audit.action_scope.sources").table_valued("value")
+        tapd_result = (
+            select(1)
+            .select_from(result.join(source, func.json_extract(source.c.value, "$.provider") == "tapd"))
+            .where(result.c.result_id == entry.c.source_result_id)
+            .correlate(entry)
+        )
+        query1 = query1.where(~tapd_result.exists())
     return statements.read(conn, query1, {"items": items})
 
 

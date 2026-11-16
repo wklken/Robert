@@ -1,10 +1,10 @@
 """Trusted result targets shared by submission and final controller audit."""
 
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, SourceProvider
 
 from robert_agent.persistence import records as db_records
-from robert_agent.persistence.queries import task_events as db_read_task_events
 from robert_agent.persistence.queries import tasks as db_read_tasks
+from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 from robert_agent.work import queries as work_queries
 from robert_agent.adapters.git.remotes import github_owner
@@ -23,12 +23,21 @@ def _object(value):
     return json.loads(value or "{}")
 
 
+def origin_type(conn, task_id, workstream_id):
+    """A task follows its own request's rules, even inside a derived PR's workstream."""
+    if work_queries.tapd_driven(work_queries.task_events(conn, task_id)):
+        return SourceProvider.TAPD.value
+    row = db_records.first(db_read_work_items.find_origin_type_by_workstream_id(conn, workstream_id))
+    origin = row[0] if row else SourceProvider.GITHUB.value
+    return SourceProvider.GITHUB.value if origin == SourceProvider.TAPD else origin
+
+
 def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, command_runner=None):
     command_runner = command_runner or subprocess.run
     row = db_records.first(db_read_tasks.find_for_for_result(conn, attempt_id, task_id, workstream_id))
     if not row:
         return None
-    sources = work_queries.sources_for_workstream(conn, workstream_id)
+    events = work_queries.task_events(conn, task_id)
     action_scope = {
         "workstream_id": workstream_id,
         "repo": row[0],
@@ -37,11 +46,16 @@ def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, comman
         "worktree_path": row[2] or "",
         "branch_name": row[3] or "",
         "remote": "origin",
-        "sources": sources,
+        "sources": work_queries.sources_for_task(conn, workstream_id, events),
     }
+    if work_queries.tapd_driven(events):
+        event = events[0]
+        action_scope["public_ref"] = event.get("public_ref")
+        if event.get("existing_pr_number"):
+            action_scope["sources"].append({"source_type": "pull_request", "number": event["existing_pr_number"]})
+            action_scope["base_branch"] = event["base_branch"]
     authors = {}
-    for (payload_json,) in db_read_task_events.find_for_for_result(conn, task_id):
-        event = _object(payload_json)
+    for event in events:
         if event.get("source_type") == "pull_request" and event.get("pr_author_login"):
             authors[f"https://github.com/{row[0]}/pull/{event.get('number')}"] = event["pr_author_login"]
     action_scope["pr_authors"] = authors

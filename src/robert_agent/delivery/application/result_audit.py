@@ -1,15 +1,16 @@
 """Audit saved results with fresh execution and publication evidence."""
 
-from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.delivery import AuditStatus, OutputType
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
+from robert_agent.delivery.application import tapd_publication
+from robert_agent.work import queries as work_queries
 
 from robert_agent.persistence import transactions as db_transactions
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import dispatch_requests as dispatch_queries
-from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 from robert_agent.persistence.stores import attempts as db_write_attempts
 from robert_agent.persistence.stores import tasks as db_write_tasks
@@ -108,8 +109,7 @@ def audit_completed_results(
         if not evidence.inspection_due(observation, run_now):
             continue
         payload = results.load_result_payload(conn, result_row)
-        origin_row = db_records.first(db_read_work_items.find_origin_type_by_workstream_id(conn, workstream_id))
-        origin_type = origin_row[0] if origin_row else "github"
+        origin_type = result_scope.origin_type(conn, payload["task_id"], workstream_id)
         recovery_config = None if dry_run else config_result
         if not conn.in_transaction:
             db_transactions.begin(conn, immediate=True)
@@ -126,6 +126,7 @@ def audit_completed_results(
             continue
         claim = gate.get("claim")
         _record_result_usage_status(conn, payload["attempt_id"], payload["result_id"])
+        ticket = work_queries.tapd_origin(conn, workstream_id)
         conn.commit()
         try:
             action_scope = result_scope.for_result(
@@ -134,6 +135,17 @@ def audit_completed_results(
                 payload["attempt_id"],
                 workstream_id,
                 command_runner=control_commands.run_command,
+            )
+            tapd_violation = (
+                tapd_publication.check(
+                    payload["planned_github_actions"],
+                    action_scope or {},
+                    ticket,
+                    (config_result or {}).get("tapd"),
+                    run_command=control_commands.run_command,
+                )
+                if ticket
+                else None
             )
         except ControlDeadlineExceeded:
             raise
@@ -223,6 +235,13 @@ def audit_completed_results(
             remediation_attestation=remediation_attestation,
             review_input_policy=task_metadata.get("review_input_policy", "required"),
         )
+        if tapd_violation:
+            audit = {
+                "ok": False,
+                "status": AuditStatus.POLICY_VIOLATION.value,
+                "violations": [tapd_violation],
+                "safe_error": "GitHub content contains a TAPD identifier or its commit range could not be verified.",
+            }
         if claim and not supervision_actions.finish(
             conn,
             claim,

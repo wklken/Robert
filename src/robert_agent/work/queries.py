@@ -1,5 +1,6 @@
 """Read task and source facts without importing the runtime driver."""
 
+from robert_agent.foundation.contracts.work import SourceProvider
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_sources as db_read_github_sources
 from robert_agent.persistence.queries import task_events as db_read_task_events
@@ -87,6 +88,19 @@ def remote_source_rows(conn, repo_id):
     return db_read_workstreams.find_for_remote_source_rows(conn, repo_id)
 
 
+def tapd_origin(conn, workstream_id):
+    row = db_records.first(db_read_github_sources.find_tapd_origin_for_workstream(conn, workstream_id))
+    if row:
+        return dict(zip(("project_key", "external_id", "url", "source_type"), row))
+
+
+def tapd_pull_requests(conn, ticket_workstream_id):
+    return [
+        {"number": number, "url": url, "state": state}
+        for number, url, state in db_read_workstreams.find_recent_derived_pull_requests(conn, ticket_workstream_id, 10)
+    ]
+
+
 def tapd_discussions(conn, workstream_id):
     """Return the stored ticket snapshot of each TAPD source in the workstream."""
     return [
@@ -95,12 +109,28 @@ def tapd_discussions(conn, workstream_id):
     ]
 
 
-def sources_for_workstream(conn, workstream_id):
+def task_events(conn, task_id):
+    events = [json.loads(payload or "{}") for (payload,) in db_read_task_events.find_for_for_result(conn, task_id)]
+    row = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, task_id))
+    trigger = json.loads(row[0] or "{}").get("request_event_fingerprint") if row else None
+    if trigger:
+        events.sort(key=lambda event: event.get("event_fingerprint") != trigger)
+    return events
+
+
+def tapd_driven(events):
+    return bool(events and events[0].get("provider") == SourceProvider.TAPD)
+
+
+def sources_for_task(conn, workstream_id, events):
+    """A TAPD request answers only on TAPD; any other task never sees a TAPD source."""
+    tapd = tapd_driven(events)
     return [
         {"source_type": source_type, "number": number}
-        if provider == "github"
+        if provider == SourceProvider.GITHUB
         else {"source_type": source_type, "provider": provider, "project_key": project_key, "external_id": external_id}
         for source_type, number, provider, project_key, external_id in (
             db_read_github_sources.find_for_sources_for_workstream(conn, workstream_id, workstream_id)
         )
+        if (provider == SourceProvider.TAPD) == tapd
     ]

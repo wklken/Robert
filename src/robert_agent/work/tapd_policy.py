@@ -3,13 +3,20 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
+import hashlib
 import re
 
 from robert_agent.foundation.timestamps import utc_timestamp
 
 TAPD_TIMEZONE = timezone(timedelta(hours=8))
-ROUTE_IDS = frozenset({"classification-result", "comment-analysis", "waiting-for-user"})
-DIRECT_INTENTS = frozenset({"analysis", "discussion", "requirement_analysis"})
+TICKET_ROUTE_IDS = frozenset({"classification-result", "comment-analysis", "waiting-for-user", "new-pr"})
+DERIVED_PR_ROUTE_IDS = frozenset(
+    {"classification-result", "comment-analysis", "waiting-for-user", "update-existing-pr"}
+)
+ROUTE_IDS = TICKET_ROUTE_IDS | DERIVED_PR_ROUTE_IDS
+DIRECT_INTENTS = frozenset(
+    {"analysis", "discussion", "requirement_analysis", "bug_fix", "small_change", "add_tests", "pr_followup_fix"}
+)
 LABEL_NOTICE = "tapd_repository_label"
 _BLOCKS = frozenset(
     {"blockquote", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "li", "ol", "p", "pre", "table", "tr", "ul"}
@@ -102,6 +109,11 @@ def neutralize_mentions(text, mention_name):
     return _marker(mention_name).sub(lambda match: match[0][1:], text)
 
 
+def allowed_routes(event):
+    """A request in a derived PR's queue updates that PR; otherwise it follows issue rules."""
+    return DERIVED_PR_ROUTE_IDS if event.get("has_open_dd_pr") else TICKET_ROUTE_IDS
+
+
 def split_labels(raw):
     return [label.strip() for label in (raw or "").split("|") if label.strip()]
 
@@ -153,6 +165,13 @@ def authorize_comment(comment, project, *, mention_name, automatic_ids, known):
         project=project,
         known=known,
     )
+
+
+MULTIPLE_PRS_NOTICE = "tapd_multiple_pull_requests"
+
+
+def notice_id(kind, dedupe_key):
+    return "tapd-notice-" + hashlib.sha256(f"{kind}\0{dedupe_key}".encode()).hexdigest()[:32]
 
 
 def project_for(config, project_key):

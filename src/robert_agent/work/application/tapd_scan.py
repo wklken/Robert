@@ -3,7 +3,6 @@
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import hashlib
 import json
 import subprocess
 
@@ -246,7 +245,7 @@ def _record_source(conn, project, settings, ticket, repo, label, automatic_ids, 
 
 
 def label_notice_id(fingerprint):
-    return "tapd-notice-" + hashlib.sha256(f"{tapd_policy.LABEL_NOTICE}\0{fingerprint}".encode()).hexdigest()[:32]
+    return tapd_policy.notice_id(tapd_policy.LABEL_NOTICE, fingerprint)
 
 
 def _record_label_notices(conn, project, ticket, triggers, outcome, now):

@@ -650,7 +650,7 @@ def publish_ready_actions(
                     if result.get("deduplicated"):
                         deduplicated_count += 1
                     continue
-                if result["status"] in {"unsupported_action", "superseded"}:
+                if result["status"] in {"unsupported_action", "superseded", tapd_comments.PR_TERMINAL}:
                     with closing(db_database.connect(db_path)) as conn, conn:
                         publication_outcomes.record_remediation_publish_outcome(conn, action, result, now)
                         publication_outcomes.mark_skipped(conn, action, result, now)

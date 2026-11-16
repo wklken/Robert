@@ -44,7 +44,7 @@ from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.execution import rounds as native_rounds
-from robert_agent.foundation import values
+from robert_agent.foundation import tapd_identity, values
 from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.work import queries as work_queries
 from robert_agent.work import source_policy
@@ -65,11 +65,29 @@ def insert_file_artifact(conn, task_id, attempt_id, artifact_type, path, run_now
     )
 
 
+def _prompt_events(trigger, events):
+    if trigger.get("provider") == SourceProvider.TAPD:
+        return events
+    events = [event for event in events if event.get("provider") != SourceProvider.TAPD]
+    return [
+        {
+            **event,
+            "origin_workstream_id": ((event.get("metadata") or {}).get("dd_workstream") or {}).get(
+                "origin_workstream_id"
+            ),
+        }
+        if tapd_identity.is_source_key(event.get("origin_workstream_id"))
+        else event
+        for event in events
+    ]
+
+
 def attach_tapd_discussions(conn, runtime_context, workstream_id, events):
     """Only a task driven by a TAPD request sees ticket content."""
-    if any(event.get("provider") == SourceProvider.TAPD for event in events):
+    if work_queries.tapd_driven(events):
         runtime_context["origin_type"] = SourceProvider.TAPD.value
         runtime_context["tapd_discussions"] = work_queries.tapd_discussions(conn, workstream_id)
+        runtime_context["tapd_pull_requests"] = work_queries.tapd_pull_requests(conn, events[0]["source_key"])
 
 
 def upsert_route_decision(conn, task_id, route_result, run_now):
@@ -166,6 +184,8 @@ def _refresh_prepared_task_locked(
         return None
     if state["task_lifecycle"] != TaskLifecycle.QUEUED or state["attempt_status"] != AttemptStatus.PREPARED:
         return None
+    if work_queries.tapd_driven(work_queries.task_events(conn, state["task_id"])):
+        return None
     if event.get("source_type") != "pull_request" or not event.get("has_open_dd_pr"):
         return None
     if state["route_id"] not in {"new-pr", "update-existing-pr"}:
@@ -209,7 +229,7 @@ def _refresh_prepared_task_locked(
     ):
         return None
     conn.commit()
-    related_events = work_queries.task_related_events(conn, state["task_id"])
+    related_events = _prompt_events(event, work_queries.task_related_events(conn, state["task_id"]))
     repo_id = values.repository_id(repo["full_name"])
     runtime_knowledge_items = attempt_context.load_runtime_knowledge(
         conn,
@@ -230,7 +250,7 @@ def _refresh_prepared_task_locked(
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo["full_name"],
-            "sources": work_queries.sources_for_workstream(conn, event["workstream_id"]),
+            "sources": work_queries.sources_for_task(conn, event["workstream_id"], related_events),
         }
     )
     prompt_input = worker_prompt_input(
@@ -406,6 +426,7 @@ def create_task_attempt_and_prompt(
     is_native = bool(route_result.get("native_review_workers") or route_result.get("native_vote_workers"))
     if is_native:
         related_events = [event]
+    related_events = _prompt_events(event, related_events)
     refreshed_context = None
     if retrigger_wakeup_id:
         saved = db_records.first(db_read_wakeups.find_metadata_json_by_wakeup_id(conn, retrigger_wakeup_id))
@@ -447,7 +468,15 @@ def create_task_attempt_and_prompt(
     runtime_context["github_context"] = github_context
 
     db_write_workstreams.insert_for_create_task_attempt_and_prompt(
-        conn, workstream_id, repo_id, source_id, lifecycle, task_id, run_now, run_now, event.get("public_ref")
+        conn,
+        workstream_id,
+        repo_id,
+        source_id,
+        lifecycle,
+        task_id,
+        run_now,
+        run_now,
+        event.get("public_ref") if workstream_id == event["source_key"] else None,
     )
     origin_type = event.get("provider") or SourceProvider.GITHUB.value
     item = work_items.ensure_github_work_item(
@@ -476,7 +505,7 @@ def create_task_attempt_and_prompt(
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo["full_name"],
-            "sources": work_queries.sources_for_workstream(conn, workstream_id),
+            "sources": work_queries.sources_for_task(conn, workstream_id, related_events),
         }
     )
     rendered = None
@@ -728,6 +757,8 @@ def create_resume_attempt_and_prompt(
     events = _events_for_task(conn, task_id)
     if not route_result or not events:
         return None
+    trigger = work_queries.task_events(conn, task_id)
+    events = _prompt_events(trigger[0] if trigger else events[0], events)
 
     prompt_dir = data_dir / "artifacts" / task_id
     prompt_dir.mkdir(parents=True, exist_ok=True)
@@ -780,7 +811,7 @@ def create_resume_attempt_and_prompt(
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo_full_name,
-            "sources": work_queries.sources_for_workstream(conn, workstream_id),
+            "sources": work_queries.sources_for_task(conn, workstream_id, events),
         }
     )
     rendered = None

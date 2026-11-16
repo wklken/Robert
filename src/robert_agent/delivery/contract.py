@@ -384,11 +384,13 @@ def comment_marker(task_id, attempt_id, index):
 def target_urls(scope):
     """Canonical candidates shared by prompt rendering and submission errors."""
     urls = set()
-    for item in scope.get("sources", []):
+    sources = scope.get("sources", [])
+    tapd_only = any(item.get("provider") == SourceProvider.TAPD for item in sources)
+    for item in sources:
         if item.get("provider") == SourceProvider.TAPD:
             host, workspace_id = item["project_key"].split("/", 1)
             urls.add(tapd_ticket_url(host, workspace_id, TAPD_KINDS[item["source_type"]], item["external_id"]))
-        elif item.get("source_type") in {"issue", "pull_request"}:
+        elif not tapd_only and item.get("source_type") in {"issue", "pull_request"}:
             kind = "issues" if item["source_type"] == "issue" else "pull"
             urls.add(f"https://github.com/{scope['repo']}/{kind}/{item['number']}")
     return sorted(urls)
@@ -535,8 +537,12 @@ def normalize(envelope, settings):
                     )
                 action["body"] += f"\n\n{'Fixes' if action['issue_resolution'] == 'complete' else 'Refs'} #{issue}"
                 action.pop("target_url", None)
+            tapd = any(item.get("provider") == SourceProvider.TAPD for item in scope.get("sources", []))
+            _require(not tapd or bool(scope.get("public_ref")), field, "Assigned PR target is unavailable.")
+            # GitHub must not learn the TAPD ticket; the public reference maps back locally.
+            origin = scope["public_ref"] if tapd else scope["workstream_id"]
             action["body"] += (
-                f"\n\n<!-- robert-workstream\norigin_workstream_id: {scope['workstream_id']}\nsource_issue: {issue or ''}\ntask_id: {envelope['task_id']}\ncreated_by: robert\n-->"
+                f"\n\n<!-- robert-workstream\norigin_workstream_id: {origin}\nsource_issue: {issue or ''}\ntask_id: {envelope['task_id']}\ncreated_by: robert\n-->"
             )
     if "remediation_evidence" in result:
         episode = settings.get("remediation_context") or {}

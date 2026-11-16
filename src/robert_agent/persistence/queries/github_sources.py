@@ -9,6 +9,7 @@ from robert_agent.persistence.queries import github_events as event_queries
 from sqlalchemy import (
     select,
     bindparam,
+    func,
     or_,
     cast,
     Text,
@@ -184,6 +185,23 @@ def find_tapd_snapshots_for_workstream(conn, workstream_id):
     return statements.read(conn, query, {"p0": workstream_id})
 
 
+def find_tapd_origin_for_workstream(conn, workstream_id):
+    """Read the ticket owning this workstream or its directly derived pull request."""
+    stream = tables["workstreams"]
+    origin = stream.alias("origin")
+    source = tables["github_sources"]
+    query = (
+        select(source.c.project_key, source.c.external_id, source.c.html_url, source.c.source_type)
+        .select_from(
+            stream.outerjoin(origin, origin.c.workstream_id == stream.c.origin_workstream_id).join(
+                source, source.c.source_id == func.coalesce(origin.c.primary_source_id, stream.c.primary_source_id)
+            )
+        )
+        .where(stream.c.workstream_id == workstream_id, source.c.provider == "tapd")
+    )
+    return statements.read(conn, query)
+
+
 def find_ended_tapd_ticket(conn, source_type, project_key, external_id):
     """A ticket is ended when any repository's source row stored the TAPD end state."""
     sources = tables["github_sources"]
@@ -206,10 +224,32 @@ def find_tapd_tracked_sources(conn, project_key):
     source = tables["github_sources"].alias("gs")
     workstream = tables["workstreams"]
     work_item = tables["work_items"]
+    member = tables["workstream_sources"]
+    pr = tables["github_sources"].alias("pr")
+    open_derived = (
+        select(1)
+        .select_from(workstream.join(pr, pr.c.source_id == workstream.c.primary_source_id))
+        .where(
+            workstream.c.origin_workstream_id == source.c.source_key,
+            workstream.c.repo_id == source.c.repo_id,
+            pr.c.source_type == "pull_request",
+            pr.c.state == "open",
+        )
+        .correlate(source)
+    )
     active = (
         select(sql_constant(1))
         .where(
-            workstream.c["primary_source_id"] == source.c["source_id"],
+            or_(
+                workstream.c.primary_source_id == source.c.source_id,
+                select(1)
+                .where(
+                    member.c.workstream_id == workstream.c.workstream_id,
+                    member.c.source_id == source.c.source_id,
+                )
+                .correlate(workstream, source)
+                .exists(),
+            ),
             workstream.c["lifecycle"].in_(
                 [
                     sql_constant(WorkstreamLifecycle.ACTIVE.value),
@@ -241,7 +281,12 @@ def find_tapd_tracked_sources(conn, project_key):
             source.c["provider"] == sql_constant("tapd"),
             source.c["project_key"] == bindparam("p0"),
             source.c["state"] == sql_constant("open"),
-            or_(active.exists(), unfinished.exists(), event_queries.tapd_unprocessed_exists(source)),
+            or_(
+                active.exists(),
+                open_derived.exists(),
+                unfinished.exists(),
+                event_queries.tapd_unprocessed_exists(source),
+            ),
         )
         .order_by(source.c["source_key"].asc())
         .set_label_style(LABEL_STYLE_NONE)

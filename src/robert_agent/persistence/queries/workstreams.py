@@ -1,7 +1,7 @@
 """Shared queries operations for workstreams."""
 
-from robert_agent.foundation.contracts.delivery import AuditStatus, PublishStatus
-from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
+from robert_agent.foundation.contracts.delivery import AuditStatus, GitHubActionType, PublishStatus
+from robert_agent.foundation.contracts.work import SourceType, TaskLifecycle, WorkstreamLifecycle
 
 from functools import cache
 
@@ -42,6 +42,57 @@ def find_public_ref_by_workstream_id(conn, workstream_id):
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query, {"p0": workstream_id})
+
+
+def find_workstream_id_by_public_ref(conn, repo_id, public_ref):
+    stream = tables["workstreams"]
+    query = select(stream.c.workstream_id).where(stream.c.repo_id == repo_id, stream.c.public_ref == public_ref)
+    return statements.read(conn, query)
+
+
+def find_open_derived_pull_requests(conn, repo_id, origin_workstream_id):
+    stream = tables["workstreams"]
+    source = tables["github_sources"]
+    action = tables["github_actions"]
+    receipt = (
+        select(action.c.metadata_json)
+        .where(
+            action.c.target_url == source.c.html_url,
+            action.c.action_type == GitHubActionType.OPEN_PR.value,
+            action.c.publish_status == PublishStatus.PUBLISHED.value,
+        )
+        .order_by(action.c.created_at.desc(), action.c.action_id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    query = (
+        select(stream.c.workstream_id, source.c.number, source.c.html_url, receipt)
+        .select_from(stream.join(source, source.c.source_id == stream.c.primary_source_id))
+        .where(
+            stream.c.repo_id == repo_id,
+            stream.c.origin_workstream_id == origin_workstream_id,
+            source.c.source_type == SourceType.PULL_REQUEST.value,
+            source.c.state == "open",
+        )
+        .limit(2)
+    )
+    return statements.read(conn, query)
+
+
+def find_recent_derived_pull_requests(conn, origin_workstream_id, limit):
+    stream = tables["workstreams"]
+    source = tables["github_sources"]
+    query = (
+        select(source.c.number, source.c.html_url, source.c.state)
+        .select_from(stream.join(source, source.c.source_id == stream.c.primary_source_id))
+        .where(
+            stream.c.origin_workstream_id == origin_workstream_id,
+            source.c.source_type == SourceType.PULL_REQUEST.value,
+        )
+        .order_by(stream.c.updated_at.desc(), source.c.number.desc())
+        .limit(limit)
+    )
+    return statements.read(conn, query)
 
 
 def find_repo_id_by_workstream_id(conn, workstream_id):

@@ -403,6 +403,16 @@ def worker_prompt_input(
         items = list(_web_items(context, events, attempt_id, restricted=restricted))
     elif discussions:
         items = list(_tapd_items(discussions, events, attempt_id))
+        if pull_requests := context.get("tapd_pull_requests"):
+            items.append(
+                ContextItem(
+                    "related-pull-requests",
+                    "Recently tracked pull requests for this ticket",
+                    "Controller PR history",
+                    content=pull_requests,
+                    revision=attempt_id,
+                )
+            )
         others = [event for event in events if event.get("provider") != SourceProvider.TAPD]
         items += list(_github_items({}, others, attempt_id)) if others else []
     else:

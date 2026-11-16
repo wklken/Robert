@@ -1,9 +1,10 @@
 """Finish work from accepted results and resume durable continuations."""
 
-from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
+from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType, PublishStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
 
 from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import attempts as db_read_attempts
 
 from robert_agent.persistence import transactions as db_transactions
@@ -13,6 +14,7 @@ from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import work_item_events as db_read_work_item_events
 from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
+from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.persistence.stores import github_sources as db_write_github_sources
 from robert_agent.persistence.stores import task_events as db_write_task_events
 from robert_agent.persistence.stores import tasks as db_write_tasks
@@ -33,7 +35,7 @@ from robert_agent.delivery import contract as result_contract
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.execution import retry as retry_policy
-from robert_agent.foundation import values
+from robert_agent.foundation import tapd_identity, values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.work import queries as work_queries
 from robert_agent.work import streams as workstream
@@ -64,6 +66,10 @@ def _materialize_open_pr_workstream(conn, repo_id, repo_full_name, origin_workst
     pr_number = int(match.group(1))
     pr_source_key = discover.source_key(repo_full_name, "pull_request", pr_number)
     pr_source_id = values.github_source_id(pr_source_key)
+    if tapd_identity.is_source_key(origin_workstream_id):
+        linked = db_records.first(db_read_workstreams.find_origin_workstream_id_by_workstream_id(conn, pr_source_key))
+        if linked and linked[0] == origin_workstream_id:
+            return  # Keep the independently observed open or terminal PR state.
     db_write_github_sources.insert_for_materialize_open_pr_workstream(
         conn, pr_source_id, repo_id, pr_source_key, pr_number, action.get("url")
     )
@@ -86,6 +92,18 @@ def _materialize_open_pr_workstream(conn, repo_id, repo_full_name, origin_workst
             },
             now=run_now,
         )
+
+
+def _link_published_tapd_pull_requests(conn, repo_id, repo, workstream_id, payload, run_now):
+    """A confirmed PR stays linked to its ticket even if the ticket comment never publishes."""
+    if not work_queries.tapd_driven(work_queries.task_events(conn, payload["task_id"])):
+        return
+    for _action_id, kind, url, _external, _audit, status, _created in db_read_github_actions.find_for_actions_for_task(
+        conn, payload["task_id"]
+    ):
+        if kind != GitHubActionType.OPEN_PR or status != PublishStatus.PUBLISHED:
+            continue
+        _materialize_open_pr_workstream(conn, repo_id, repo["full_name"], workstream_id, {"url": url}, run_now)
 
 
 def _save_pending_handoff(conn, task_id, state):
@@ -798,6 +816,7 @@ def finalize_published_results(
             finalized += 1
             continue
         if not results.result_actions_all_published(conn, payload["result_id"]):
+            _link_published_tapd_pull_requests(conn, repo_id, repo, workstream_id, payload, run_now)
             continue
         wakeup.consume_wakeups_for_results(
             conn,

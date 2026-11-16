@@ -1,14 +1,21 @@
 """Publish Robert's TAPD comments and find them again by their visible receipt."""
 
 import hashlib
+import json
 import subprocess
+from urllib.parse import urlparse
 
+from robert_agent.adapters.github import sources as github_sources
 from robert_agent.adapters.tapd import client as tapd_client
 from robert_agent.delivery import values as publication_values
 from robert_agent.foundation import tapd_identity
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.stores import github_actions as db_write_github_actions
 from robert_agent.work import tapd_policy
 
 RECEIPT_LABEL = "回执"
+PULL_REQUEST_LABEL = "PR："
+PR_TERMINAL = "tapd_pr_terminal"
 PROTOCOL_ERRORS = (tapd_client.TapdError, subprocess.TimeoutExpired, OSError, ValueError)
 
 
@@ -40,6 +47,41 @@ def ticket_body(body, marker, mention_name):
     """TAPD drops HTML comments, so the receipt is a visible final paragraph."""
     text = tapd_policy.neutralize_mentions(body.replace(marker, "").strip(), mention_name)
     return f"{tapd_policy.automatic_prefix(mention_name)}\n\n{text}\n\n{RECEIPT_LABEL} {receipt_token(marker)}"
+
+
+def link_pull_request(conn, action):
+    """Fix the round's PR link into the body; call only before the action has a publication intent."""
+    url = db_read_github_actions.find_pull_request_url_for_action(conn, action["action_id"])
+    metadata = publication_values.decode_json(action["metadata_json"])
+    if not url or url in metadata.get("body", ""):
+        return action
+    metadata["body"] = f"{metadata['body']}\n\n{PULL_REQUEST_LABEL}{url}"
+    metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+    db_write_github_actions.set_metadata_json_by_action_id(conn, metadata_json, action["action_id"])
+    return {**action, "metadata_json": metadata_json}
+
+
+def pull_request_write_guard(conn, action, run_command):
+    if conn is None:
+        return None
+    notice_pr = db_read_github_actions.find_pull_request_url_for_action(
+        conn, action["action_id"], include_other_pr_results=True
+    )
+    if not notice_pr:
+        return None
+    url = urlparse(notice_pr)
+    parts = url.path.strip("/").split("/")
+    if url.netloc != "github.com" or len(parts) != 4 or parts[2] != "pull" or not parts[3].isdigit():
+        return _failure("Invalid GitHub pull request for TAPD comment", retryable=False)
+    repo = f"{parts[0]}/{parts[1]}"
+    state = github_sources.read_source_state(
+        repo, "pull_request", int(parts[3]), run_command, require_explicit_state=True
+    )
+    if state and (state.get("state") == "closed" or state.get("merged") or state.get("merged_at")):
+        return {"ok": True, "status": PR_TERMINAL, "safe_error": "Pull request closed before the TAPD comment"}
+    if not state or state.get("state") != "open":
+        return _failure("Could not confirm the GitHub pull request is still open")
+    return None
 
 
 def ticket_target(url, settings):

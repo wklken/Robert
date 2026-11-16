@@ -240,7 +240,9 @@ request number; TAPD story and bug sources have no number and store their TAPD
 project and item IDs instead. `tapd_scan_state` keeps one comment watermark per
 TAPD project. A workstream can hold a unique public reference
 (`rbt-` followed by lowercase letters and digits). Branches and workspaces for
-sources without a number are named by this reference.
+sources without a number are named by this reference. TAPD-derived pull requests
+use it in the GitHub workstream marker. The controller resolves the reference to
+the local ticket and uses the open PR's workstream for subsequent TAPD requests.
 
 If the source tables still predate provider identities, initialization rebuilds
 them in one transaction and checks row counts and foreign keys before committing.

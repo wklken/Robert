@@ -3,11 +3,15 @@
 import json
 import secrets
 
+from robert_agent.foundation import tapd_identity, values
+
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_events as db_read_github_events
 from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.persistence.stores import github_events as db_write_github_events
+from robert_agent.persistence.stores import notifications as db_write_notifications
+from robert_agent.work import queries as work_queries
 from robert_agent.work import source_policy
 from robert_agent.work import tapd_policy
 
@@ -24,25 +28,74 @@ def _intent(event, mention_name):
     return intent if intent in tapd_policy.DIRECT_INTENTS else None
 
 
-def collect_decisions(conn, *, repo, repo_id, config_result, known_workstreams):
+def _record_multiple_prs(conn, event, now):
+    fingerprint = event["event_fingerprint"]
+    kind = tapd_policy.MULTIPLE_PRS_NOTICE
+    metadata = {
+        "dedupe_key": fingerprint,
+        "kind": tapd_identity.KINDS[event["source_type"]],
+        **{field: event[field] for field in ("project_key", "external_id", "url")},
+    }
+    db_write_notifications.insert_tapd_notification(
+        conn, tapd_policy.notice_id(kind, fingerprint), kind, now, json.dumps(metadata, sort_keys=True)
+    )
+
+
+def collect_decisions(conn, *, repo, repo_id, config_result, known_workstreams, now):
     """Reauthorize unprocessed TAPD requests; a request that lost authority is never retried."""
     settings = config_result.get("tapd") or {}
     if not settings.get("enabled"):
         return []
     decisions = []
+    refs = {}
     for event_id, payload_json in db_read_github_events.find_tapd_pending_triggers(conn, repo_id, PENDING_LIMIT):
         event = json.loads(payload_json)
-        decision = source_policy.reauthorize_saved_request(
-            event, repo, known_workstreams=known_workstreams, conn=conn, config=config_result
-        )
+        ticket_stream = event["source_key"]
+        decision = source_policy.reauthorize_saved_request(event, repo, conn=conn, config=config_result)
         if not decision.get("drives_execution") or event.get("repo") != repo["full_name"]:
             status = decision["authorization_status"] if not decision.get("drives_execution") else "ignored_context"
             db_write_github_events.record_tapd_authorization(conn, event_id, status)
             continue
+        prs = list(db_read_workstreams.find_open_derived_pull_requests(conn, repo_id, ticket_stream))
+        if len(prs) > 1:
+            _record_multiple_prs(conn, event, now)
+            db_write_github_events.record_tapd_authorization(conn, event_id, "ignored_context")
+            continue
+        queue = {
+            "workstream_id": ticket_stream,
+            "has_open_dd_pr": False,
+            "existing_pr_number": None,
+            "existing_pr_head_branch": None,
+            "existing_pr_url": None,
+            "base_branch": None,
+        }
+        if prs:
+            if work_queries.active_task_id(conn, ticket_stream):
+                # The round that opened this PR may still be confirming its ticket reply.
+                continue
+            stream_id, number, url, metadata = prs[0]
+            receipt = values.json_object(metadata)
+            if not receipt.get("head") or not receipt.get("base"):
+                continue
+            queue.update(
+                workstream_id=stream_id,
+                has_open_dd_pr=True,
+                existing_pr_number=number,
+                existing_pr_head_branch=receipt["head"].split(":", 1)[-1],
+                existing_pr_url=url,
+                base_branch=receipt["base"],
+            )
+        if ticket_stream not in refs:
+            refs[ticket_stream] = _public_ref(conn, ticket_stream)
         decisions.append(
             {
                 **decision,
-                "public_ref": _public_ref(conn, decision["workstream_id"]),
+                **queue,
+                "authorization_status": "accepted_context"
+                if queue["workstream_id"] in known_workstreams or queue["has_open_dd_pr"]
+                else "authorized_trigger",
+                "creates_task": not (queue["workstream_id"] in known_workstreams or queue["has_open_dd_pr"]),
+                "public_ref": refs[ticket_stream],
                 "intent": _intent(decision, settings["mention_name"]),
             }
         )

@@ -1,7 +1,6 @@
 """TAPD requests saved by the scan lane are admitted once under current authority and answered on the ticket."""
 
 from contextlib import closing
-import json
 from pathlib import Path
 import re
 import sqlite3
@@ -20,53 +19,9 @@ from robert_agent.delivery.application import submission, tapd_comments, tapd_no
 from robert_agent.runtime import cycle as run_once
 from robert_agent.runtime import daemon
 from robert_agent.work import scan_batches, tapd_policy
-from robert_agent.work.application import source_lifecycle, synchronization, tapd_scan
-from tests.support import repository_cycle as pipeline_fixture
-from tests.support.tapd import STORY, FakeClient, comment
-
-TAPD_CONFIG = """tapd:
-  enabled: true
-  mention_name: robert-wklken
-  projects:
-  - host: tapd.example
-    workspace_id: "100"
-    trusted_user: {trusted}
-    accept_after: "2026-11-20T01:00:00+00:00"
-    label_rules:
-    - label: repo-a
-      repository: example/backend
-"""
-
-
-class TapdCycleCase(pipeline_fixture.RepositoryCycleFixture):
-    def setUp(self):
-        super().setUp()
-        self.base_config = self.config_path.read_text(encoding="utf-8")
-        self.configure("alice")
-        self.fixture_path.write_text(json.dumps({"events": []}), encoding="utf-8")
-        self.client = FakeClient()
-        self.cycle()
-
-    def configure(self, trusted):
-        self.config_path.write_text(self.base_config + TAPD_CONFIG.format(trusted=trusted), encoding="utf-8")
-
-    def cycle(self):
-        outcome = run_once.run_once(self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True)
-        self.assertTrue(outcome["ok"], outcome)
-        return outcome
-
-    def scan(self, *comments):
-        self.client.comments += comments
-        config = validation.validate_config(self.config_path, skip_external=True)
-        settings = config["tapd"]
-        repos = {repo["full_name"]: repo for repo in config["repos"]}
-        return tapd_scan.scan_project(
-            config["db_path"], settings, settings["projects"][0], repos, self.client, now="2026-11-20T03:00:00+00:00"
-        )
-
-    def query(self, sql):
-        with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn:
-            return [tuple(row) for row in conn.execute(sql).fetchall()]
+from robert_agent.work.application import source_lifecycle, synchronization
+from tests.support.tapd import STORY, comment
+from tests.support.tapd_cycle import TapdCycleCase
 
 
 class TapdAdmissionTests(TapdCycleCase):
@@ -119,7 +74,7 @@ class TapdAdmissionTests(TapdCycleCase):
         text = prompt.read_text(encoding="utf-8")
         self.assertIn("tapd-request", text)
         self.assertIn("@robert-wklken in body", text)
-        self.assertIn("Code changes are not enabled for TAPD requests", text)
+        self.assertIn("Keep TAPD out of GitHub", text)
 
     def test_published_reply_completes_the_request_and_is_never_a_new_request(self):
         self.scan(comment("1", "<p>@robert-wklken 请分析一下这个需求</p>"))
@@ -254,10 +209,13 @@ class TapdAdmissionTests(TapdCycleCase):
             [("ignored_current_state_closed",)],
         )
 
-    def test_code_change_request_from_tapd_goes_to_classification(self):
-        self.scan(comment("2", "@robert-wklken 请修复这个报错并提交 PR"))
+    def test_code_change_request_from_tapd_opens_a_pull_request_route(self):
+        self.scan(comment("2", "@robert-wklken please fix this bug"))
         self.cycle()
-        self.assertEqual(self.query("SELECT route_id FROM tasks"), [("classification-result",)])
+        self.assertEqual(self.query("SELECT route_id FROM tasks"), [("new-pr",)])
+        ((branch,),) = self.query("SELECT branch_name FROM attempts")
+        self.assertNotIn("1100", branch)
+        self.assertRegex(branch, r"rbt-[0-9a-f]{12}")
 
     def test_request_that_lost_authority_is_recorded_and_never_runs(self):
         self.scan(comment("3", "@robert-wklken 帮忙看看"))

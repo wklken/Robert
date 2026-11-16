@@ -11,6 +11,8 @@ from robert_agent.foundation import values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.security import authorization as authorize
 from robert_agent.work import queries as work_queries
+from robert_agent.persistence import records as db_records
+from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.persistence.queries import github_events as event_queries
 import json
 import subprocess
@@ -140,6 +142,11 @@ def discover_requests(
     try:
         normalized = discover.normalize_events(raw_events, repo)
         for event in normalized:
+            origin = event.get("origin_workstream_id")
+            if origin and origin.startswith("rbt-"):
+                local = db_records.first(db_read_workstreams.find_workstream_id_by_public_ref(conn, repo_id, origin))
+                if local:
+                    event["origin_workstream_id"] = local[0]
             if event["event_type"] == "mention" and ":body:" in event["event_fingerprint"]:
                 previous = event_queries.legacy_body_request(
                     conn, repo_id, event["source_key"], event.get("actor_login") or "", event["body"]

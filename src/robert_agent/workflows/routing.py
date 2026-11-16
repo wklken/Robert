@@ -10,6 +10,11 @@ from robert_agent.configuration import routes as route_config
 from robert_agent.work import source_policy
 from robert_agent.work import tapd_policy
 
+_TAPD_BLOCK_REASON = (
+    "TAPD requests support analysis, clarification and pull request changes only. Explain that this kind of "
+    "request is not supported from TAPD; do not perform it."
+)
+
 
 def effective_route(config_result, repo, event, route_id=None):
     if route_id == "new-pr" and event.get("source_type") == "pull_request" and event.get("has_open_dd_pr"):
@@ -28,12 +33,19 @@ def effective_route(config_result, repo, event, route_id=None):
         if len(route_config.review_workers_for_author(candidate, event.get("pr_author_login"))) > 1:
             event = {**event, "authorization_status": "authorized_trigger"}
     tapd = event.get("provider") == SourceProvider.TAPD
-    tapd_blocked = tapd and route_id is not None and route_id not in tapd_policy.ROUTE_IDS
+    allowed = tapd_policy.allowed_routes(event) if tapd else None
+    if tapd and route_id == "new-pr" and event.get("has_open_dd_pr"):
+        route_id = "update-existing-pr"
+    tapd_blocked = tapd and route_id is not None and route_id not in allowed
     if tapd_blocked:
         route_id = "waiting-for-user"
     base_route = dict(route.ROUTES[route_id]) if route_id else route.route_task(event)
-    if tapd and base_route["route_id"] not in tapd_policy.ROUTE_IDS:
+    if tapd and base_route["route_id"] == "new-pr" and event.get("has_open_dd_pr"):
+        base_route = dict(route.ROUTES["update-existing-pr"])
+    if tapd and base_route["route_id"] not in allowed:
         base_route = dict(route.ROUTES["classification-result"])
+    if tapd_blocked:
+        base_route["routing_block_reason"] = _TAPD_BLOCK_REASON
     if config_result is None:
         return base_route
     if (
@@ -90,10 +102,7 @@ def effective_route(config_result, repo, event, route_id=None):
                 recommended_skills=[],
             )
     if tapd_blocked:
-        resolved["routing_block_reason"] = (
-            "TAPD requests currently support analysis and clarification only. Explain that code changes "
-            "requested from TAPD are not enabled yet; do not change code."
-        )
+        resolved["routing_block_reason"] = _TAPD_BLOCK_REASON
     installed = skills.discover_skill_names(config_result["skills"]["search_paths"])
     required_skills = list(resolved["required_skills"])
     for skill_name in base_route.get("required_skills", []):

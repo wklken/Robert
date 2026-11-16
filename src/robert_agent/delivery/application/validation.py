@@ -10,7 +10,6 @@ from robert_agent.persistence import transactions as db_transactions
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import tasks as db_read_tasks
-from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.stores import attempts as db_write_attempts
 from contextlib import closing
 import json
@@ -55,7 +54,6 @@ def context(conn, task_id, attempt_id, *, include_scope=True, allow_completed=Tr
     owner = execution_store.get_binding(conn, subject_type, subject_id)
     if owner and owner["binding_status"] != BindingStatus.ACTIVE:
         return None, {"ok": False, "status": "rejected_by_workflow_owner"}
-    origin = db_records.first(db_read_work_items.find_origin_type_by_workstream_id(conn, row[0]))
     episode = (
         remediation.load_episode(conn, metadata.get("remediation_episode_id"))
         if row[1] in audit_result.REMEDIATION_TASK_KINDS
@@ -67,7 +65,7 @@ def context(conn, task_id, attempt_id, *, include_scope=True, allow_completed=Tr
         "required_skills": json.loads(row[8] or "[]"),
         "recommended_skills": json.loads(row[9] or "[]"),
         "verification_policy": route.verification_policy_for(row[10]),
-        "origin_type": origin[0] if origin else "github",
+        "origin_type": action_scope.origin_type(conn, task_id, row[0]),
         "task_kind": row[1],
         "review_input_policy": metadata.get("review_input_policy", "required"),
         "remediation_context": episode,

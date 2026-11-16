@@ -200,3 +200,9 @@ def record_tapd_authorization(conn, event_id, authorization_status):
         .where(tables["github_events"].c["event_id"] == bindparam("p1"))
     )
     return statements.write(conn, stmt, {"p0": authorization_status, "p1": event_id})
+
+
+def record_tapd_admission_context(conn, event_id, payload_json):
+    event = tables["github_events"]
+    stmt = update(event).values(payload_json=payload_json).where(event.c.event_id == event_id)
+    return statements.write(conn, stmt)
