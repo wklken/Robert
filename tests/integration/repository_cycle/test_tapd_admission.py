@@ -182,6 +182,10 @@ class TapdAdmissionTests(TapdCycleCase):
         self.cycle()
         self.assertEqual(self.query("SELECT lifecycle FROM workstreams"), [("active",)])
         self.assertEqual(self.query("SELECT COUNT(*) FROM attempts"), [(2,)])
+        self.assertEqual(
+            self.query("SELECT actor_kind, actor_identity FROM work_item_events WHERE event_type = 'user_response'"),
+            [("tapd", "alice")],
+        )
 
     def test_ended_ticket_stops_its_request_and_refuses_queued_ones(self):
         self.scan(comment("1", "@robert-wklken 请分析这个需求"))

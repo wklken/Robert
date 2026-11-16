@@ -6,7 +6,7 @@ Returned evidence is deliberately small so a remote response can never leak
 an unbounded body, command output, or credential into Robert state.
 """
 
-from robert_agent.delivery.comment_receipts import match_comment
+from robert_agent.delivery.comment_receipts import comment_records, match_comment
 from robert_agent.delivery.application import scope as publication_scope
 from robert_agent.delivery.application import guards as publication_guards
 from robert_agent.delivery.application import tapd_comments
@@ -106,15 +106,6 @@ def read_failed(reconciliation):
     return reconciliation.get("status") == "unknown" and str(reconciliation.get("reason_code") or "").endswith(
         "_query_failed"
     )
-
-
-def _iter_objects(value):
-    if isinstance(value, dict):
-        yield value
-        return
-    if isinstance(value, list):
-        for item in value:
-            yield from _iter_objects(item)
 
 
 def _command_failure(completed, fallback):
@@ -243,14 +234,10 @@ def _reconcile_comment(action, action_scope, run_command):
         return _result("unknown", "comment_query_failed", error_type=type(exc).__name__)
     if _command_failure(completed, "comment_query_failed"):
         return _result("unknown", "comment_query_failed")
-    raw = getattr(completed, "stdout", "")
-    try:
-        response = json.loads(raw or "[]")
-    except (TypeError, ValueError):
+    comments = comment_records(getattr(completed, "stdout", ""))
+    if comments is None:
         return _result("unknown", "comment_response_malformed")
-    receipt = match_comment(
-        _iter_objects(response), metadata.get("body"), (action_scope or {}).get("github_account"), marker
-    )
+    receipt = match_comment(comments, metadata.get("body"), (action_scope or {}).get("github_account"), marker)
     if receipt["status"] == "confirmed_effect":
         comment = receipt["comment"]
         return _result(
@@ -271,8 +258,10 @@ def _reconcile_tapd_comment(action, tapd):
         return _result("unknown", "comment_target_malformed")
     try:
         found = tapd_comments.receipts(tapd.client(), target, marker, tapd.settings["mention_name"])
-    except tapd_comments.PROTOCOL_ERRORS:
-        return _result("unknown", "tapd_comment_query_failed")
+    except tapd_comments.PROTOCOL_ERRORS as exc:
+        if tapd_comments.read_unavailable(exc):
+            return _result("unknown", "tapd_comment_query_failed")
+        return _result("unknown", "tapd_comment_response_malformed", error_code=exc.code)
     if len(found) > 1:
         return _result("unknown", "comment_marker_conflict")
     if found:

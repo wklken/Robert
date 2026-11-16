@@ -19,7 +19,7 @@ from robert_agent.delivery.application import guards as publication_guards
 from robert_agent.delivery.application import tapd_comments
 from robert_agent.foundation import tapd_identity
 from robert_agent.delivery import values as publication_values
-from robert_agent.delivery.comment_receipts import match_comment
+from robert_agent.delivery.comment_receipts import comment_records, match_comment
 
 COMMENT_MARKER_RE = re.compile(
     r"<!--\s*robert-comment\s+task_id=\S+\s+attempt_id=\S+\s+action_index=\d+\s*-->",
@@ -74,8 +74,16 @@ def find_existing_comment(endpoint, marker, run_command, *, expected_body, publi
             "safe_error": f"comment duplicate preflight failed: {safe_error}",
             "command": command,
         }
-    response = publication_values.decode_json(getattr(completed, "stdout", ""))
-    receipt = match_comment(iter_json_objects(response), expected_body, publisher, marker)
+    comments = comment_records(getattr(completed, "stdout", ""))
+    if comments is None:
+        return {
+            "ok": False,
+            "status": "publish_failed",
+            "safe_error": "comment_response_malformed",
+            "retryable": False,
+            "command": command,
+        }
+    receipt = match_comment(comments, expected_body, publisher, marker)
     if receipt["status"] == "unknown":
         return {"ok": False, "status": "publish_failed", "safe_error": receipt["reason_code"], "command": command}
     if receipt["status"] == "confirmed_effect":

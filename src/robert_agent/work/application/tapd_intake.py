@@ -70,8 +70,10 @@ def collect_decisions(conn, *, repo, repo_id, config_result, known_workstreams, 
             "base_branch": None,
         }
         if prs:
-            if work_queries.active_task_id(conn, ticket_stream):
-                # The round that opened this PR may still be confirming its ticket reply.
+            ticket_task = work_queries.active_task_id(conn, ticket_stream)
+            if ticket_task and not work_queries.tapd_reply_in_attention(conn, ticket_stream, ticket_task, event["url"]):
+                # The round that opened this PR may still be confirming its ticket reply. An unknown
+                # result left for the operator does not hold back the PR queue.
                 continue
             stream_id, number, url, metadata = prs[0]
             receipt = values.json_object(metadata)

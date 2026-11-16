@@ -238,7 +238,8 @@ rows manually while Robert is running.
 Each source row records its provider. GitHub sources keep their Issue or pull
 request number; TAPD story and bug sources have no number and store their TAPD
 project and item IDs instead. `tapd_scan_state` keeps one comment watermark per
-TAPD project. A workstream can hold a unique public reference
+TAPD project, together with first-observed requests whose ticket could not be read
+yet. A workstream can hold a unique public reference
 (`rbt-` followed by lowercase letters and digits). Branches and workspaces for
 sources without a number are named by this reference. TAPD-derived pull requests
 use it in the GitHub workstream marker. The controller resolves the reference to
@@ -463,7 +464,8 @@ ticket comments, separately from operator delivery. They share the same
 three-attempt/10-minute budget, may be repeated once after an unknown write, and
 are skipped once the ticket has ended. PR status, remediation outcomes, and
 review reminders are deduplicated by PR and terminal state, episode outcome,
-and GitHub review ID respectively. The notice contains fixed text and a PR link.
+and reviewed PR head commit respectively. Reviews submitted by the repository's
+`github_account` do not produce reminders. The notice contains fixed text and a PR link.
 
 Maintenance records `reliability_health` events containing database/WAL/reusable
 bytes and bounded samples of delayed tasks, pending notifications and stale runs.

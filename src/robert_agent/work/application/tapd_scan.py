@@ -1,7 +1,7 @@
 """TAPD comment discovery and tracked-ticket refresh inside the scan lane."""
 
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 import json
 import subprocess
@@ -30,7 +30,7 @@ OVERLAP = timedelta(minutes=10)
 MAX_TEXT_CHARS = 20000
 MAX_COMMENT_CHARS = 4000
 MAX_SNAPSHOT_COMMENTS = 100
-PROTOCOL_ERRORS = (tapd_client.TapdError, subprocess.TimeoutExpired, OSError, ValueError)
+PROTOCOL_ERRORS = (tapd_client.TapdError, subprocess.TimeoutExpired, OSError)
 _TIME = "%Y-%m-%d %H:%M:%S"
 
 
@@ -79,7 +79,7 @@ def _comment_fields(comment):
     }
 
 
-def _decision(comment, project, settings, automatic_ids, watermark, *, known):
+def _decision(comment, project, settings, automatic_ids, *, known, first_observation):
     decision = tapd_policy.authorize_comment(
         _comment_fields(comment),
         project,
@@ -87,7 +87,7 @@ def _decision(comment, project, settings, automatic_ids, watermark, *, known):
         automatic_ids=automatic_ids,
         known=known,
     )
-    if decision["drives_execution"] and not _first_observation(comment, watermark):
+    if decision["drives_execution"] and not first_observation:
         return {"authorization_status": "ignored_context", "creates_task": False, "drives_execution": False}
     return decision
 
@@ -213,7 +213,14 @@ def _record_source(conn, project, settings, ticket, repo, label, automatic_ids, 
     noticed = {row[0] for row in db_read_notifications.find_existing_ids(conn, map(label_notice_id, fingerprints))}
     written = 0
     for comment, fingerprint in zip(trusted.values(), fingerprints):
-        decision = _decision(comment, project, settings, automatic_ids, watermark, known=known)
+        decision = _decision(
+            comment,
+            project,
+            settings,
+            automatic_ids,
+            known=known,
+            first_observation=comment.comment_id in trigger_ids or _first_observation(comment, watermark),
+        )
         if label_notice_id(fingerprint) in noticed:
             decision = {"authorization_status": "ignored_context", "creates_task": False, "drives_execution": False}
         if decision["drives_execution"] and comment.comment_id not in trigger_ids:
@@ -285,6 +292,29 @@ def _observed(db_path, fingerprints):
     return {row[0] for row in events} | {item for item in fingerprints if label_notice_id(item) in noticed}
 
 
+def _pending(pending_json):
+    return [tapd_client.TapdComment(**item) for item in json.loads(pending_json or "[]")]
+
+
+def _record_discovery(conn, project, settings, repos, reads, automatic_ids, watermark, state, now):
+    """Write discovered tickets and the next scan state together, so an interrupted scan repeats as a whole."""
+    events, label_notices, refreshed = 0, 0, set()
+    for ticket, triggers in reads:
+        outcome, repository, label = tapd_policy.select_repository(ticket.item.labels, project["label_rules"])
+        if outcome != "selected":
+            if not ticket.ended:
+                _record_label_notices(conn, project, ticket, triggers, outcome, now)
+                label_notices += len(triggers)
+            continue
+        events += _record_source(
+            conn, project, settings, ticket, repos[repository], label, automatic_ids, watermark, now, triggers
+        )
+        refreshed.add((ticket.item.kind, ticket.item.external_id, repository))
+    if state:
+        db_write_tapd_scan_state.save_state(conn, *state, now)
+    return events, label_notices, refreshed
+
+
 def scan_project(db_path, settings, project, repos, client, *, now=None):
     """Discover new trusted requests, then refresh tickets that still have unfinished work."""
     now = now or datetime.now(timezone.utc).isoformat()
@@ -292,10 +322,11 @@ def scan_project(db_path, settings, project, repos, client, *, now=None):
     key = tapd_identity.project_key(host, workspace_id)
     summary = {"project_key": key, "events": 0, "label_notices": 0, "refreshed": 0, "failures": []}
     with closing(db_database.connect(db_path, timeout=5)) as conn:
-        stored = db_records.first(db_read_tapd_scan_state.find_watermark(conn, key))
+        stored = db_records.first(db_read_tapd_scan_state.find_state(conn, key))
         recorded = db_read_github_actions.find_tapd_comment_ids(conn, f"https://{host}/{workspace_id}/")
         notices = db_read_notifications.find_delivered_tapd_comment_ids(conn, key)
     watermark = (stored[0], stored[1]) if stored else None
+    pending = _pending(stored[2]) if stored else []
     automatic_ids = {row[0] for row in (*recorded, *notices)}
     try:
         comments = client.author_comments(workspace_id, project["trusted_user"], since=_since(project, watermark))
@@ -304,56 +335,57 @@ def scan_project(db_path, settings, project, repos, client, *, now=None):
     except PROTOCOL_ERRORS as exc:
         summary["failures"].append({"stage": "discovery", "reason": _reason(exc)})
         return summary
-    fingerprints = [tapd_identity.comment_fingerprint(host, workspace_id, item.comment_id) for item in comments]
+    candidates = [*pending, *comments]
+    fingerprints = [tapd_identity.comment_fingerprint(host, workspace_id, item.comment_id) for item in candidates]
     observed = _observed(db_path, fingerprints)
-    triggers = [
-        comment
-        for comment, fingerprint in zip(comments, fingerprints)
-        if fingerprint not in observed
-        and _decision(comment, project, settings, automatic_ids, watermark, known=False)["drives_execution"]
-    ]
-    complete, refreshed, terminal_cache = True, set(), {}
-    for kind, external_id in dict.fromkeys((item.kind, item.entry_id) for item in triggers):
-        try:
-            ticket = _read_ticket(client, workspace_id, kind, external_id, terminal_cache)
-        except ControlDeadlineExceeded:
-            raise
-        except tapd_client.TapdError as exc:
-            if exc.code != "not_found":
-                complete = False
-            summary["failures"].append({"stage": "ticket", "external_id": external_id, "reason": exc.code})
+    triggers = {}
+    for index, (comment, fingerprint) in enumerate(zip(candidates, fingerprints)):
+        if fingerprint in observed or comment.comment_id in triggers:
             continue
-        except PROTOCOL_ERRORS as exc:
-            complete = False
-            summary["failures"].append({"stage": "ticket", "external_id": external_id, "reason": _reason(exc)})
-            continue
-        ticket_triggers = [item for item in triggers if (item.kind, item.entry_id) == (kind, external_id)]
-        outcome, repository, label = tapd_policy.select_repository(ticket.item.labels, project["label_rules"])
-        if outcome != "selected":
-            if not ticket.ended:
-                _write(db_path, _record_label_notices, project, ticket, ticket_triggers, outcome, now)
-                summary["label_notices"] += len(ticket_triggers)
-            continue
-        summary["events"] += _write(
-            db_path,
-            _record_source,
+        # A pending request keeps its observed text and must still meet current authorization.
+        if _decision(
+            comment,
             project,
             settings,
-            ticket,
-            repos[repository],
-            label,
             automatic_ids,
-            watermark,
-            now,
-            ticket_triggers,
-        )
-        refreshed.add((kind, external_id, repository))
+            known=False,
+            first_observation=index < len(pending) or _first_observation(comment, watermark),
+        )["drives_execution"]:
+            triggers[comment.comment_id] = comment
+    reads, retained, terminal_cache = [], [], {}
+    for kind, external_id in dict.fromkeys((item.kind, item.entry_id) for item in triggers.values()):
+        ticket_triggers = [item for item in triggers.values() if (item.kind, item.entry_id) == (kind, external_id)]
+        try:
+            reads.append((_read_ticket(client, workspace_id, kind, external_id, terminal_cache), ticket_triggers))
+        except ControlDeadlineExceeded:
+            raise
+        except PROTOCOL_ERRORS as exc:
+            # Missing tickets are retried too: not_found never proves that a request ended.
+            summary["failures"].append({"stage": "ticket", "external_id": external_id, "reason": _reason(exc)})
+            retained += ticket_triggers
+    newest = max(
+        ((item.created, item.comment_id) for item in comments),
+        key=lambda position: _position(*position),
+        default=None,
+    )
+    if newest is None or (watermark is not None and _position(*newest) <= _position(*watermark)):
+        newest = watermark
+    state = None
+    if newest is not None and (newest != watermark or retained != pending):
+        pending_json = json.dumps([asdict(item) for item in retained], ensure_ascii=False, sort_keys=True)
+        state = (key, *newest, pending_json)
+    events, label_notices, refreshed = _write(
+        db_path, _record_discovery, project, settings, repos, reads, automatic_ids, watermark, state, now
+    )
+    summary["events"] += events
+    summary["label_notices"] += label_notices
+    retried = {(item.kind, item.entry_id) for item in retained}
     with closing(db_database.connect(db_path, timeout=5)) as conn:
         tracked = db_read_github_sources.find_tapd_tracked_sources(conn, key)
     for _source_id, _repo_id, _source_key, source_type, external_id, metadata_json in tracked:
         snapshot = values.json_object(metadata_json).get("tapd") or {}
         kind, repository = tapd_identity.KINDS[source_type], snapshot.get("repository")
-        if repository not in repos or (kind, external_id, repository) in refreshed:
+        if repository not in repos or (kind, external_id, repository) in refreshed or (kind, external_id) in retried:
             continue
         try:
             ticket = _read_ticket(client, workspace_id, kind, external_id, terminal_cache)
@@ -367,10 +399,6 @@ def scan_project(db_path, settings, project, repos, client, *, now=None):
             db_path, _record_source, project, settings, ticket, repos[repository], label, automatic_ids, watermark, now
         )
         summary["refreshed"] += 1
-    if complete and comments:
-        newest = max(comments, key=lambda item: _position(item.created, item.comment_id))
-        if watermark is None or _position(newest.created, newest.comment_id) > _position(*watermark):
-            _write(db_path, db_write_tapd_scan_state.save_watermark, key, newest.created, newest.comment_id, now)
     return summary
 
 

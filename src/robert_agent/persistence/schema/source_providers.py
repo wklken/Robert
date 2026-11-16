@@ -176,9 +176,11 @@ def rebuild_legacy_tables(db_path, schema, *, now=None):
 
 
 def initialize(conn):
-    """Add the workstream public reference inside the caller's initialization transaction."""
+    """Add the workstream public reference and pending TAPD requests inside the caller's initialization transaction."""
     if "public_ref" not in _columns(conn, "workstreams"):
         conn.execute("ALTER TABLE workstreams ADD COLUMN public_ref TEXT")
+    if "pending_json" not in _columns(conn, "tapd_scan_state"):
+        conn.execute("ALTER TABLE tapd_scan_state ADD COLUMN pending_json TEXT NOT NULL DEFAULT '[]'")
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_workstreams_public_ref ON workstreams(public_ref) "
         "WHERE public_ref IS NOT NULL"

@@ -3,7 +3,9 @@
 from dataclasses import replace
 import json
 import unittest
+from unittest import mock
 
+from robert_agent.adapters.tapd import client as tapd_client
 from robert_agent.delivery import contract
 from robert_agent.delivery.application import audit, effects, reconcile, tapd_comments
 from robert_agent.work import tapd_policy
@@ -77,6 +79,21 @@ class TapdCommentTests(unittest.TestCase):
         state = self.reconcile()
         self.assertEqual(state["reason_code"], "tapd_comment_query_failed")
         self.assertTrue(reconcile.read_failed(state))
+
+    def test_unusable_ticket_comments_need_operator_evidence(self):
+        for code in ("invalid_response", "duplicate_record", "output_limit", "scan_limit"):
+            with (
+                self.subTest(code=code),
+                mock.patch.object(self.client, "ticket_comments", side_effect=tapd_client.TapdError(code)),
+            ):
+                state = self.reconcile()
+                self.assertEqual(
+                    (state["status"], state["reason_code"]), ("unknown", "tapd_comment_response_malformed")
+                )
+                self.assertFalse(reconcile.read_failed(state))
+                failed = self.publish()
+                self.assertFalse(failed["retryable"])
+                self.assertEqual(self.client.written, [])
 
     def test_absent_receipt_and_conflicting_receipts(self):
         self.assertEqual(self.reconcile()["status"], "confirmed_absent")

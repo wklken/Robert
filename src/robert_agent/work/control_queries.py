@@ -20,7 +20,7 @@ def related_workstreams(conn, workstream_id):
     return [row[0] for row in db_read_workstreams.find_for_related_workstreams(conn, workstream_id, workstream_id)]
 
 
-def lifecycle_facts(conn, item, *, controls=None):
+def lifecycle_facts(conn, item, *, controls=None, parked_publication_task_id=None):
     streams = related_workstreams(conn, item["workstream_id"])
     cursor = db_read_attempts.lifecycle_facts_filtered(conn, streams)
     attempts = [dict(row) for row in cursor]
@@ -110,7 +110,11 @@ def lifecycle_facts(conn, item, *, controls=None):
         controls = execution_store.read_controls(conn, subjects)
     for key in sorted(subjects):
         binding = controls.get(key)
-        if binding and binding["binding_status"] == BindingStatus.ATTENTION:
+        if (
+            binding
+            and binding["binding_status"] == BindingStatus.ATTENTION
+            and key != ("task", parked_publication_task_id)
+        ):
             metadata = json.loads(binding["metadata_json"] or "{}")
             attention.append(safe_text(metadata.get("reason_code") or "Execution requires operator attention."))
     source = db_records.first(db_read_github_sources.find_state_by_source_id(conn, item["origin_source_id"]))

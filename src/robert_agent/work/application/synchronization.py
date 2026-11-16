@@ -26,6 +26,8 @@ from robert_agent.adapters.github import read as github_read
 from robert_agent.adapters.github import recording as github_recording
 from robert_agent.adapters.github import budget as github_budget
 from robert_agent.adapters.notifications import wakeup as wakeup_notifier
+from robert_agent.work import queries as work_queries
+from robert_agent.work import repositories as work_repositories
 from robert_agent.work import scan_batches as scan_batches
 from robert_agent.work import tapd_policy, wakeup
 from robert_agent.work.application import tapd_scan
@@ -62,9 +64,6 @@ def context_digest(repo, known_workstreams, *, config=None):
 
 
 def scan_repo(config, repo, session, hints):
-    from robert_agent.work import queries as work_queries
-    from robert_agent.work import repositories as work_repositories
-
     db_path = config["db_path"]
     recorded = github_recording.RecordingRunner(session)
     with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
@@ -150,7 +149,7 @@ def scan_repo(config, repo, session, hints):
         # A newly closed PR's final review read must follow its state observation.
         for number in review_targets:
             try:
-                discover.submitted_review_ids(repo["full_name"], number, recorded)
+                discover.reviewed_revisions(repo["full_name"], number, recorded, own_login=repo["github_account"])
             except ControlDeadlineExceeded:
                 raise
             except (OSError, subprocess.TimeoutExpired):
@@ -232,9 +231,6 @@ def scan_repo(config, repo, session, hints):
 
 
 def _wake_tapd_repositories(config, repos):
-    from robert_agent.work import queries as work_queries
-    from robert_agent.work import repositories as work_repositories
-
     db_path = config["db_path"]
     now = wakeup.utc_now()
     ready = 0

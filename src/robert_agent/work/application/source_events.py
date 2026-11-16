@@ -171,16 +171,30 @@ def github_followup_allows_new_subject(conn, repo, event, parent_task_id):
     item = work_items.resolve_work_item_for_workstream(conn, event["workstream_id"])
     if not item or (item["canceled_at"] and (not remote_canceled or operator_canceled_item(conn, item))):
         return False
-    facts = control_queries.lifecycle_facts(conn, item)
+    tapd_derived_pr = (
+        item["origin_type"] == SourceProvider.TAPD
+        and event["workstream_id"] != item["workstream_id"]
+        and (event.get("has_open_dd_pr") or event.get("source_type") == SourceType.PULL_REQUEST)
+    )
+    parked_task_id = None
+    if tapd_derived_pr:
+        ticket_stream = item["workstream_id"]
+        ticket_task = work_queries.active_task_id(conn, ticket_stream)
+        ticket = work_queries.tapd_origin(conn, ticket_stream) if ticket_task else None
+        if ticket and work_queries.tapd_reply_in_attention(conn, ticket_stream, ticket_task, ticket["url"]):
+            parked_task_id = ticket_task
+    facts = control_queries.lifecycle_facts(conn, item, parked_publication_task_id=parked_task_id)
     ticket_closed = facts["source_closed"] and not (
-        item["origin_type"] == SourceProvider.TAPD and event.get("source_type") == SourceType.PULL_REQUEST
+        tapd_derived_pr and event.get("source_type") == SourceType.PULL_REQUEST
     )
     if (
         facts["running"]
-        or any(_blocks_followup(conn, action) for action in facts["actions"])
+        or any(action["task_id"] != parked_task_id and _blocks_followup(conn, action) for action in facts["actions"])
         or facts["cleanup_pending"]
         or facts["workflow_attention"]
         or ticket_closed
     ):
         return False
-    return not db_records.first(db_read_tasks.github_followup_allows_new_subject_filtered(conn, facts["streams"]))
+    return not db_records.first(
+        db_read_tasks.github_followup_allows_new_subject_filtered(conn, facts["streams"], parked_task_id=parked_task_id)
+    )

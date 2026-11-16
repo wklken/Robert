@@ -61,3 +61,4 @@ class TapdScanState(Base):
     watermark_created: Mapped[str] = mapped_column(Text)
     watermark_comment_id: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[str] = mapped_column(Text)
+    pending_json: Mapped[str] = mapped_column(Text, server_default="[]")

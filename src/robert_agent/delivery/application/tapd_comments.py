@@ -16,7 +16,13 @@ from robert_agent.work import tapd_policy
 RECEIPT_LABEL = "回执"
 PULL_REQUEST_LABEL = "PR："
 PR_TERMINAL = "tapd_pr_terminal"
-PROTOCOL_ERRORS = (tapd_client.TapdError, subprocess.TimeoutExpired, OSError, ValueError)
+PROTOCOL_ERRORS = (tapd_client.TapdError, subprocess.TimeoutExpired, OSError)
+_UNAVAILABLE_READS = frozenset({"timeout", "command_failed", "not_found"})
+
+
+def read_unavailable(exc):
+    """A read that did not answer proves nothing; a malformed or ambiguous answer needs operator evidence."""
+    return not isinstance(exc, tapd_client.TapdError) or exc.code in _UNAVAILABLE_READS
 
 
 class Publisher:
@@ -131,8 +137,10 @@ def publish(action, publisher, marker, *, scope_guard):
     try:
         client = publisher.client()
         existing = receipts(client, target, marker, mention_name)
-    except PROTOCOL_ERRORS:
-        return _failure("TAPD comment preflight failed")
+    except PROTOCOL_ERRORS as exc:
+        if read_unavailable(exc):
+            return _failure("TAPD comment preflight failed")
+        return _failure("tapd_comment_response_malformed", retryable=False)
     if len(existing) > 1:
         return _failure("TAPD receipt matches several comments", retryable=False)
     if existing:

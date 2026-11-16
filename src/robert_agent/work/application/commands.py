@@ -340,10 +340,11 @@ def _unresolved_event(conn, work_item_id, event_types):
     return db_records.first(db_read_work_item_events.unresolved_event_filtered(conn, event_types, work_item_id))
 
 
-def record_github_response(
+def record_source_response(
     conn,
     workstream_id,
     *,
+    actor_kind,
     actor_identity,
     body,
     event_fingerprint,
@@ -356,7 +357,8 @@ def record_github_response(
     question = _unresolved_event(conn, item["work_item_id"], QUESTION_EVENTS)
     if not question:
         return None
-    idempotency_key = "github-response:" + hashlib.sha256(event_fingerprint.encode("utf-8")).hexdigest()[:24]
+    digest = hashlib.sha256(event_fingerprint.encode("utf-8")).hexdigest()[:24]
+    idempotency_key = f"{actor_kind}-response:{digest}"
     existing = db_records.first(
         db_read_work_item_events.record_system_event(conn, item["work_item_id"], idempotency_key)
     )
@@ -367,7 +369,7 @@ def record_github_response(
         conn,
         item["work_item_id"],
         event_type="user_response",
-        actor_kind="github",
+        actor_kind=actor_kind,
         actor_identity=actor_identity,
         idempotency_key=idempotency_key,
         body=body,
