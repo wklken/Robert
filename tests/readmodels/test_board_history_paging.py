@@ -124,7 +124,16 @@ class BoardHistoryPagingTests(BoardReadModelFixture):
         self.assertIsNotNone(page["next_cursor"])
         self.assertEqual(
             page["counts"],
-            {"backlog": 1, "todo": 1, "doing": 1, "waiting": 1, "review": 1, "done": 212, "history": 0},
+            {
+                "backlog": 1,
+                "todo": 1,
+                "doing": 1,
+                "waiting": 1,
+                "review": 1,
+                "done": 212,
+                "history": 0,
+                "needs_action": 1,
+            },
         )
         # Five active cards may need lifecycle evaluation, plus one page and its lookahead.
         self.assertLessEqual(project.call_count, 5 + 7 + 1)
@@ -140,7 +149,16 @@ class BoardHistoryPagingTests(BoardReadModelFixture):
         self.assertEqual(self.item_ids(second), ["item-30", "item-10"])
         self.assertIsNone(second["next_cursor"])
         self.assertEqual(second["filters"]["agents"], first["filters"]["agents"])
-        counts = {"backlog": 0, "todo": 0, "doing": 0, "waiting": 0, "review": 0, "done": 3, "history": 1}
+        counts = {
+            "backlog": 0,
+            "todo": 0,
+            "doing": 0,
+            "waiting": 0,
+            "review": 0,
+            "done": 3,
+            "history": 1,
+            "needs_action": 0,
+        }
         self.assertEqual(first["counts"], counts)
         self.assertEqual(second["counts"], counts)
 
