@@ -26,7 +26,7 @@ def discussion(**extra):
                 "author": "robert",
                 "created": "2026-11-20 09:10:00",
                 "text": "旧结论",
-                "automatic": True,
+                "robert_reply": True,
             },
             {
                 "comment_id": "3",

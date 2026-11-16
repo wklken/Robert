@@ -248,8 +248,14 @@ If the source tables still predate provider identities, initialization rebuilds
 them in one transaction and checks row counts and foreign keys before committing.
 It first copies the database to `<database>.pre-source-providers`. The copy does
 not include `<database>.results/`. Initialization refuses and changes nothing while
-a lease is active, an attempt is running or stale, or a review or vote model process has
-not been proven to exit; the error names the blocking records.
+a lease is active, an attempt is running or stale, a Worker launch is unconfirmed,
+or a review or vote model process has not been proven to exit. The error names
+the blocking records.
+
+If an upgrade is refused, use the previous Robert version to finish or reconcile
+in-flight work, ingest its result spool, and confirm that Workers and model
+processes have exited. Stop the daemon normally and back up the database and
+result spool before retrying the upgrade.
 
 ```bash
 robert status --config ~/.config/robert/config.yml --output json

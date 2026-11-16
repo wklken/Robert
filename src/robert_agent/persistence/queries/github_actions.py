@@ -177,7 +177,7 @@ def find_for_prepare_publication_intent_2(conn, action_id):
     return statements.read(conn, query1, {"p0": action_id})
 
 
-def find_pull_request_url_for_action(conn, action_id):
+def find_pull_request_url_for_action(conn, action_id, *, include_other_pr_results=False):
     """The confirmed PR of the action's result, else the PR its task's workstream tracks."""
     actions = tables["github_actions"]
     sibling = actions.alias("sibling")
@@ -209,10 +209,11 @@ def find_pull_request_url_for_action(conn, action_id):
         .where(
             actions.c["action_id"] == bindparam("p0"),
             sources.c["source_type"] == sql_constant("pull_request"),
-            results.c.output_type == OutputType.UPDATE_EXISTING_PR.value,
         )
         .set_label_style(LABEL_STYLE_NONE)
     )
+    if not include_other_pr_results:
+        tracked = tracked.where(results.c.output_type == OutputType.UPDATE_EXISTING_PR.value)
     rows = statements.read(conn, tracked, {"p0": action_id})
     return f"https://github.com/{rows[0][0]}/pull/{rows[0][1]}" if rows else None
 

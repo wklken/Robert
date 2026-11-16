@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import tempfile
 import unittest
+from unittest import mock
 
 from robert_agent.persistence.schema import database as storage
 from robert_agent.work.application import tapd_scan
@@ -142,6 +143,43 @@ class TapdScanTests(unittest.TestCase):
             self.assertEqual(tuple(state.fetchone()), ("closed", 1))
         self.assertEqual(result["refreshed"], 1)
         self.assertEqual(self.events(), {"40": "authorized_trigger", "41": "ignored_context"})
+
+    def test_mention_seen_during_tracked_refresh_uses_new_labels_on_next_discovery(self):
+        repo_b = {**REPO, "full_name": "example/second"}
+        project = {
+            **PROJECT,
+            "label_rules": [*PROJECT["label_rules"], {"label": "repo-b", "repository": "example/second"}],
+        }
+        repos = {REPO["full_name"]: REPO, repo_b["full_name"]: repo_b}
+        self.client.comments = [comment("40", "@robert-wklken 初次请求")]
+        self.scan()
+        author_comments = self.client.author_comments
+
+        def mention_after_discovery(*args, **kwargs):
+            comments = author_comments(*args, **kwargs)
+            self.client.labels[STORY] = "repo-b"
+            self.client.comments.append(comment("41", "@robert-wklken 新仓库请求", "2026-11-20 10:21:00"))
+            return comments
+
+        with mock.patch.object(self.client, "author_comments", side_effect=mention_after_discovery):
+            tapd_scan.scan_project(str(self.db), SETTINGS, project, repos, self.client)
+        tapd_scan.scan_project(str(self.db), SETTINGS, project, repos, self.client)
+        with connect(self.db) as conn:
+            row = conn.execute(
+                "SELECT repo_id FROM github_events WHERE json_extract(payload_json, '$.comment_id') = '41'"
+            ).fetchone()
+        self.assertEqual(row[0], "repo:example/second")
+
+    def test_prefix_alone_does_not_identify_an_earlier_robert_reply(self):
+        self.client.comments = [
+            comment("45", "@robert-wklken normal request"),
+            comment("46", "robert-wklken：unverified reply", author="other"),
+        ]
+        self.scan()
+        with connect(self.db) as conn:
+            snapshot = json.loads(conn.execute("SELECT metadata_json FROM github_sources").fetchone()[0])["tapd"]
+        claimed_reply = next(item for item in snapshot["comments"] if item["comment_id"] == "46")
+        self.assertFalse(claimed_reply.get("robert_reply", claimed_reply.get("automatic")))
 
     def test_disabled_configuration_does_not_build_a_client(self):
         self.assertEqual(tapd_scan.scan({"tapd": {"enabled": False}}), {"enabled": False, "projects": []})

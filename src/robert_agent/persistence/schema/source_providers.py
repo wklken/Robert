@@ -58,6 +58,14 @@ def _blockers(conn, now):
             statuses,
         )
         blockers.extend(f"attempt {attempt_id} is {status}" for attempt_id, status in rows)
+    if _table_sql(conn, "execution_subjects"):
+        rows = conn.execute(
+            "SELECT json_extract(metadata_json, '$.dispatch_inflight'), subject_id FROM execution_subjects "
+            "WHERE json_extract(metadata_json, '$.dispatch_inflight') IS NOT NULL ORDER BY subject_id"
+        )
+        blockers.extend(
+            f"Worker launch {attempt_id} for {subject_id} is unconfirmed" for attempt_id, subject_id in rows
+        )
     for table, label in (("review_runs", "review run"), ("vote_runs", "vote run")):
         if _table_sql(conn, table) and "slot_reserved" in _columns(conn, table):
             rows = conn.execute(f"SELECT run_id FROM {table} WHERE slot_reserved = 1 ORDER BY run_id")
@@ -140,6 +148,8 @@ def rebuild_legacy_tables(db_path, schema, *, now=None):
                     "source table rebuild refused until Robert is stopped and running work has finished: "
                     + shown
                     + (f"; and {more} more" if more > 0 else "")
+                    + ". Use the previous Robert version to finish or reconcile work and confirm exit, "
+                    "then stop it normally before retrying the upgrade."
                 )
             if tables:
                 _backup(conn, db_path)

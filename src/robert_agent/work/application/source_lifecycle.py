@@ -436,7 +436,7 @@ def _unanswered_tapd_round(conn, workstream_id, source_type, number):
         if url
     )
     unanswered = any(
-        kind == GitHubActionType.COMMENT and status == PublishStatus.NOT_PUBLISHED
+        kind == GitHubActionType.COMMENT and status != PublishStatus.PUBLISHED
         for _id, kind, _url, _external, _audit, status, _created in actions
     )
     return (origin[0], task_id) if opened and unanswered else None

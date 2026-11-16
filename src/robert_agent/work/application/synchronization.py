@@ -53,7 +53,7 @@ def context_digest(repo, known_workstreams, *, config=None):
         repo["full_name"],
         repo["github_account"],
         sorted(repo.get("trusted_actors", [])),
-        sorted(known_workstreams),
+        sorted(item for item in known_workstreams if not tapd_identity.is_source_key(item)),
         review_allowlist(config, repo),
         os.environ.get("GH_HOST", "github.com"),
     ]
@@ -230,6 +230,33 @@ def scan_repo(config, repo, session, hints):
     return identifier
 
 
+def _queue_tapd_observations(config, repos):
+    from robert_agent.work import queries as work_queries
+    from robert_agent.work import repositories as work_repositories
+
+    db_path = config["db_path"]
+    batches = []
+    for repo in repos:
+        with closing(db_database.connect(db_path, timeout=5)) as conn:
+            repo_id = work_repositories.lookup_id(conn, repo["full_name"])
+            if not repo_id:
+                continue
+            pending = db_read_github_events.find_tapd_pending_triggers(conn, repo_id, 1)
+            ended = any(
+                provider == "tapd" and state == "closed"
+                for _stream, _task, _source, _key, _kind, _number, provider, state in work_queries.remote_source_rows(
+                    conn, repo_id
+                )
+            )
+            if not pending and not ended:
+                continue
+            context = context_digest(repo, work_queries.load_known_workstreams(conn, repo_id), config=config)
+            if scan_batches.has_pending(conn, [repo_id], contexts={repo_id: context}):
+                continue
+        batches.append(scan_batches.save_batch(db_path, repo_id, context, [], {}))
+    return batches
+
+
 def scan(config_path, *, runner=subprocess.run, refresh_context=False, tapd_runner=None):
     config = validate_config.validate_config(config_path, skip_external=True)
     if not config["ok"]:
@@ -288,6 +315,8 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False, tapd_runn
         except (subprocess.SubprocessError, OSError, ValueError, db_errors.Error):
             failures.append({"repo": repo["full_name"], "reason": "repo_scan_failed"})
     tapd = {} if refresh_context else tapd_scan.scan(config, runner=tapd_runner)
+    if tapd.get("enabled"):
+        batches.extend(_queue_tapd_observations(config, repos))
     intervals = [session.poll_interval_seconds for session in sessions.values() if session.poll_interval_seconds]
     return {
         **({"tapd": tapd} if tapd.get("enabled") else {}),

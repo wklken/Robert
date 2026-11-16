@@ -86,8 +86,15 @@ class TapdPullRequestCase(TapdCycleCase):
                 (PR_URL,),
             )
 
-    def publish(self):
-        with mock.patch.object(tapd_client, "client_for", return_value=self.client):
+    def publish(self, remote_state=None):
+        with (
+            mock.patch.object(tapd_client, "client_for", return_value=self.client),
+            mock.patch.object(
+                github_sources,
+                "read_source_state",
+                return_value={"state": "open"} if remote_state is None else remote_state,
+            ),
+        ):
             outcome = run_once.run_once(self.config_path, dry_run=False, skip_external=True, max_dispatches=0)
         return outcome
 
@@ -120,6 +127,23 @@ class TapdPullRequestCase(TapdCycleCase):
 
 
 class TapdNewPullRequestTests(TapdPullRequestCase):
+    def test_result_comment_rechecks_pr_before_retry_without_a_prior_terminal_observation(self):
+        self.request_fix()
+        self.open_pull_request()
+        self.client.reject_writes = 1
+        self.publish()
+        self.make_retry_due()
+
+        self.publish(remote_state=MERGED)
+
+        self.assertEqual(self.client.written, [])
+        self.assertEqual(
+            self.query("SELECT publish_status FROM github_actions WHERE action_type = 'comment'"),
+            [("skipped",)],
+        )
+        self.reconcile(MERGED)
+        self.assertEqual(self.query("SELECT lifecycle FROM tasks"), [("canceled",)])
+
     def test_new_pull_request_is_answered_on_the_ticket_with_its_link(self):
         self.request_fix()
         self.open_pull_request()
