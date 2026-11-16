@@ -54,10 +54,14 @@ def _blockers(conn, now):
         statuses = sorted(RUNNING_ATTEMPT_STATUSES)
         rows = conn.execute(
             f"SELECT attempt_id, status FROM attempts WHERE status IN ({', '.join('?' for _ in statuses)}) "
+            "OR (json_extract(metadata_json, '$.process_stopped_at') IS NULL AND ("
+            "  json_extract(metadata_json, '$.dispatch.cleanup_pending') = 1 OR "
+            "  (status = 'completed' AND json_type(metadata_json, '$.dispatch.pid') = 'integer')"
+            ")) "
             "ORDER BY attempt_id",
             statuses,
         )
-        blockers.extend(f"attempt {attempt_id} is {status}" for attempt_id, status in rows)
+        blockers.extend(f"attempt {attempt_id} ({status}) has no confirmed exit" for attempt_id, status in rows)
     if _table_sql(conn, "execution_subjects"):
         rows = conn.execute(
             "SELECT json_extract(metadata_json, '$.dispatch_inflight'), subject_id FROM execution_subjects "

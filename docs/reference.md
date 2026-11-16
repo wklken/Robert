@@ -246,8 +246,8 @@ If the source tables still predate provider identities, initialization rebuilds
 them in one transaction and checks row counts and foreign keys before committing.
 It first copies the database to `<database>.pre-source-providers`. The copy does
 not include `<database>.results/`. Initialization refuses and changes nothing while
-a lease is active, an attempt is running or stale, a Worker launch is unconfirmed,
-or a review or vote model process has not been proven to exit. The error names
+a lease is active, a Worker launch or exit is unconfirmed, or a review or vote
+model process has not been proven to exit. The error names
 the blocking records.
 
 If an upgrade is refused, use the previous Robert version to finish or reconcile
