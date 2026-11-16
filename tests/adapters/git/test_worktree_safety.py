@@ -69,6 +69,40 @@ class WorktreeSafetyTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertTrue(Path(payload["worktree_path"]).is_dir())
 
+    def test_worktree_command_names_branches_by_source_reference(self):
+        def plan(reference):
+            return subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "robert_agent.adapters.git.workspace",
+                    "--repo-root",
+                    str(self.repo),
+                    "--worktree-root",
+                    str(self.managed),
+                    "--source-number",
+                    reference,
+                    "--short-slug",
+                    "warning",
+                    "--base-branch",
+                    "main",
+                    "--dry-run",
+                ],
+                text=True,
+                capture_output=True,
+            )
+
+        planned = plan("rbt-7k2m9q4x")
+        self.assertEqual(planned.returncode, 0, planned.stderr)
+        self.assertEqual(json.loads(planned.stdout)["branch_name"], "codex/dd-rbt-7k2m9q4x-warning")
+        for reference in ("../main", "-1", ""):
+            with self.subTest(reference=reference):
+                rejected = plan(reference)
+                self.assertEqual(rejected.returncode, 2)
+                self.assertEqual(rejected.stdout, "")
+        self.assertFalse(self.managed.exists())
+
     def test_review_rejects_dirty_managed_worktree(self):
         first = plan_review_worktree(self.repo, self.managed, 42, "title", "main", dry_run=False)
         tree = Path(first["worktree_path"])

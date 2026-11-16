@@ -3,6 +3,7 @@
 from robert_agent.persistence.schema import execution_control as execution_schema
 
 from robert_agent.persistence.schema import review_rounds as review_schema
+from robert_agent.persistence.schema import source_providers
 from robert_agent.persistence.schema import vote_rounds as vote_schema
 
 from contextlib import closing
@@ -469,6 +470,8 @@ def init_database(db_path, schema_path=None):
     else:
         schema_path = Path(schema_path)
         schema = schema_path.read_text(encoding="utf-8")
+    if built_in_schema:
+        source_providers.rebuild_legacy_tables(db_path, schema)
 
     with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -483,6 +486,7 @@ def init_database(db_path, schema_path=None):
             "retry_count INTEGER NOT NULL DEFAULT 0",
         )
         _ensure_column(conn, "github_scan_batches", "attention_reason", "attention_reason TEXT")
+        source_providers.initialize(conn)
         pending = []
         pr_pending = _data_migration_pending(conn, PR_MAINLINE_MIGRATION_NAME, PR_MAINLINE_MIGRATION_CHECKSUM)
         skills_pending = _data_migration_pending(

@@ -1,8 +1,24 @@
 """Select the assigned workspace for an attempt."""
 
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
+import re
+
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, SourceProvider
 
 from robert_agent.adapters.git import workspace as worktree
+
+_PUBLIC_REF = re.compile(r"rbt-[0-9a-z]{6,32}")
+# These modes fetch pull/<number>/head, so they need the pull request number itself.
+_PULL_REQUEST_MODES = frozenset({"existing_pr", "review_pr"})
+
+
+def source_reference(event):
+    """Name local workspaces and branches; TAPD sources have no number and use their public reference."""
+    if event.get("provider") != SourceProvider.TAPD:
+        return event["number"]
+    public_ref = event.get("public_ref")
+    if not isinstance(public_ref, str) or not _PUBLIC_REF.fullmatch(public_ref):
+        raise ValueError("a TAPD source needs a valid public reference")
+    return public_ref
 
 
 def prepare_worktree(repo, event, route_result, dry_run):
@@ -38,7 +54,7 @@ def prepare_worktree(repo, event, route_result, dry_run):
         repo,
         {**route_result, "workspace_mode": workspace_mode},
         {
-            "number": event["number"],
+            "number": event["number"] if workspace_mode in _PULL_REQUEST_MODES else source_reference(event),
             "branch_slug": (event.get("branch_slug") or event.get("title") or "task"),
             "head_branch": event.get("existing_pr_head_branch"),
         },

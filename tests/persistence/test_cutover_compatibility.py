@@ -45,7 +45,14 @@ class PreOrmCutoverTests(unittest.TestCase):
         existing_objects, _, existing_markers = self._schema_and_markers()
         init_database(self.db)
         initialized = self._schema_and_markers()
-        self.assertLessEqual(set(existing_objects), set(initialized[0]))
+        # Source provider identities rebuild or extend these tables, which also moves table pages.
+        extended = {("table", "github_sources"), ("table", "work_items"), ("table", "workstreams")}
+        current = {(kind, name, table, sql) for kind, name, table, _page, sql in initialized[0]}
+        for kind, name, table, _page, sql in existing_objects:
+            if (kind, name) in extended:
+                self.assertIn((kind, name), {(item[0], item[1]) for item in current})
+            else:
+                self.assertIn((kind, name, table, sql), current)
         self.assertEqual(initialized[2], existing_markers)
         init_database(self.db)
         self.assertEqual(self._schema_and_markers(), initialized)

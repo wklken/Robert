@@ -635,6 +635,9 @@ flowchart LR
 workstream 保留多轮 Task 历史，活动任务由部分唯一索引串行约束。Task 可有多个
 Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result。
 本地和 GitHub 任务进入同一控制面，`work_items` 提供生命周期投影与操作入口。
+`github_sources` 以 `provider` 区分来源：GitHub 行保留 Issue/PR 编号，TAPD 需求和缺陷
+行没有编号，以 `project_key` 与 `external_id` 标识。workstream 的可空唯一 `public_ref`
+是对外关联 ID；没有编号的来源用它命名工作区和分支。
 
 专用表保留各自边界：`github_scan_batches` / `github_scan_reads` 保存扫描重放输入；
 `leases` / `github_control_children` 保存执行所有权；`review_sessions` / `review_runs`
@@ -643,6 +646,7 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 保存独立监督的观察、事件和恢复记录。
 
 源码：[主 schema](../src/robert_agent/resources/db/schema.sql)、[存储初始化](../src/robert_agent/persistence/schema/database.py)、
+[来源表重建](../src/robert_agent/persistence/schema/source_providers.py)、
 [执行主体与事实回执](../src/robert_agent/persistence/execution_control.py)、[persistence/rounds/review.py](../src/robert_agent/persistence/rounds/review.py)、
 [persistence/rounds/vote.py](../src/robert_agent/persistence/rounds/vote.py)。基础概念见 [concepts.md](concepts.md)，
 配置见 [reference.md](reference.md)。

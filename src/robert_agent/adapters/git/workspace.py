@@ -8,9 +8,19 @@ from pathlib import Path
 from robert_agent.foundation.commands import emit, run_command
 
 
+_SOURCE_REFERENCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}")
+
+
 def _slug(value):
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip().lower()).strip("-")
     return normalized or "task"
+
+
+def _source_reference(value):
+    """Accept a GitHub number or a local/TAPD reference that is safe inside a branch name."""
+    if not _SOURCE_REFERENCE.fullmatch(value):
+        raise argparse.ArgumentTypeError("must be a source number or reference")
+    return value
 
 
 def _existing_worktree_for_branch(repo_root, branch_name):
@@ -604,7 +614,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--worktree-root", required=True)
-    parser.add_argument("--source-number", required=True, type=int)
+    parser.add_argument("--source-number", required=True, type=_source_reference)
     parser.add_argument("--short-slug", required=True)
     parser.add_argument("--base-branch", required=True)
     parser.add_argument("--existing-pr-head-branch")
