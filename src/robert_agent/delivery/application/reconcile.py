@@ -98,6 +98,14 @@ def _result(status, reason_code, **evidence):
     }
 
 
+def read_failed(reconciliation):
+    """A failed remote read proves nothing about the effect, unlike conflicting evidence."""
+
+    return reconciliation.get("status") == "unknown" and str(reconciliation.get("reason_code") or "").endswith(
+        "_query_failed"
+    )
+
+
 def _iter_objects(value):
     if isinstance(value, dict):
         yield value
@@ -469,6 +477,6 @@ def classify_remote_state(action, action_scope, run_command, *, conn=None):
             target_scope["output_type"] = push_scope["output_type"]
         target = publication_guards.push_target(target_scope, run_command, reconcile=True)
         if target and not target["ok"]:
-            return _result("unknown", "existing_pr_push_target_mismatch")
+            return _result("unknown", target.get("reason_code", "existing_pr_push_target_mismatch"))
         return _remote_branch(action, action_scope, run_command, push_remote=target["read_remote"] if target else None)
     return _result("unknown", "unsupported_action_type")

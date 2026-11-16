@@ -249,6 +249,27 @@ class PRPushRepositoryBindingTests(TemporaryWorkspace):
         self.assertEqual(self.push_count, 0)
         self.assert_tips(self.head, self.head)
 
+    def test_unreadable_existing_pr_is_a_read_failure_only_during_reconciliation(self):
+        self.git("remote", "add", "origin", str(self.bare[FORK_REPO]))
+        for failure in (
+            subprocess.CalledProcessError(1, ["gh", "api"], stderr="connection reset"),
+            subprocess.TimeoutExpired(["gh", "api"], 60),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+
+                def unavailable(command, **kwargs):
+                    if command[:2] == ["gh", "api"]:
+                        raise failure
+                    return self.runner(command, **kwargs)
+
+                observed = reconcile.classify_remote_state(self.action, self.audited_scope, unavailable)
+                self.assertEqual((observed["status"], observed["reason_code"]), ("unknown", "push_target_query_failed"))
+                target = guards.push_target(self.audited_scope, unavailable)
+                self.assertFalse(target["ok"])
+                self.assertFalse(target["retryable"])
+                self.assertNotIn("reason_code", target)
+        self.assertEqual(self.push_count, 0)
+
     def test_new_pr_can_push_to_its_audited_fork(self):
         self.git("remote", "add", "origin", str(self.bare[BASE_REPO]))
         self.git("config", "remote.origin.pushurl", str(self.bare[FORK_REPO]))

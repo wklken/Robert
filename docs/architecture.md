@@ -362,7 +362,11 @@ flowchart TD
     Uncertain -->|"是"| Read["只读对账：marker · 正文 · owner · SHA"]
     Read --> Remote{"远端判定"}
     Remote -->|"confirmed_effect"| Receipt["回填 published 回执，不重复写入"]
-    Remote -->|"unknown"| Attention["attention，保留证据等待处理"]
+    Remote -->|"unknown：读取失败"| Reread{"重读次数与时长未用尽？"}
+    Reread -->|"是"| Backoff["保持 executing，退避后只读重查"]
+    Backoff --> Read
+    Reread -->|"否"| Attention
+    Remote -->|"unknown：证据歧义"| Attention["attention，保留证据等待处理"]
     Remote -->|"confirmed_absent"| Budget
     Uncertain -->|"否"| Budget{"重试预算与当前政策允许？"}
     Budget -->|"否"| Failed["失败 / 需处理；显式恢复入口"]
@@ -377,7 +381,11 @@ flowchart TD
 
 去重不等于网络请求保证恰好一次。`action_id`、`idempotency_key` 与请求 fingerprint
 绑定本地 intent；远端 marker、正文、PR owner、分支与 SHA 证明实际效果。
-无法证明存在或缺失时进入 `attention`，不能假设写入失败而重复发布。
+读取失败（`*_query_failed`，包括超时）不构成证据：intent 保持 `executing`，按
+`execution/retry.py` 的次数、时长与退避只重新读取，同一结果中排在后面的动作继续等待；
+用尽后进入 `attention`。标记缺失、候选冲突、SHA 或范围冲突、响应结构异常属于证据歧义，
+立即进入 `attention`。两种情况都不能假设写入失败而重复发布。退避期间监督把它视为预期等待，
+退避结束仍未解决时照常报告 `publication_effect_unresolved`。
 发布前的远端校验独立于 discovery 缓存。自动重试受次数、时间与退避约束，
 人工重试也须重新核对当前权限和版本。
 

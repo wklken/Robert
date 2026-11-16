@@ -250,11 +250,11 @@ class ReviewPublishTests(unittest.TestCase):
         result = review_publish.reconcile(
             self.table_action(), self.scope, lambda *_a, **_k: Completed({"message": "forbidden"}, 1)
         )
-        self.assertEqual(result["status"], "unknown")
+        self.assertEqual((result["status"], result["reason_code"]), ("unknown", "review_query_failed"))
         malformed = review_publish.reconcile(
             self.table_action(), self.scope, lambda *_a, **_k: Completed([{"message": "unexpected"}])
         )
-        self.assertEqual(malformed["status"], "unknown")
+        self.assertEqual((malformed["status"], malformed["reason_code"]), ("unknown", "review_response_malformed"))
         self.runner(
             [
                 "gh",

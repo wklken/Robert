@@ -83,14 +83,20 @@ def push_target(scope, run_command, *, reconcile=False):
     }
     if not scope.get("repo") or (not new_pr and (len(sources) != 1 or not scope.get("github_account"))):
         return error
+    read_failure = {**error, "reason_code": "push_target_query_failed"} if reconcile else error
     try:
         if new_pr:
             owner, repository = scope["repo"].split("/", 1)
             head_repo = f"{scope.get('head_owner') or owner}/{repository}"
         else:
-            details = client.try_read_json(
-                ["gh", "api", f"repos/{scope['repo']}/pulls/{sources[0]['number']}"], runner=run_command
-            )
+            try:
+                details = client.read_json(
+                    ["gh", "api", f"repos/{scope['repo']}/pulls/{sources[0]['number']}"], runner=run_command
+                )
+            except ControlDeadlineExceeded:
+                raise
+            except (OSError, subprocess.SubprocessError):
+                return read_failure
             head = (details or {}).get("head") or {}
             head_repo = (head.get("repo") or {}).get("full_name")
             if (

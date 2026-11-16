@@ -364,6 +364,31 @@ def publish_ready_actions(
                         published_count += 1
                         deduplicated_count += 1
                         continue
+                    if publication_reconcile.read_failed(reconciliation):
+                        # Only reads are retried; exhausting their budget falls through to attention.
+                        with closing(db_database.connect(db_path)) as conn, conn:
+                            retry = publication_outcomes.schedule_reconcile_retry(conn, action, reconciliation, now)
+                            if retry:
+                                supervision_publication.finish(
+                                    conn,
+                                    supervision,
+                                    outcome="observing",
+                                    action_id=action["action_id"],
+                                    now=now,
+                                    reason=reconciliation["reason_code"],
+                                )
+                        if retry:
+                            failed_count += 1
+                            failures.append(
+                                {
+                                    "action_id": action["action_id"],
+                                    "safe_error": f"publication reconciliation retry scheduled: {reconciliation['reason_code']}",
+                                    "command": [],
+                                }
+                            )
+                            if result_id:
+                                failed_result_ids.add(result_id)
+                            continue
                     if reconciliation["status"] == "unknown":
                         current = {**current, "state": "attention"}
                     if reconciliation["status"] == "confirmed_absent" and scope is not None:
