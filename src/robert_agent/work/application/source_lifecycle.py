@@ -464,11 +464,11 @@ def _reconcile_tapd_reviews(conn, repo_id, repo, runner, run_now, settings):
             db_write_github_sources.record_tapd_review_sync(conn, source_id, closed_at)
 
 
-def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now, *, tapd_settings=None):
+def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now, *, tapd_settings=None, tapd_only=False):
     rows = work_queries.remote_source_rows(conn, repo_id)
     reconciled = 0
     for workstream_id, task_id, source_id, source_key, source_type, number, provider, _state in rows:
-        if provider not in set(SourceProvider):
+        if provider not in set(SourceProvider) or (tapd_only and provider != SourceProvider.TAPD):
             continue
         task_id = task_id or work_queries.latest_task_id(conn, workstream_id)
         conn.commit()
@@ -552,5 +552,6 @@ def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now, *, tapd
             if source_succeeded:
                 execution_notifications.update_failure(conn, "source_reconcile_failed", source_key, run_now)
             transactions.finish_isolation(conn, "reconcile_source")
-    _reconcile_tapd_reviews(conn, repo_id, repo, runner, run_now, tapd_settings)
+    if not tapd_only:
+        _reconcile_tapd_reviews(conn, repo_id, repo, runner, run_now, tapd_settings)
     return reconciled

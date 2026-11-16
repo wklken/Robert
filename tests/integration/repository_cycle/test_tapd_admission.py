@@ -4,11 +4,13 @@ from contextlib import closing
 from pathlib import Path
 import re
 import sqlite3
+import time
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 from robert_agent.adapters.github import budget as github_budget
+from robert_agent.adapters.github import client as github_client
 from robert_agent.adapters.tapd import client as tapd_client
 from robert_agent.configuration import validation
 from robert_agent.delivery.application import lane as delivery_lane
@@ -16,7 +18,7 @@ from robert_agent.delivery.application import notifications as notify
 from robert_agent.delivery.application import submission, tapd_comments, tapd_notifications
 from robert_agent.runtime import cycle as run_once
 from robert_agent.runtime import daemon
-from robert_agent.work import tapd_policy
+from robert_agent.work import scan_batches, tapd_policy
 from robert_agent.work.application import source_lifecycle, synchronization
 from tests.support.tapd import STORY, comment
 from tests.support.tapd_cycle import TapdCycleCase
@@ -25,17 +27,34 @@ from tests.support.tapd_cycle import TapdCycleCase
 class TapdAdmissionTests(TapdCycleCase):
     def test_tapd_only_scan_wakes_local_cycle_without_github_events(self):
         self.client.comments.append(comment("52", "@robert-wklken 请分析"))
+        with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
+            (repo_id,) = conn.execute("SELECT repo_id FROM repos").fetchone()
+            conn.execute(
+                "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number) "
+                "VALUES ('pr-source', ?, 'github:example/backend!99', 'pull_request', 99)",
+                (repo_id,),
+            )
+            conn.execute(
+                "INSERT INTO workstreams(workstream_id, repo_id, primary_source_id, created_at, updated_at) "
+                "VALUES ('github:example/backend!99', ?, 'pr-source', 'now', 'now')",
+                (repo_id,),
+            )
+            key = github_client.command_key(["gh", "api", "repos/example/backend/issues/99"])
+            scan_batches.save_reads(
+                conn, repo_id, {key: '{"state":"closed","pull_request":{"merged_at":null}}'}, time.time()
+            )
         with (
             mock.patch.object(tapd_client, "client_for", return_value=self.client),
             mock.patch.object(github_budget, "budget", return_value=False),
         ):
             observed = synchronization.scan(self.config_path)
-        self.assertEqual(observed["batch_count"], 1, observed)
         outcome = run_once.run_once(
             self.config_path, dry_run=True, skip_external=True, skip_publish=True, consume_observations=True
         )
         self.assertTrue(outcome["ok"], outcome)
         self.assertEqual(self.query("SELECT COUNT(*) FROM tasks"), [(1,)])
+        self.assertEqual(self.query("SELECT state FROM github_sources WHERE source_id = 'pr-source'"), [("open",)])
+        self.assertEqual(observed["batch_count"], 0, observed)
 
     def test_trusted_mention_creates_one_tapd_task_with_a_public_reference(self):
         self.scan(comment("1", "<p>@robert-wklken 请分析一下这个需求</p>"))
