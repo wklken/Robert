@@ -56,7 +56,15 @@ def _deliver(db_path, publisher, notification_id, notification_type, metadata, n
         _record(db_path, notification_id, "skipped", {"status": "skipped", "reason_code": "ticket_ended"})
         return "skipped"
     try:
-        comment_id = publisher.client().add_comment(*target, body)
+        client = publisher.client()
+        if notification_type == tapd_policy.LABEL_NOTICE:
+            workspace, kind, external_id = target
+            item = client.get_item(workspace, kind, external_id)
+            states = client.terminal_states(workspace, kind, item.workitem_type_id if kind == "story" else None)
+            if tapd_policy.is_ended(item.status, states):
+                _record(db_path, notification_id, "skipped", {"status": "skipped", "reason_code": "ticket_ended"})
+                return "skipped"
+        comment_id = client.add_comment(*target, body)
     except ControlDeadlineExceeded:
         raise
     except tapd_comments.PROTOCOL_ERRORS as exc:

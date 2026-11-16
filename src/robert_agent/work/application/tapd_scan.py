@@ -122,7 +122,7 @@ def _snapshot(ticket, settings, automatic_ids, repository, label, now):
                 "created": comment.created,
                 "text": text,
                 "truncated": clipped,
-                "automatic": parsed.automatic or comment.comment_id in automatic_ids,
+                "robert_reply": comment.comment_id in automatic_ids,
             }
         )
     return {
@@ -174,7 +174,7 @@ def _event(project, settings, ticket, comment, decision, *, repository, label, s
     }
 
 
-def _record_source(conn, project, settings, ticket, repo, label, automatic_ids, watermark, now):
+def _record_source(conn, project, settings, ticket, repo, label, automatic_ids, watermark, now, triggers=()):
     """Write one ticket's source row and its trusted user's comments in the caller transaction."""
     host, workspace_id = project["host"], project["workspace_id"]
     kind, external_id = ticket.item.kind, ticket.item.external_id
@@ -201,20 +201,24 @@ def _record_source(conn, project, settings, ticket, repo, label, automatic_ids, 
     )
     known = source_key in work_queries.load_known_workstreams(conn, repo_id)
     started = utc_timestamp(project["accept_after"])
-    trusted = [
-        comment
+    trusted = {
+        comment.comment_id: comment
         for comment in ticket.comments
         if comment.author == project["trusted_user"]
         and (observed := tapd_policy.parse_time(comment.created)) is not None
         and observed >= started
-    ]  # Other people's and earlier comments are context in the snapshot only.
-    fingerprints = [tapd_identity.comment_fingerprint(host, workspace_id, item.comment_id) for item in trusted]
+    }  # Other people's and earlier comments are context in the snapshot only.
+    trigger_ids = {comment.comment_id for comment in triggers}
+    trusted.update((comment.comment_id, comment) for comment in triggers)
+    fingerprints = [tapd_identity.comment_fingerprint(host, workspace_id, item) for item in trusted]
     noticed = {row[0] for row in db_read_notifications.find_existing_ids(conn, map(label_notice_id, fingerprints))}
     written = 0
-    for comment, fingerprint in zip(trusted, fingerprints):
+    for comment, fingerprint in zip(trusted.values(), fingerprints):
         decision = _decision(comment, project, settings, automatic_ids, watermark, known=known)
         if label_notice_id(fingerprint) in noticed:
             decision = {"authorization_status": "ignored_context", "creates_task": False, "drives_execution": False}
+        if decision["drives_execution"] and comment.comment_id not in trigger_ids:
+            continue  # Discovery owns request admission and current label routing.
         event = _event(
             project,
             settings,
@@ -291,8 +295,9 @@ def scan_project(db_path, settings, project, repos, client, *, now=None):
     with closing(db_database.connect(db_path, timeout=5)) as conn:
         stored = db_records.first(db_read_tapd_scan_state.find_watermark(conn, key))
         recorded = db_read_github_actions.find_tapd_comment_ids(conn, f"https://{host}/{workspace_id}/")
+        notices = db_read_notifications.find_delivered_tapd_comment_ids(conn, key)
     watermark = (stored[0], stored[1]) if stored else None
-    automatic_ids = {row[0] for row in recorded}
+    automatic_ids = {row[0] for row in (*recorded, *notices)}
     try:
         comments = client.author_comments(workspace_id, project["trusted_user"], since=_since(project, watermark))
     except ControlDeadlineExceeded:
@@ -331,7 +336,17 @@ def scan_project(db_path, settings, project, repos, client, *, now=None):
                 summary["label_notices"] += len(ticket_triggers)
             continue
         summary["events"] += _write(
-            db_path, _record_source, project, settings, ticket, repos[repository], label, automatic_ids, watermark, now
+            db_path,
+            _record_source,
+            project,
+            settings,
+            ticket,
+            repos[repository],
+            label,
+            automatic_ids,
+            watermark,
+            now,
+            ticket_triggers,
         )
         refreshed.add((kind, external_id, repository))
     with closing(db_database.connect(db_path, timeout=5)) as conn:

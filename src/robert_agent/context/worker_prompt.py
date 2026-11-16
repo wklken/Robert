@@ -293,7 +293,7 @@ def _tapd_items(discussions, events, attempt_id):
                     comment.get("truncated"),
                 )
                 for comment in comments
-                if bool(comment.get("automatic")) == automatic
+                if bool(comment.get("robert_reply")) == automatic
             ]
             not_loaded = 0 if automatic else discussion.get("omitted_comments") or 0
             if not selected and not not_loaded:
