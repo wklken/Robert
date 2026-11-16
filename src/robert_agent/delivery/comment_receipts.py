@@ -1,19 +1,29 @@
 """Match comment effects by publisher and exact accepted content."""
 
+import json
 
-def comment_records(listing):
+
+def comment_records(stdout):
     """Flatten a paginated comment listing, or return None when its shape proves nothing about absence."""
+    try:
+        listing = json.loads(stdout)
+    except (TypeError, ValueError, RecursionError):
+        return None
     if not isinstance(listing, list):
         return None
     records = []
     for page in listing:
         for item in page if isinstance(page, list) else [page]:
-            if (
-                not isinstance(item, dict)
-                or not isinstance(item.get("body"), str)
-                or not isinstance(item.get("user"), (dict, type(None)))
-            ):
+            if not isinstance(item, dict) or not isinstance(item.get("body"), str):
                 return None
+            comment_id = item.get("id")
+            if type(comment_id) is not int or comment_id <= 0:
+                return None
+            user = item.get("user")
+            if user is not None:
+                login = user.get("login") if isinstance(user, dict) else None
+                if not isinstance(login, str) or not login or any(char.isspace() for char in login):
+                    return None
             records.append(item)
     return records
 

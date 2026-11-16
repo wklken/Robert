@@ -259,6 +259,31 @@ class TapdDerivedQueueTests(TapdPullRequestCase):
             (PR_WORKSTREAM,),
         )
 
+    def submit_pr_answer(self, fingerprint, output="comment_analysis", additional_requests=()):
+        [(task, attempt)] = self.query(
+            "SELECT task_id, attempt_id FROM tasks JOIN attempts USING(task_id) "
+            "WHERE workstream_id = ? ORDER BY tasks.rowid DESC LIMIT 1",
+            (PR_WORKSTREAM,),
+        )
+        record = submission.record_result(
+            self.data_dir / "dd.sqlite3",
+            {
+                "task_id": task,
+                "attempt_id": attempt,
+                "output_type": output,
+                "submission": {
+                    "planned_github_actions": [{"type": "comment", "body": "Answer."}],
+                    "consumed_event_fingerprints": [fingerprint, *additional_requests],
+                    "verification": [],
+                    "handoff": "answered",
+                    "used_skills": [],
+                    **({"review_input_kind": "request"} if output == "review_comment" else {}),
+                },
+            },
+        )
+        self.assertTrue(record["ok"], record)
+        return task
+
     def test_ticket_round_left_in_attention_does_not_hold_back_the_pr_queue(self):
         self.request_fix()
         self.open_pull_request()
@@ -271,9 +296,20 @@ class TapdDerivedQueueTests(TapdPullRequestCase):
             self.query("SELECT t.lifecycle FROM tasks t JOIN workstreams w ON w.active_task_id = t.task_id"),
             [("running",)],
         )
-        self.scan(comment("3", "@robert-wklken please also fix the logout bug", "2026-11-20 12:00:00"))
+        self.scan(comment("3", "@robert-wklken 请分析退出流程", "2026-11-20 12:00:00"))
         self.cycle()
-        self.assertEqual(self.pr_tasks(), [("update-existing-pr", "tapd-comment:tapd.example/100/3", "trigger")])
+        self.assertEqual(self.pr_tasks(), [("comment-analysis", "tapd-comment:tapd.example/100/3", "trigger")])
+        self.client.reject_writes = 0
+        self.submit_pr_answer("tapd-comment:tapd.example/100/3")
+        self.publish()
+        self.assertEqual(
+            self.query("SELECT lifecycle FROM tasks WHERE workstream_id = ?", (PR_WORKSTREAM,)), [("completed",)]
+        )
+
+        self.scan(comment("4", "@robert-wklken 请分析登录流程", "2026-11-20 12:05:00"))
+        self.cycle()
+        self.assertIn(("comment-analysis", "tapd-comment:tapd.example/100/4", "trigger"), self.pr_tasks())
+        self.assertIn(("attention",), self.query("SELECT status FROM publication_intents"))
 
     def test_requests_queued_behind_the_pr_merge_into_one_round(self):
         self.start_pr()
@@ -289,6 +325,99 @@ class TapdDerivedQueueTests(TapdPullRequestCase):
                 ("update-existing-pr", "tapd-comment:tapd.example/100/4", "context"),
                 ("update-existing-pr", "tapd-comment:tapd.example/100/3", "trigger"),
             ],
+        )
+
+    def test_reopened_pr_followup_waits_for_an_active_ticket_round(self):
+        self.start_pr()
+        self.scan(comment("3", "@robert-wklken 请分析", "2026-11-20 12:00:00"))
+        self.cycle()
+        self.reconcile({**MERGED, "merged": False, "merged_at": None})
+        self.scan(comment("4", "@robert-wklken please fix the logout bug", "2026-11-20 12:01:00"))
+        self.cycle()
+        self.assertEqual(
+            self.query(
+                "SELECT t.route_id FROM tasks t JOIN workstreams w ON w.active_task_id = t.task_id "
+                "WHERE w.workstream_id = ?",
+                (TICKET_WORKSTREAM,),
+            ),
+            [("new-pr",)],
+        )
+        [(ref,)] = self.query("SELECT public_ref FROM workstreams WHERE workstream_id = ?", (TICKET_WORKSTREAM,))
+        self.fixture_path.write_text(
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "id": "reopened-pr-followup",
+                            "event_type": "comment",
+                            "source_type": "pull_request",
+                            "number": 10,
+                            "body": "@robert-bot please analyze the login timeout",
+                            "actor_login": "wklken",
+                            "state": "open",
+                            "url": PR_URL,
+                            "pr_author_login": "robert-bot",
+                            "metadata": {"dd_workstream": {"origin_workstream_id": ref}},
+                        }
+                    ]
+                }
+            )
+        )
+        self.cycle()
+        self.assertEqual(
+            self.query("SELECT lifecycle FROM tasks WHERE workstream_id = ?", (PR_WORKSTREAM,)), [("canceled",)]
+        )
+
+    def test_tapd_round_starts_with_all_requests_queued_behind_a_github_task(self):
+        self.start_pr()
+        [(ref,)] = self.query("SELECT public_ref FROM workstreams WHERE workstream_id = ?", (TICKET_WORKSTREAM,))
+        self.fixture_path.write_text(
+            json.dumps(
+                {
+                    "events": [
+                        {
+                            "id": "github-followup",
+                            "event_type": "comment",
+                            "source_type": "pull_request",
+                            "number": 10,
+                            "body": "@robert-bot please analyze the login timeout",
+                            "actor_login": "wklken",
+                            "state": "open",
+                            "url": PR_URL,
+                            "pr_author_login": "robert-bot",
+                            "metadata": {"dd_workstream": {"origin_workstream_id": ref}},
+                        }
+                    ]
+                }
+            )
+        )
+        github_run = self.cycle()
+        self.scan(
+            comment("3", "@robert-wklken 请分析登录流程", "2026-11-20 12:00:00"),
+            comment("4", "@robert-wklken 再分析会话续期", "2026-11-20 12:01:00"),
+        )
+        self.cycle()
+        self.assertEqual(self.pr_tasks(), [("review-comment", "comment:github-followup", "trigger")])
+        self.assertNotIn("tapd.example", Path(github_run["prompt_paths"][0]).read_text())
+        self.fixture_path.write_text('{"events": []}')
+        task = self.submit_pr_answer("comment:github-followup", output="review_comment")
+        self.cycle()
+        with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
+            conn.execute("UPDATE github_actions SET publish_status = 'published' WHERE task_id = ?", (task,))
+
+        (prompt,) = self.cycle()["prompt_paths"]
+        docs = [json.loads(path.read_text()) for path in Path(prompt).parent.glob("*.json")]
+        events = [event["event_fingerprint"] for doc in docs for event in doc.get("events", [])]
+        self.assertIn("tapd-comment:tapd.example/100/3", events)
+        self.assertIn("tapd-comment:tapd.example/100/4", events)
+        self.submit_pr_answer(
+            "tapd-comment:tapd.example/100/3", additional_requests=("tapd-comment:tapd.example/100/4",)
+        )
+        self.publish()
+        self.cycle()
+        self.assertEqual(
+            self.query("SELECT lifecycle FROM tasks WHERE workstream_id = ? ORDER BY rowid", (PR_WORKSTREAM,)),
+            [("completed",), ("completed",)],
         )
 
     def test_pr_queue_request_classified_before_the_ticket_ends_still_gets_its_answer(self):

@@ -77,7 +77,15 @@ class PublishCommentTests(PublicationFixture):
             def __init__(self, stdout):
                 self.stdout = stdout
 
-        for listing in ('{"message": "Server Error"}', "<html>", '[[{"id": 1}]]'):
+        for listing in (
+            "",
+            '{"message": "Server Error"}',
+            "<html>",
+            '[[{"id": 1}]]',
+            '[[{"id": 1, "body": "comment", "user": {"login": 42}}]]',
+            '[[{"id": 1, "body": "comment", "user": {"login": " "}}]]',
+            '[[{"body": "comment", "user": {"login": "bot"}}]]',
+        ):
             with self.subTest(listing=listing), tempfile.TemporaryDirectory() as root:
                 self.root = Path(root)
                 db_path = self.root / "dd.sqlite3"
@@ -93,6 +101,10 @@ class PublishCommentTests(PublicationFixture):
                 self.assertFalse(result["ok"], result)
                 self.assertEqual(len(calls), 1, calls)
                 self.assertIn("comment_response_malformed", result["failures"][0]["safe_error"])
+                with closing(sqlite3.connect(db_path)) as conn:
+                    self.assertEqual(
+                        conn.execute("SELECT status FROM publication_intents").fetchall(), [("attention",)]
+                    )
 
     def test_publish_revalidates_comment_target_against_audited_scope(self):
         from robert_agent.delivery.application import publish

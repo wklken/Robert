@@ -342,18 +342,15 @@ def scan_project(db_path, settings, project, repos, client, *, now=None):
     for index, (comment, fingerprint) in enumerate(zip(candidates, fingerprints)):
         if fingerprint in observed or comment.comment_id in triggers:
             continue
-        # A pending request keeps the identity and text it had when first observed.
-        if (
-            index < len(pending)
-            or _decision(
-                comment,
-                project,
-                settings,
-                automatic_ids,
-                known=False,
-                first_observation=_first_observation(comment, watermark),
-            )["drives_execution"]
-        ):
+        # A pending request keeps its observed text and must still meet current authorization.
+        if _decision(
+            comment,
+            project,
+            settings,
+            automatic_ids,
+            known=False,
+            first_observation=index < len(pending) or _first_observation(comment, watermark),
+        )["drives_execution"]:
             triggers[comment.comment_id] = comment
     reads, retained, terminal_cache = [], [], {}
     for kind, external_id in dict.fromkeys((item.kind, item.entry_id) for item in triggers.values()):

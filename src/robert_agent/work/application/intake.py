@@ -1,5 +1,7 @@
 """Admit ordered requests and prepare available work under existing task fences."""
 
+from collections import defaultdict
+
 from robert_agent.foundation.contracts.work import FactClassification, SourceProvider
 
 from robert_agent.persistence import transactions as db_transactions
@@ -19,6 +21,7 @@ from robert_agent.work.application import remediation_requests
 from robert_agent.work.application import source_events
 from robert_agent.work.application import source_lifecycle
 from robert_agent.execution import ownership as execution_ownership
+from robert_agent.foundation import values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.supervision import store as supervision_store
@@ -131,8 +134,15 @@ def admit_requests(
     invalidation_attempt_ids = []
     failed_workstreams = set()
 
+    tapd_pr_requests = defaultdict(list)
+    for event in decisions:
+        if event.get("provider") == SourceProvider.TAPD and event.get("has_open_dd_pr"):
+            tapd_pr_requests[event["workstream_id"]].append(event)
+    batched_fingerprints = set()
     track_admission = supervision_store.has_schema(conn)
     for event in decisions:
+        if event["event_fingerprint"] in batched_fingerprints:
+            continue
         source_id, event_id = source_events.insert_source_and_event(conn, repo_id, event, run_now)
         admission = None
         if track_admission and supervision_lineage.is_driving_github_input(event):
@@ -461,6 +471,19 @@ def admit_requests(
                 run_now,
             ):
                 continue
+            batch = []
+            if is_tapd and event.get("has_open_dd_pr"):
+                # All already-waiting TAPD requests belong in the first prompt for this round.
+                batch = [
+                    request
+                    for request in tapd_pr_requests[event["workstream_id"]]
+                    if request["event_fingerprint"] != event["event_fingerprint"]
+                    and not task_state.event_is_attached(conn, values.github_event_id(request["event_fingerprint"]))
+                ]
+                if batch:
+                    retry_related = github_requests.dedupe_events_by_fingerprint(
+                        [*(retry_related or [task_event]), *batch]
+                    )
             task_info = preparation.create_task_attempt_and_prompt(
                 conn,
                 data_dir,
@@ -479,6 +502,18 @@ def admit_requests(
             if task_info is None:
                 continue
             supervision_lineage.record_task_disposition(conn, admission, task_info["task_id"], run_now)
+            for request in batch:
+                related_source_id, related_event_id = source_events.insert_source_and_event(
+                    conn, repo_id, request, run_now
+                )
+                if track_admission:
+                    related_admission = supervision_lineage.record_github_received(
+                        conn, request, related_event_id, repo_id, related_source_id, run_now
+                    )
+                    supervision_lineage.record_task_disposition(
+                        conn, related_admission, task_info["task_id"], run_now, pending=True
+                    )
+                batched_fingerprints.add(request["event_fingerprint"])
             dispatcher.queue_dispatch(
                 dispatch_queue,
                 task_info,

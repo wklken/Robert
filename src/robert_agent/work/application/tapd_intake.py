@@ -8,7 +8,6 @@ from robert_agent.foundation import tapd_identity, values
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_events as db_read_github_events
-from robert_agent.persistence.queries import publication_intents as db_read_publication_intents
 from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.persistence.stores import github_events as db_write_github_events
 from robert_agent.persistence.stores import notifications as db_write_notifications
@@ -72,9 +71,7 @@ def collect_decisions(conn, *, repo, repo_id, config_result, known_workstreams, 
         }
         if prs:
             ticket_task = work_queries.active_task_id(conn, ticket_stream)
-            if ticket_task and not db_records.first(
-                db_read_publication_intents.find_attention_for_task(conn, ticket_task)
-            ):
+            if ticket_task and not work_queries.tapd_reply_in_attention(conn, ticket_stream, ticket_task, event["url"]):
                 # The round that opened this PR may still be confirming its ticket reply. An unknown
                 # result left for the operator does not hold back the PR queue.
                 continue

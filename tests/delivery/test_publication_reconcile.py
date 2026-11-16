@@ -345,15 +345,19 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             "metadata_json": json.dumps({"body": self.body}),
         }
         scope = {"repo": "x/y", "github_account": "bot", "sources": [{"source_type": "issue", "number": 1}]}
-        for listing in (
-            {"message": "Not Found"},
-            [[{"id": 1}]],
-            [["comment"]],
-            [{"id": 1, "body": self.body, "user": "bot"}],
+        for stdout in (
+            "",
+            '{"message": "Not Found"}',
+            '[[{"id": 1}]]',
+            '[["comment"]]',
+            json.dumps([{"id": 1, "body": self.body, "user": "bot"}]),
+            '[[{"id": 1, "body": "comment", "user": {"login": 42}}]]',
+            json.dumps([[{"id": 1, "body": self.body, "user": {"login": " "}}]]),
+            json.dumps([[{"body": self.body, "user": {"login": "bot"}}]]),
         ):
-            with self.subTest(listing=listing):
+            with self.subTest(stdout=stdout):
                 result = publication_reconcile.classify_remote_state(
-                    action, scope, lambda *_args, response=listing, **_kwargs: Completed(json.dumps(response))
+                    action, scope, lambda *_args, response=stdout, **_kwargs: Completed(response)
                 )
                 self.assertEqual((result["status"], result["reason_code"]), ("unknown", "comment_response_malformed"))
                 self.assertFalse(publication_reconcile.read_failed(result))

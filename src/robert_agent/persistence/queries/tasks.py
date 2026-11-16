@@ -1659,7 +1659,7 @@ def ready_rows_filtered(conn, items, value_1, value_2):
     return statements.read(conn, _ready_rows_filtered_statement(), {"p0": value_1, "p1": value_2, "items": items})
 
 
-def github_followup_allows_new_subject_filtered(conn, items):
+def github_followup_allows_new_subject_filtered(conn, items, *, parked_task_id=None):
     query1 = (
         select(sql_constant(1))
         .select_from(tables["tasks"])
@@ -1684,6 +1684,8 @@ def github_followup_allows_new_subject_filtered(conn, items):
         .correlate_except(tables["tasks"])
         .set_label_style(LABEL_STYLE_NONE)
     )
+    if parked_task_id is not None:
+        query1 = query1.where(tables["tasks"].c.task_id != parked_task_id)
     return statements.read(conn, query1, {"items": items})
 
 

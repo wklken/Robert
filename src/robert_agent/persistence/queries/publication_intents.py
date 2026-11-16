@@ -1,6 +1,6 @@
 """Shared queries operations for publication_intents."""
 
-from robert_agent.foundation.contracts.delivery import PublicationStatus
+from robert_agent.foundation.contracts.delivery import GitHubActionType, PublicationStatus, PublishStatus
 from robert_agent.persistence.expressions import sql_constant
 
 from sqlalchemy import select, bindparam, and_, LABEL_STYLE_NONE
@@ -10,17 +10,23 @@ from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
 
 
-def find_attention_for_task(conn, task_id):
+def find_reply_in_attention(conn, task_id, target_url):
     intents = tables["publication_intents"]
     actions = tables["github_actions"]
     query = (
         select(sql_constant(1))
         .select_from(intents.join(actions, actions.c["action_id"] == intents.c["action_id"]))
-        .where(actions.c["task_id"] == bindparam("p0"), intents.c["status"] == PublicationStatus.ATTENTION.value)
+        .where(
+            actions.c.task_id == bindparam("p0"),
+            actions.c.target_url == bindparam("p1"),
+            actions.c.action_type == GitHubActionType.COMMENT.value,
+            actions.c.publish_status == PublishStatus.NOT_PUBLISHED.value,
+            intents.c.status == PublicationStatus.ATTENTION.value,
+        )
         .limit(1)
         .set_label_style(LABEL_STYLE_NONE)
     )
-    return statements.read(conn, query, {"p0": task_id})
+    return statements.read(conn, query, {"p0": task_id, "p1": target_url})
 
 
 def find_record_by_action_id(conn, action_id):

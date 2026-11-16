@@ -140,6 +140,19 @@ class TapdScanTests(unittest.TestCase):
         self.assertEqual(missing["failures"], [{"stage": "ticket", "external_id": BUG, "reason": "not_found"}])
         self.assertEqual(self.events(), {"33": "authorized_trigger"})
 
+    def test_pending_request_from_former_trusted_user_cannot_send_a_label_notice(self):
+        self.client.comments = [comment("33", "@robert-wklken bug", entry=BUG, kind="bug")]
+        self.client.missing_items = {BUG}
+        self.scan()
+        self.client.missing_items.clear()
+        self.client.labels[BUG] = None
+        project = {**PROJECT, "trusted_user": "bob"}
+        settings = {**SETTINGS, "projects": [project]}
+        tapd_scan.scan_project(str(self.db), settings, project, {REPO["full_name"]: REPO}, self.client)
+        with connect(self.db) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT pending_json FROM tapd_scan_state").fetchone()[0], "[]")
+
     def test_failed_scan_does_not_let_an_edit_turn_an_observed_comment_into_a_request(self):
         self.client.comments = [
             comment("35", "plain note"),

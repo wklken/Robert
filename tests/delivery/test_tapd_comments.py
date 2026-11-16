@@ -91,6 +91,9 @@ class TapdCommentTests(unittest.TestCase):
                     (state["status"], state["reason_code"]), ("unknown", "tapd_comment_response_malformed")
                 )
                 self.assertFalse(reconcile.read_failed(state))
+                failed = self.publish()
+                self.assertFalse(failed["retryable"])
+                self.assertEqual(self.client.written, [])
 
     def test_absent_receipt_and_conflicting_receipts(self):
         self.assertEqual(self.reconcile()["status"], "confirmed_absent")

@@ -6,7 +6,6 @@ from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
 
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.adapters.git.remotes import github_owner
-import json
 import re
 import subprocess
 from urllib.parse import urlparse
@@ -75,12 +74,15 @@ def find_existing_comment(endpoint, marker, run_command, *, expected_body, publi
             "safe_error": f"comment duplicate preflight failed: {safe_error}",
             "command": command,
         }
-    try:
-        comments = comment_records(json.loads(getattr(completed, "stdout", "") or "[]"))
-    except (TypeError, ValueError):
-        comments = None
+    comments = comment_records(getattr(completed, "stdout", ""))
     if comments is None:
-        return {"ok": False, "status": "publish_failed", "safe_error": "comment_response_malformed", "command": command}
+        return {
+            "ok": False,
+            "status": "publish_failed",
+            "safe_error": "comment_response_malformed",
+            "retryable": False,
+            "command": command,
+        }
     receipt = match_comment(comments, expected_body, publisher, marker)
     if receipt["status"] == "unknown":
         return {"ok": False, "status": "publish_failed", "safe_error": receipt["reason_code"], "command": command}

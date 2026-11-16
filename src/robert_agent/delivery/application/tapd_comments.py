@@ -137,8 +137,10 @@ def publish(action, publisher, marker, *, scope_guard):
     try:
         client = publisher.client()
         existing = receipts(client, target, marker, mention_name)
-    except PROTOCOL_ERRORS:
-        return _failure("TAPD comment preflight failed")
+    except PROTOCOL_ERRORS as exc:
+        if read_unavailable(exc):
+            return _failure("TAPD comment preflight failed")
+        return _failure("tapd_comment_response_malformed", retryable=False)
     if len(existing) > 1:
         return _failure("TAPD receipt matches several comments", retryable=False)
     if existing:

@@ -234,11 +234,7 @@ def _reconcile_comment(action, action_scope, run_command):
         return _result("unknown", "comment_query_failed", error_type=type(exc).__name__)
     if _command_failure(completed, "comment_query_failed"):
         return _result("unknown", "comment_query_failed")
-    raw = getattr(completed, "stdout", "")
-    try:
-        comments = comment_records(json.loads(raw or "[]"))
-    except (TypeError, ValueError):
-        comments = None
+    comments = comment_records(getattr(completed, "stdout", ""))
     if comments is None:
         return _result("unknown", "comment_response_malformed")
     receipt = match_comment(comments, metadata.get("body"), (action_scope or {}).get("github_account"), marker)
