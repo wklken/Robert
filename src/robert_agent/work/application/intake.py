@@ -101,7 +101,7 @@ def admit_requests(
             )
         )
     if dispatch_budget["remaining"] > 0:
-        ready_work.prepare_github_operator_tasks(
+        ready_work.prepare_operator_tasks(
             conn,
             data_dir,
             db_path,

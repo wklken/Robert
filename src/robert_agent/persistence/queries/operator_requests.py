@@ -38,6 +38,8 @@ def pending_tasks(conn, repo_ids=(), task_id=None):
             table3.c["full_name"],
             table6.c["number"],
             table6.c["source_type"],
+            table6.c["provider"],
+            table6.c["metadata_json"].label("source_metadata_json"),
         )
         .select_from(
             table1.join(
@@ -63,7 +65,7 @@ def pending_tasks(conn, repo_ids=(), task_id=None):
         )
         .where(
             and_(
-                table5.c["origin_type"] == sql_constant("github"),
+                table5.c["origin_type"].in_([sql_constant("github"), sql_constant("tapd")]),
                 table5.c["canceled_at"].is_(null()),
                 table5.c["completed_at"].is_(null()),
                 table1.c["lifecycle"] == sql_constant(TaskLifecycle.DETECTED.value),

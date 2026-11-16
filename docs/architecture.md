@@ -266,6 +266,11 @@ workstream。修改路由复用同一分支，回评目标仍是原单据。发�
 按事件身份写入 TAPD 通知。发布通道使用固定文案和 PR 链接，独立于运营者消息投递。
 详见 [TAPD 来源](features/tapd.md)。
 
+网页中的单据澄清回复由工作项命令创建续办任务。
+`operator_queries` 按来源读取回复后的扫描快照，`ready_work.prepare_operator_tasks`
+复核原请求授权后准备同一任务的执行，保留原工作区和工作项回复。
+未刷新单据时不占 Worker 槽位，也不触发重复的空本地循环。
+
 源码：[authorize_event](../src/robert_agent/security/authorization.py)、[plan_event](../src/robert_agent/work/streams.py)、
 [route_task](../src/robert_agent/workflows/routes.py)、[仓库用例编排](../src/robert_agent/application/repository_cycle.py)（`run_repo_pipeline`）、
 [事件消费与接续](../src/robert_agent/work/application/completion.py)
