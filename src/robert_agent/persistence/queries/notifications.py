@@ -46,6 +46,18 @@ def find_existing_ids(conn, notification_ids):
     return statements.read(conn, query, {"items": list(notification_ids)})
 
 
+def find_delivered_tapd_comment_ids(conn, project_key):
+    notice = tables["notifications"]
+    comment_id = func.json_extract(notice.c.metadata_json, "$.tapd_delivery.comment_id")
+    query = select(comment_id).where(
+        notice.c.channel == "tapd",
+        notice.c.status == "delivered",
+        func.json_extract(notice.c.metadata_json, "$.project_key") == project_key,
+        comment_id.is_not(None),
+    )
+    return statements.read(conn, query)
+
+
 def find_pending_tapd(conn, now, limit):
     """TAPD ticket notices whose next bounded delivery attempt is due."""
     notice = tables["notifications"]

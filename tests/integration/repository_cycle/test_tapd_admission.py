@@ -1,8 +1,10 @@
 """TAPD requests saved by the scan lane are admitted once under current authority and answered on the ticket."""
 
 from contextlib import closing
+from pathlib import Path
 import re
 import sqlite3
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -13,13 +15,28 @@ from robert_agent.delivery.application import lane as delivery_lane
 from robert_agent.delivery.application import notifications as notify
 from robert_agent.delivery.application import submission, tapd_comments, tapd_notifications
 from robert_agent.runtime import cycle as run_once
+from robert_agent.runtime import daemon
 from robert_agent.work import tapd_policy
-from robert_agent.work.application import source_lifecycle
+from robert_agent.work.application import source_lifecycle, synchronization
 from tests.support.tapd import STORY, comment
 from tests.support.tapd_cycle import TapdCycleCase
 
 
 class TapdAdmissionTests(TapdCycleCase):
+    def test_tapd_only_scan_wakes_local_cycle_without_github_events(self):
+        self.client.comments.append(comment("52", "@robert-wklken 请分析"))
+        with (
+            mock.patch.object(tapd_client, "client_for", return_value=self.client),
+            mock.patch.object(github_budget, "budget", return_value=False),
+        ):
+            observed = synchronization.scan(self.config_path)
+        self.assertEqual(observed["batch_count"], 1, observed)
+        outcome = run_once.run_once(
+            self.config_path, dry_run=True, skip_external=True, skip_publish=True, consume_observations=True
+        )
+        self.assertTrue(outcome["ok"], outcome)
+        self.assertEqual(self.query("SELECT COUNT(*) FROM tasks"), [(1,)])
+
     def test_trusted_mention_creates_one_tapd_task_with_a_public_reference(self):
         self.scan(comment("1", "<p>@robert-wklken 请分析一下这个需求</p>"))
         self.cycle()
@@ -200,6 +217,37 @@ class TapdNoticeTests(TapdCycleCase):
 
     def notices(self):
         return self.query("SELECT status, json_extract(metadata_json, '$.tapd_delivery.status') FROM notifications")
+
+    def test_due_tapd_notice_starts_background_publication(self):
+        self.client.labels[STORY] = None
+        self.scan(comment("54", "@robert-wklken 请分析"))
+        config = validation.validate_config(self.config_path, skip_external=True)
+        [(repo_id,)] = self.query("SELECT repo_id FROM repos")
+        publish = SimpleNamespace(process=None, start=mock.Mock())
+        context = daemon.DaemonContext(
+            str(self.config_path),
+            None,
+            Path(config["db_path"]),
+            repo_id,
+            1,
+            config["daemon"],
+            "daemon",
+            "lease",
+            runtime_config=config,
+            background_lanes={"publish": publish, "scan": SimpleNamespace(process=None)},
+            next_live_poll_at="2026-11-21T03:00:00+00:00",
+        )
+        with mock.patch.object(daemon, "_maybe_prune"):
+            daemon._background_decision(context, now=self.T0)
+        publish.start.assert_called_once()
+
+    def test_label_notice_checks_an_ended_ticket_with_no_source_row(self):
+        self.client.labels[STORY] = None
+        self.scan(comment("55", "@robert-wklken 请分析"))
+        self.assertEqual(self.query("SELECT COUNT(*) FROM github_sources"), [(0,)])
+        self.client.status[STORY] = "status_3"
+        self.assertEqual(self.deliver().get("skipped"), 1)
+        self.assertEqual(self.client.written, [])
 
     def test_label_notice_is_delivered_once_with_a_fixed_body(self):
         self.client.labels[STORY] = "其他"

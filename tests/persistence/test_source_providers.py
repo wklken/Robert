@@ -232,3 +232,26 @@ class LegacySourceTableRebuildTests(unittest.TestCase):
             storage.init_database(self.db)
 
         self.assertEqual(self._snapshot(), before)
+
+    def test_expired_daemon_lease_does_not_make_an_unconfirmed_worker_launch_safe(self):
+        with connect(self.db) as conn:
+            task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts LIMIT 1").fetchone()
+            conn.execute("UPDATE attempts SET status = 'prepared' WHERE attempt_id = ?", (attempt_id,))
+            conn.execute(
+                "INSERT INTO leases VALUES ('expired-daemon', 'daemon', 'database', 'daemon-1', 'active', "
+                "'2000-01-01T00:00:00Z', '2000-01-02T00:00:00Z', '2000-01-01T00:00:00Z', NULL, '{}')"
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO execution_subjects"
+                "(subject_type, subject_id, workflow_kind, binding_status, created_at, updated_at, metadata_json) "
+                "VALUES ('task', ?, 'human_request', 'active', '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z', "
+                "json_object('dispatch_inflight', ?))",
+                (task_id, attempt_id),
+            )
+        before = self._snapshot()
+
+        with self.assertRaisesRegex(source_providers.RebuildRefused, f"Worker launch {attempt_id}"):
+            storage.init_database(self.db)
+
+        self.assertEqual(self._snapshot(), before)
+        self.assertFalse(source_providers.backup_path(self.db).exists())
