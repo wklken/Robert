@@ -257,6 +257,18 @@ def _tapd_items(discussions, events, attempt_id):
         revision=attempt_id,
         **_limits(dropped, kept),
     )
+    responses = requests[0].get("operator_responses") if requests else None
+    if responses:
+        kept, dropped = _newest_within(responses, _TAPD_BUDGETS["request"])
+        yield ContextItem(
+            "operator-responses",
+            "Accepted operator replies for this request",
+            "Controller work item events",
+            content=kept,
+            requirement="required",
+            revision=attempt_id,
+            **_limits(dropped, kept),
+        )
     for index, discussion in enumerate(discussions, 1):
         suffix = "" if len(discussions) == 1 else f"-{index}"
         source = discussion.get("url") or "TAPD ticket"

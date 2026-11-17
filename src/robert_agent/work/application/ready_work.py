@@ -1,6 +1,6 @@
 """Prepare work already admitted by operators or durable workflows."""
 
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, RemediationStatus, TaskKind
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, RemediationStatus, SourceProvider, TaskKind
 
 import json
 import subprocess
@@ -319,7 +319,7 @@ def prepare_detected_local_tasks(
     return prepared
 
 
-def prepare_github_operator_tasks(
+def prepare_operator_tasks(
     conn,
     data_dir,
     db_path,
@@ -334,14 +334,14 @@ def prepare_github_operator_tasks(
     config_result=None,
 ):
     from robert_agent.delivery.lock import task_publication_lock
-    from robert_agent.work import operator_queries as github_operator
+    from robert_agent.work import operator_queries
 
-    for pending in github_operator.pending_tasks(conn, [repo_id]):
+    for pending in operator_queries.pending_tasks(conn, [repo_id]):
         if dispatch_budget["remaining"] <= 0:
             break
-        if github_operator.blocked(conn, pending):
+        if operator_queries.blocked(conn, pending):
             continue
-        observed, source = github_operator.source_read(conn, pending)
+        observed, source = operator_queries.source_read(conn, pending)
         if not observed:
             continue
         task_id = pending["task_id"]
@@ -349,9 +349,11 @@ def prepare_github_operator_tasks(
         with task_publication_lock(db_path, task_id) as acquired:
             if not acquired:
                 continue
-            current = next(iter(github_operator.pending_tasks(conn, [repo_id], task_id=task_id)), None)
-            if not current or github_operator.blocked(conn, current):
+            current = next(iter(operator_queries.pending_tasks(conn, [repo_id], task_id=task_id)), None)
+            if not current or operator_queries.blocked(conn, current):
                 continue
+            provider = current["provider"]
+            source_name = "TAPD" if provider == SourceProvider.TAPD else "GitHub"
             context_task = current["parent_task_id"]
             events = []
             seen = set()
@@ -405,11 +407,11 @@ def prepare_github_operator_tasks(
                 authorized = list(events[:1])
             reason = None
             if not isinstance(source, dict) or "body" not in source:
-                reason = "github_operator_context_unavailable"
+                reason = f"{provider}_operator_context_unavailable"
             elif source.get("state", "").lower() != "open":
-                reason = "github_operator_source_closed"
+                reason = f"{provider}_operator_source_closed"
             elif not authorized:
-                reason = "github_operator_authorization_unavailable"
+                reason = f"{provider}_operator_authorization_unavailable"
             if reason:
                 if work_application_lifecycle.finalize_failed_task(
                     conn, task_id, current["workstream_id"], run_now, {"status": reason}
@@ -418,8 +420,11 @@ def prepare_github_operator_tasks(
                         conn,
                         current["work_item_id"],
                         event_type="execution_failed",
-                        idempotency_key="github-operator-failed:" + task_id,
-                        body="GitHub operator request stopped: " + reason + ". Inspect the source and retry execution.",
+                        idempotency_key=f"{provider}-operator-failed:" + task_id,
+                        body=source_name
+                        + " operator request stopped: "
+                        + reason
+                        + ". Inspect the source and retry execution.",
                         metadata={"task_id": task_id, "reason_code": reason},
                         now=run_now,
                     )
@@ -473,13 +478,13 @@ def prepare_github_operator_tasks(
             except ControlDeadlineExceeded:
                 raise
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-                worktree_result = {"ok": False, "status": "github_operator_worktree_unavailable"}
+                worktree_result = {"ok": False, "status": f"{provider}_operator_worktree_unavailable"}
             # Cancellation and source reconciliation may run during Git I/O.
-            current = next(iter(github_operator.pending_tasks(conn, [repo_id], task_id=task_id)), None)
+            current = next(iter(operator_queries.pending_tasks(conn, [repo_id], task_id=task_id)), None)
             if (
                 not current
-                or github_operator.blocked(conn, current)
-                or github_operator.source_read(conn, current) != (observed, source)
+                or operator_queries.blocked(conn, current)
+                or operator_queries.source_read(conn, current) != (observed, source)
             ):
                 continue
             info = preparation.create_task_attempt_and_prompt(
