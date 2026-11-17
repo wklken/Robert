@@ -101,6 +101,33 @@ class TapdBackportTests(TapdCycleCase):
         self.cycle()
         self.assertEqual(self.backport_tasks(), tasks)
 
+    def test_mixed_html_fenced_commands_stay_context_after_scan_and_admission(self):
+        history = "cherry-pick #10 to release/1.25"
+        contexts = (
+            f"```html\n<span>example</span>\n{history}\n```",
+            f"~~~html\n<div>example</div>\n{history}\n~~~",
+            f"<p>HTML outside the fence</p>\n```\n{history}\n```",
+        )
+        self.scan(
+            *(comment(str(index), "@robert-wklken 请分析历史记录\n" + body) for index, body in enumerate(contexts, 2))
+        )
+        saved = self.query("SELECT authorization_status,payload_json FROM github_events")
+        self.assertEqual(len(saved), len(contexts))
+        for authorization, payload in saved:
+            event = json.loads(payload)
+            with self.subTest(comment_id=event["comment_id"]):
+                self.assertEqual(authorization, "authorized_trigger")
+                self.assertIn(history, event["body"])
+                self.assertIsNone(event["backport_request"])
+        self.cycle()
+        tasks = self.backport_tasks()
+        self.assertTrue(tasks)
+        self.assertEqual({task[2] for task in tasks}, {"comment-analysis"})
+        self.assertTrue(all(not json.loads(task[5]).get("target_base_branch") for task in tasks))
+        self.assertEqual(
+            self.query("SELECT COUNT(*) FROM github_events WHERE event_fingerprint LIKE '%:backport:%'"), [(0,)]
+        )
+
     def test_legacy_event_without_parsed_request_does_not_reparse_display_body(self):
         self.scan(
             comment(

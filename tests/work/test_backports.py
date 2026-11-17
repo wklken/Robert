@@ -33,3 +33,14 @@ class BackportCommandTests(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 self.assertIsNone(backports.parse_request(text, "robert"))
+
+    def test_html_examples_in_fences_cannot_supply_or_hide_body_commands(self):
+        for example in ("<span>example</span>", "<pre>", "</blockquote>"):
+            for fence in ("```", "~~~"):
+                with self.subTest(example=example, fence=fence):
+                    body = f"{fence}html\n{example}\ncherry-pick #10 to release/old\n{fence}"
+                    self.assertIsNone(backports.parse_request(body, "robert"))
+                    request = backports.parse_request(body + "\n@robert cherry-pick #11 to release/current", "robert")
+                    self.assertIsNotNone(request)
+                    self.assertEqual(request.source_pr, 11)
+                    self.assertEqual(request.targets, ("release/current",))
