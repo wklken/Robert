@@ -37,6 +37,23 @@ class WorkspaceResolutionTests(unittest.TestCase):
         self.assertEqual(result["mode"], "new_branch")
         self.assertTrue(result["worktree_path"].startswith(str(self.repo_root / ".worktrees")))
 
+    def test_task_selected_base_reaches_every_workspace_mode(self):
+        for mode in ("new_branch", "existing_pr", "review_pr", "analysis"):
+            with self.subTest(mode=mode):
+                result = resolve_task_workspace(
+                    self.repo,
+                    {"workspace_mode": mode},
+                    {
+                        "number": 42,
+                        "branch_slug": "grants",
+                        "head_branch": "codex/release-grants",
+                        "base_branch": "release/1.25",
+                    },
+                    dry_run=True,
+                )
+                self.assertEqual(result["base_branch"], "release/1.25")
+                self.assertIn("release/1.25", result.get("start_point") or result.get("base_ref", ""))
+
     def test_classification_uses_artifact_directory(self):
         result = resolve_task_workspace(
             self.repo,

@@ -88,6 +88,11 @@ def attach_tapd_discussions(conn, runtime_context, workstream_id, events):
         runtime_context["origin_type"] = SourceProvider.TAPD.value
         runtime_context["tapd_discussions"] = work_queries.tapd_discussions(conn, workstream_id)
         runtime_context["tapd_pull_requests"] = work_queries.tapd_pull_requests(conn, events[0]["source_key"])
+        if backport := events[0].get("backport"):
+            runtime_context["backport"] = {
+                **backport,
+                "source_pr_url": f"https://github.com/{events[0]['repo']}/pull/{backport['source_pr']}",
+            }
 
 
 def upsert_route_decision(conn, task_id, route_result, run_now):
@@ -527,6 +532,7 @@ def create_task_attempt_and_prompt(
         **({supervision_lineage.LINEAGE_FIELD: lineage_key} if lineage_key else {}),
         "review_input_policy": task["review_input_policy"],
         "request_event_fingerprint": event["event_fingerprint"],
+        **({"target_base_branch": event["base_branch"]} if event.get("base_branch") else {}),
         **(
             {"refreshed_context": related_events}
             if existing

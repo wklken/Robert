@@ -65,6 +65,30 @@ def audit_types(actions, output_type="new_pr"):
 
 
 class TapdPullRequestContractTests(unittest.TestCase):
+    def test_backport_audit_rejects_other_target_base_and_original_branch(self):
+        actions = normalize([PUSH, OPEN_PR, COMMENT])["planned_github_actions"]
+        result = {
+            "output_type": "new_pr",
+            "planned_github_actions": actions,
+            "consumed_event_fingerprints": ["tapd-comment:tapd.example/100/1"],
+            "verification": [VERIFIED],
+        }
+        target_scope = {**SCOPE, "base_branch": "release/1.25", "branch_name": "codex/release-grants"}
+        for name, value in (("base", "main"), ("head", SCOPE["branch_name"])):
+            with self.subTest(field=name):
+                actions[1].update(base="release/1.25", head="codex/release-grants")
+                actions[0]["branch"] = "codex/release-grants"
+                actions[1][name] = value
+                checked = audit.audit_result(
+                    result,
+                    ["push_existing_pr", "open_pr", "comment"],
+                    expected_output="new_pr",
+                    origin_type="tapd",
+                    action_scope=target_scope,
+                )
+                self.assertFalse(checked["ok"], checked)
+                self.assertIn("outside", checked["safe_error"])
+
     def test_open_pr_marker_carries_only_the_public_reference(self):
         actions = normalize([PUSH, OPEN_PR, COMMENT])["planned_github_actions"]
         body = actions[1]["body"]
