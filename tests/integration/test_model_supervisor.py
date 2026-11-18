@@ -2,8 +2,10 @@ from contextlib import closing
 import json
 import sqlite3
 import sys
+from unittest.mock import patch
 
 from tests.support.pr_remediation_integration import PrRemediationIntegrationFixture
+from robert_agent.runtime.cycle import with_python_bin
 from robert_agent.supervision import decisions
 from robert_agent.work.application import remediation_requests
 
@@ -63,6 +65,166 @@ class ModelPrSupervisionTests(PrRemediationIntegrationFixture):
             self.assertEqual([event["task_kind"] for event in events], ["merge_conflict_remediation"])
             # CI remains a fact, but only the model-selected conflict action runs.
             self.assertEqual(conn.execute("SELECT count(*) FROM pr_remediation_episodes").fetchone()[0], 2)
+
+    def test_direct_dispatch_prioritizes_conflict_without_model_approval(self):
+        self.repo["pr_automation"]["dispatch_mode"] = "direct"
+        config = {"repos": [self.repo], "supervision": {"mode": "decide"}, "python_bin": sys.executable}
+        runtime_repo = with_python_bin(self.repo, config)
+        root_id = "github:example/backend#1"
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            for mergeable, expected in (
+                (None, []),
+                (False, ["merge_conflict_remediation"]),
+                (True, ["ci_remediation"]),
+            ):
+                with self.subTest(mergeable=mergeable):
+                    now = "2026-07-26T00:01:00+00:00"
+                    events = remediation_requests.collect_pr_remediation_decisions(
+                        conn, "repo:example/backend", runtime_repo, self.runner(mergeable=mergeable), now, config=config
+                    )
+                    self.assertEqual([event["task_kind"] for event in events], expected)
+                    observation = decisions.snapshot(conn, root_id, config, now)
+                    self.assertEqual(observation["candidates"], [])
+                    self.assertEqual(decisions.read(conn, root_id), {})
+
+    def test_direct_dispatch_rechecks_daemon_enabled_with_supervision_off(self):
+        self.repo["pr_automation"]["dispatch_mode"] = "direct"
+        config = {
+            "ok": True,
+            "config_path": str(self.db_path.with_suffix(".yml")),
+            "db_path": str(self.db_path),
+            "repos": [self.repo],
+            "supervision": {"mode": "off"},
+            "daemon": {"enabled": True},
+        }
+        edited = {**config, "daemon": {"enabled": False}}
+        with (
+            closing(sqlite3.connect(self.db_path)) as conn,
+            conn,
+            patch("robert_agent.configuration.command.validate_config", return_value=edited),
+        ):
+            self.assertEqual(
+                remediation_requests.collect_pr_remediation_decisions(
+                    conn,
+                    "repo:example/backend",
+                    self.repo,
+                    self.runner(),
+                    "2026-07-26T00:01:00+00:00",
+                    config=config,
+                ),
+                [],
+            )
+
+    def test_direct_dispatch_leaves_failed_attempt_retry_to_model(self):
+        self.repo["pr_automation"]["dispatch_mode"] = "direct"
+        config = {"repos": [self.repo], "supervision": {"mode": "decide"}}
+        now = "2026-07-26T00:01:00+00:00"
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            events = remediation_requests.collect_pr_remediation_decisions(
+                conn, "repo:example/backend", self.repo, self.runner(), now, config=config
+            )
+            self.assertEqual([event["task_kind"] for event in events], ["merge_conflict_remediation"])
+            conn.execute(
+                "UPDATE pr_remediation_episodes SET attempt_count = 1 WHERE episode_kind = 'merge_conflict' AND status = 'open'"
+            )
+            self.assertEqual(
+                remediation_requests.collect_pr_remediation_decisions(
+                    conn, "repo:example/backend", self.repo, self.runner(), now, config=config
+                ),
+                [],
+            )
+            observation = decisions.snapshot(conn, "github:example/backend#1", config, now)
+            self.assertEqual(
+                [(item["action"], item["facts"]["attempt_count"]) for item in observation["candidates"]],
+                [("resolve_conflict", 1)],
+            )
+
+    def test_direct_dispatch_resumes_when_late_ci_evidence_is_available(self):
+        self.repo["pr_automation"]["dispatch_mode"] = "direct"
+        config = {"repos": [self.repo], "supervision": {"mode": "decide"}}
+        runner = self.runner(mergeable=True)
+        command = ("gh", "run", "view", "--repo", "example/backend", "--job", "501", "--log-failed")
+        runner.responses[command] = ""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            args = (conn, "repo:example/backend", self.repo, runner)
+            before = remediation_requests.collect_pr_remediation_decisions(
+                *args, "2026-07-26T00:01:00+00:00", config=config
+            )
+            self.assertEqual(before, [])
+            old_episode = conn.execute(
+                "SELECT episode_id, status FROM pr_remediation_episodes WHERE episode_kind = 'ci'"
+            ).fetchone()
+            self.assertEqual(old_episode[1], "exhausted")
+            runner.responses[command] = "FAIL tests/test_api.py expected 1 got 2"
+            after = remediation_requests.collect_pr_remediation_decisions(
+                *args, "2026-07-26T00:03:00+00:00", config=config
+            )
+            self.assertEqual([event["task_kind"] for event in after], ["ci_remediation"])
+            evidence = after[0]["metadata"]["remediation"]
+            self.assertEqual(evidence["episode_id"], old_episode[0])
+            self.assertTrue(evidence["failure_signature"])
+            self.assertIn("expected 1 got 2", evidence["failure_summary"])
+            self.assertEqual(
+                conn.execute("SELECT first_seen_at, attempt_count FROM pr_remediation_episodes").fetchone(),
+                ("2026-07-26T00:01:00+00:00", 0),
+            )
+
+    def test_late_ci_evidence_does_not_reopen_an_already_claimed_episode(self):
+        self.repo["pr_automation"]["dispatch_mode"] = "direct"
+        config = {"repos": [self.repo], "supervision": {"mode": "decide"}}
+        runner = self.runner(mergeable=True)
+        command = ("gh", "run", "view", "--repo", "example/backend", "--job", "501", "--log-failed")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            args = (conn, "repo:example/backend", self.repo, runner)
+            first = remediation_requests.collect_pr_remediation_decisions(
+                *args, "2026-07-26T00:01:00+00:00", config=config
+            )
+            self.assertEqual([event["task_kind"] for event in first], ["ci_remediation"])
+            log = runner.responses[command]
+            runner.responses[command] = ""
+            self.assertEqual(
+                remediation_requests.collect_pr_remediation_decisions(
+                    *args, "2026-07-26T00:02:00+00:00", config=config
+                ),
+                [],
+            )
+            runner.responses[command] = log
+            self.assertEqual(
+                remediation_requests.collect_pr_remediation_decisions(
+                    *args, "2026-07-26T00:03:00+00:00", config=config
+                ),
+                [],
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT e.status, b.binding_status FROM pr_remediation_episodes e "
+                    "JOIN execution_subjects b ON b.subject_id = e.episode_id"
+                ).fetchone(),
+                ("exhausted", "terminal"),
+            )
+
+    def test_direct_dispatch_leaves_unsupported_ci_visible_to_supervisor(self):
+        self.repo["pr_automation"]["dispatch_mode"] = "direct"
+        config = {"repos": [self.repo], "supervision": {"mode": "decide"}}
+        runner = self.runner(mergeable=True)
+        for command, response in runner.responses.items():
+            if any("/actions/runs?head_sha=" in arg for arg in command):
+                response["workflow_runs"][0]["conclusion"] = "cancelled"
+        now = "2026-07-26T00:01:00+00:00"
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            self.assertEqual(
+                remediation_requests.collect_pr_remediation_decisions(
+                    conn, "repo:example/backend", self.repo, runner, now, config=config
+                ),
+                [],
+            )
+            observation = decisions.snapshot(conn, "github:example/backend#1", config, now)
+            self.assertEqual(observation["candidates"], [])
+            self.assertEqual([item["status"] for item in observation["context"]["episodes"]], ["exhausted"])
+            self.assertEqual(
+                conn.execute("SELECT notification_type FROM notifications").fetchall(),
+                [("pr_remediation_manual_conclusion",)],
+            )
 
     def test_source_revision_change_invalidates_the_model_choice(self):
         now = "2026-07-26T00:01:00+00:00"

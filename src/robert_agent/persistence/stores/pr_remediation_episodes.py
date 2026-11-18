@@ -1,10 +1,10 @@
 """Shared stores operations for pr_remediation_episodes."""
 
-from robert_agent.foundation.contracts.work import RemediationStatus
+from robert_agent.foundation.contracts.work import RemediationStatus, WorkstreamLifecycle
 
 from robert_agent.persistence.expressions import sql_constant
 
-from sqlalchemy import update, bindparam, and_, not_, null, case, func
+from sqlalchemy import update, bindparam, and_, not_, null, case, func, select
 from sqlalchemy.dialects.sqlite import insert
 
 
@@ -136,6 +136,41 @@ def insert_for_create_episode(
             "p9": value_10,
         },
     )
+
+
+def reopen_unclaimed_ci_episode(conn, episode_id, now):
+    episodes = tables["pr_remediation_episodes"]
+    bindings = tables["execution_subjects"]
+    streams = tables["workstreams"]
+    already_claimed = (
+        select(bindings.c.subject_id)
+        .where(bindings.c.subject_type == "remediation_episode", bindings.c.subject_id == episodes.c.episode_id)
+        .exists()
+    )
+    open_workstream = (
+        select(streams.c.workstream_id)
+        .where(
+            streams.c.workstream_id == episodes.c.workstream_id,
+            streams.c.lifecycle != WorkstreamLifecycle.CANCELED.value,
+        )
+        .exists()
+    )
+    stmt = (
+        update(episodes)
+        .values(status=RemediationStatus.OPEN.value, updated_at=bindparam("now"), terminal_at=None)
+        .where(
+            episodes.c.episode_id == bindparam("episode_id_value"),
+            episodes.c.episode_kind == "ci",
+            episodes.c.status == RemediationStatus.EXHAUSTED.value,
+            episodes.c.attempt_count == 0,
+            episodes.c.last_task_id.is_(None),
+            episodes.c.result_head_sha.is_(None),
+            func.json_extract(episodes.c.metadata_json, "$.last_transition_reason") == "failure_evidence_unavailable",
+            ~already_claimed,
+            open_workstream,
+        )
+    )
+    return statements.write(conn, stmt, {"episode_id_value": episode_id, "now": now})
 
 
 def record_task_started(conn, task_id, now, episode_id):

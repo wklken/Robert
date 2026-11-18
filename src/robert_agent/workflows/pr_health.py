@@ -7,8 +7,10 @@ import json
 import re
 import subprocess
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from robert_agent.security import redaction
+from robert_agent.security.text import strip_ansi
 from robert_agent.foundation.commands import run_command
 
 
@@ -20,7 +22,6 @@ MANUAL_CONCLUSIONS = {
     "startup_failure",
     "timed_out",
 }
-ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 TIMESTAMP_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b")
 WHITESPACE_RE = re.compile(r"[ \t]+")
 
@@ -40,15 +41,32 @@ def fetch_pr_snapshot(repo_full_name, number, runner=subprocess.run):
     base = _mapping(payload.get("base"))
     head_repo = _mapping(head.get("repo"))
     author = _mapping(payload.get("user"))
+    state = payload.get("state") or "open"
+    merged = bool(payload.get("merged") or payload.get("merged_at"))
+    base_ref = base.get("ref") or ""
+    base_sha = base.get("sha") or ""
+    if state == "open" and not merged:
+        if not base_ref:
+            return None
+        # GitHub's PR base SHA can lag the branch even after mergeability changes.
+        ref = github_client.try_read_json(
+            ["gh", "api", f"repos/{repo_full_name}/git/ref/heads/{quote(base_ref, safe='/')}"],
+            runner=runner,
+        )
+        if not isinstance(ref, dict) or ref.get("ref") != f"refs/heads/{base_ref}":
+            return None
+        base_sha = _mapping(ref.get("object")).get("sha") or ""
+        if not base_sha:
+            return None
     return {
-        "state": payload.get("state") or "open",
-        "merged": bool(payload.get("merged") or payload.get("merged_at")),
+        "state": state,
+        "merged": merged,
         "mergeable": payload.get("mergeable"),
         "head_sha": head.get("sha") or "",
         "head_ref": head.get("ref") or "",
         "head_repo_full_name": head_repo.get("full_name") or "",
-        "base_sha": base.get("sha") or "",
-        "base_ref": base.get("ref") or "",
+        "base_sha": base_sha,
+        "base_ref": base_ref,
         "author_login": author.get("login") or "",
         "html_url": payload.get("html_url"),
         "updated_at": payload.get("updated_at"),
@@ -79,7 +97,7 @@ def _items(payload, key):
 
 
 def _normalize_failure_text(text):
-    without_ansi = ANSI_ESCAPE_RE.sub("", text or "")
+    without_ansi = strip_ansi(text or "")
     redacted_result = redaction.redact_text(without_ansi)
     if not redacted_result["ok"]:
         return ""
@@ -113,7 +131,7 @@ def failure_signature(failures):
 
 
 def _evidence(text, max_summary_chars):
-    clean_text = ANSI_ESCAPE_RE.sub("", text or "").strip()
+    clean_text = strip_ansi(text or "").strip()
     if not clean_text:
         return {
             "evidence_status": "unavailable",
@@ -169,15 +187,16 @@ def _workflow_observation(
         excerpts = []
         evidence_status = "available"
         for job in failed_jobs:
-            log = _try_run_text(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{repo_full_name}/actions/jobs/{job.get('id')}/logs",
-                ],
-                runner,
+            job_id = job.get("id")
+            log = (
+                _try_run_text(
+                    ["gh", "run", "view", "--repo", repo_full_name, "--job", str(job_id), "--log-failed"],
+                    runner,
+                )
+                if job_id
+                else None
             )
-            if log is None:
+            if not log or not strip_ansi(log).strip():
                 evidence_status = "unavailable"
                 continue
             excerpts.append(f"[job: {job.get('name') or job.get('id')}]\n{log}")

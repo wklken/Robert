@@ -105,6 +105,8 @@ routes:
 
 # Add a real repository before running config validate or starting Robert.
 # See docs/reference.md#configuration for a complete repository example.
+# PR remediation is opt-in per repository. Set pr_automation.dispatch_mode to
+# direct to dispatch the first eligible repair under supervision.mode: decide.
 repos: []
 
 # Optional operator chat; disabled unless explicitly configured.

@@ -820,9 +820,16 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             if command == ["gh", "api", "repos/x/y/pulls/4"]:
                 return Completed(
                     json.dumps(
-                        {"state": "open", "merged": False, "head": {"sha": original_sha}, "base": {"sha": "c" * 40}}
+                        {
+                            "state": "open",
+                            "merged": False,
+                            "head": {"sha": original_sha},
+                            "base": {"ref": "main", "sha": "d" * 40},
+                        }
                     )
                 )
+            if command == ["gh", "api", "repos/x/y/git/ref/heads/main"]:
+                return Completed(json.dumps({"ref": "refs/heads/main", "object": {"sha": "c" * 40}}))
             if command[:3] == ["git", "ls-remote", "--heads"]:
                 return Completed(f"{original_sha}\trefs/heads/feature\n")
             if command == ["git", "rev-parse", "HEAD"]:

@@ -606,6 +606,10 @@ helper、原子文件、stdout JSON 保持各自结果格式和完成条件。�
 
 CI 和冲突修复默认关闭，按仓库 `pr_automation` 显式开启；CI 还要求非空
 `check_allowlist`。Episode 将系统请求限制在当前 PR 的版本、次数和预算内。
+仓库可用 `pr_automation.dispatch_mode: direct` 直接派发每个版本的首次
+合规修复。开启冲突修复时，CI 修复等待 GitHub 确认可合并。修复任务失败后的
+合规重试仍由 `decide` 模式下的 Supervisor 决定，其余模式记录需处理通知。
+默认 `follow_supervision` 沿用现有监督策略。
 
 ```mermaid
 flowchart TD
@@ -616,7 +620,10 @@ flowchart TD
     Evidence -->|"是"| Episode["创建 / 更新绑定版本的 Episode"]
     Episode --> Budget{"次数、时间、成本与当前状态允许？"}
     Budget -->|"否"| Stop["exhausted / 需处理，保存通知"]
-    Budget -->|"是"| Task["受控系统 Task → update-existing-pr"]
+    Budget -->|"是"| Dispatch{"当前尝试需要模型授权？"}
+    Dispatch -->|"是"| Supervisor["等待 Supervisor 选择并授权"]
+    Dispatch -->|"否"| Task["受控系统 Task → update-existing-pr"]
+    Supervisor -->|"授权有效"| Task
     Task --> Worker["当前 PR worktree 修复并验证"]
     Worker --> Audit["审计修复证据与结果版本"]
     Audit --> Fresh{"发布前版本、分支与 PR 状态仍有效？"}

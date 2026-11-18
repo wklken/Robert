@@ -44,6 +44,14 @@ class ConfigV2Tests(ConfigV2Fixture):
                 if field == "version" and value == 1:
                     self.assertIn("docs/reference.md#configuration", result["safe_error"])
 
+    def test_pr_automation_direct_dispatch_is_an_explicit_repository_choice(self):
+        automation = self.validate()["repos"][0]["pr_automation"]
+        self.assertEqual(automation["dispatch_mode"], "follow_supervision")
+        self.config["repos"][0]["pr_automation"] = {"dispatch_mode": "direct", "conflict": {"enabled": True}}
+        self.assertEqual(self.validate()["repos"][0]["pr_automation"]["dispatch_mode"], "direct")
+        self.config["repos"][0]["pr_automation"]["dispatch_mode"] = "unknown"
+        self.assertIn("dispatch_mode", self.validate()["safe_error"])
+
     def test_duplicate_yaml_keys_fail(self):
         self.validate()
         self.path.write_text(self.path.read_text() + "\nversion: 2\n")

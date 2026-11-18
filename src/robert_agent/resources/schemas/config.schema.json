@@ -96,6 +96,10 @@
     "prAutomation": {
       "type": "object",
       "properties": {
+        "dispatch_mode": {
+          "enum": ["follow_supervision", "direct"],
+          "default": "follow_supervision"
+        },
         "conflict": {
           "type": "object",
           "properties": {

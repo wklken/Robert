@@ -20,6 +20,8 @@ class PublishRemediationTests(PublicationFixture):
 
         def fake_run(command, **_kwargs):
             calls.append(command)
+            if command == ["gh", "api", "repos/x/y/git/ref/heads/main"]:
+                return Completed(json.dumps({"ref": "refs/heads/main", "object": {"sha": "base-1"}}))
             if command == ["gh", "api", "repos/x/y/pulls/42"]:
                 return Completed(
                     json.dumps(
@@ -93,6 +95,8 @@ class PublishRemediationTests(PublicationFixture):
 
         def fake_run(command, **_kwargs):
             calls.append(command)
+            if command == ["gh", "api", "repos/x/y/git/ref/heads/main"]:
+                return Completed(json.dumps({"ref": "refs/heads/main", "object": {"sha": "base-1"}}))
             if command == ["gh", "api", "repos/x/y/pulls/42"]:
                 return Completed(
                     json.dumps(
@@ -149,20 +153,26 @@ class PublishRemediationTests(PublicationFixture):
 
         class Completed:
             returncode = 0
-            stdout = json.dumps(
-                {
-                    "state": "open",
-                    "merged": False,
-                    "head": {"sha": "head-new", "ref": "codex/fix"},
-                    "base": {"sha": "base-1", "ref": "main"},
-                }
-            )
             stderr = ""
+
+            def __init__(self, stdout):
+                self.stdout = stdout
+
+        pr_payload = json.dumps(
+            {
+                "state": "open",
+                "merged": False,
+                "head": {"sha": "head-new", "ref": "codex/fix"},
+                "base": {"sha": "base-1", "ref": "main"},
+            }
+        )
 
         def fake_run(command, **_kwargs):
             calls.append(command)
+            if command == ["gh", "api", "repos/x/y/git/ref/heads/main"]:
+                return Completed(json.dumps({"ref": "refs/heads/main", "object": {"sha": "base-1"}}))
             if command == ["gh", "api", "repos/x/y/pulls/42"]:
-                return Completed()
+                return Completed(pr_payload)
             raise AssertionError(command)
 
         result = publish.publish_ready_actions(
@@ -225,6 +235,8 @@ class PublishRemediationTests(PublicationFixture):
                 self.stderr = stderr
 
         def fake_run(command, **_kwargs):
+            if command == ["gh", "api", "repos/x/y/git/ref/heads/main"]:
+                return Completed(json.dumps({"ref": "refs/heads/main", "object": {"sha": "base-1"}}))
             if command == ["gh", "api", "repos/x/y/pulls/42"]:
                 return Completed(
                     stdout=json.dumps(
@@ -303,6 +315,8 @@ class PublishRemediationTests(PublicationFixture):
 
         def fake_run(command, **_kwargs):
             calls.append(command)
+            if command == ["gh", "api", "repos/x/y/git/ref/heads/main"]:
+                return Completed(json.dumps({"ref": "refs/heads/main", "object": {"sha": "base-1"}}))
             if command == ["gh", "api", "repos/x/y/pulls/42"]:
                 return Completed(
                     json.dumps(

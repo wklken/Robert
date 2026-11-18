@@ -6,10 +6,12 @@ from pathlib import Path
 from robert_agent.persistence.dialects import sqlite as db_sqlite
 
 
-def current_config(conn, config):
+def current_config(conn, config, *, reload_for_dispatch=False):
     config = config or {}
     config_path = config.get("config_path")
-    if not config_path or (config.get("supervision") or {}).get("mode") not in {
+    if not config_path:
+        return config
+    if not reload_for_dispatch and (config.get("supervision") or {}).get("mode") not in {
         SupervisionMode.RECOVER_KNOWN.value,
         SupervisionMode.DECIDE.value,
     }:

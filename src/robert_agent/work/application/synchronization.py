@@ -65,7 +65,9 @@ def context_digest(repo, known_workstreams, *, config=None):
 
 def scan_repo(config, repo, session, hints):
     db_path = config["db_path"]
-    recorded = github_recording.RecordingRunner(session)
+    automation = repo.get("pr_automation") or {}
+    ci = automation.get("ci") or {}
+    recorded = github_recording.RecordingRunner(session, max_job_log_chars=ci.get("max_failure_summary_chars", 0))
     with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
         repo_id = work_repositories.upsert_repo(conn, repo)
         known = {
@@ -129,10 +131,8 @@ def scan_repo(config, repo, session, hints):
             remote_states[(source_type, number)] = github_sources.read_source_state(
                 repo["full_name"], source_type, number, recorded
             )
-            automation = repo.get("pr_automation") or {}
             if health_candidate and any((automation.get(k) or {}).get("enabled") for k in ("ci", "conflict")):
                 snapshot = pr_health.fetch_pr_snapshot(repo["full_name"], number, runner=recorded)
-                ci = automation.get("ci") or {}
                 if (
                     snapshot
                     and snapshot.get("author_login", "").casefold() == repo["github_account"].casefold()

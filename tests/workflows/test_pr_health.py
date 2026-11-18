@@ -39,13 +39,17 @@ class PrHealthTests(unittest.TestCase):
                         "repo": {"full_name": "example/backend"},
                     },
                     "base": {
-                        "sha": "base-1",
-                        "ref": "main",
+                        "sha": "old-base",
+                        "ref": "release/#test",
                     },
                     "user": {"login": "robert-bot"},
                     "html_url": "https://github.com/example/backend/pull/13",
                     "updated_at": "2026-07-26T00:00:00Z",
-                }
+                },
+                ("gh", "api", "repos/example/backend/git/ref/heads/release/%23test"): {
+                    "ref": "refs/heads/release/#test",
+                    "object": {"sha": "base-1"},
+                },
             }
         )
 
@@ -65,7 +69,7 @@ class PrHealthTests(unittest.TestCase):
                 "head_ref": "codex/fix",
                 "head_repo_full_name": "example/backend",
                 "base_sha": "base-1",
-                "base_ref": "main",
+                "base_ref": "release/#test",
                 "author_login": "robert-bot",
                 "html_url": "https://github.com/example/backend/pull/13",
                 "updated_at": "2026-07-26T00:00:00Z",
@@ -90,7 +94,15 @@ class PrHealthTests(unittest.TestCase):
         snapshot = pr_health.fetch_pr_snapshot(
             "example/backend",
             14,
-            runner=FixtureRunner({("gh", "api", "repos/example/backend/pulls/14"): payload}),
+            runner=FixtureRunner(
+                {
+                    ("gh", "api", "repos/example/backend/pulls/14"): payload,
+                    ("gh", "api", "repos/example/backend/git/ref/heads/main"): {
+                        "ref": "refs/heads/main",
+                        "object": {"sha": "base"},
+                    },
+                }
+            ),
         )
         self.assertIsNone(snapshot["mergeable"])
         self.assertEqual(snapshot["head_repo_full_name"], "fork/backend")
@@ -111,6 +123,24 @@ class PrHealthTests(unittest.TestCase):
                 ),
             )
         )
+
+    def test_fetch_pr_snapshot_requires_an_observed_base_branch(self):
+        from robert_agent.workflows import pr_health
+
+        runner = FixtureRunner(
+            {
+                ("gh", "api", "repos/example/backend/pulls/13"): {
+                    "state": "open",
+                    "mergeable": False,
+                    "head": {"sha": "head"},
+                    "base": {"ref": "main", "sha": "possibly-stale"},
+                },
+                ("gh", "api", "repos/example/backend/git/ref/heads/main"): subprocess.CalledProcessError(
+                    1, ["gh", "api"]
+                ),
+            }
+        )
+        self.assertIsNone(pr_health.fetch_pr_snapshot("example/backend", 13, runner=runner))
 
     def test_collect_ci_observations_aggregates_redacted_actions_failure(self):
         from robert_agent.workflows import pr_health
@@ -160,8 +190,13 @@ class PrHealthTests(unittest.TestCase):
             },
             (
                 "gh",
-                "api",
-                "repos/example/backend/actions/jobs/501/logs",
+                "run",
+                "view",
+                "--repo",
+                "example/backend",
+                "--job",
+                "501",
+                "--log-failed",
             ): (
                 "\x1b[31m2026-07-26T00:00:01Z FAIL /home/runner/work/backend/tests/test_api.py: expected 1 got 2\x1b[0m"
             ),
@@ -253,13 +288,23 @@ class PrHealthTests(unittest.TestCase):
             },
             (
                 "gh",
-                "api",
-                "repos/example/backend/actions/jobs/501/logs",
+                "run",
+                "view",
+                "--repo",
+                "example/backend",
+                "--job",
+                "501",
+                "--log-failed",
             ): "FAIL tests/test_api.py expected 1 got 2",
             (
                 "gh",
-                "api",
-                "repos/example/backend/actions/jobs/502/logs",
+                "run",
+                "view",
+                "--repo",
+                "example/backend",
+                "--job",
+                "502",
+                "--log-failed",
             ): subprocess.CalledProcessError(1, ["gh", "api"]),
             (
                 "gh",
