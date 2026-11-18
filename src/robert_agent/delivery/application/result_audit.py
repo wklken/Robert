@@ -16,6 +16,7 @@ from robert_agent.persistence.stores import attempts as db_write_attempts
 from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import worker_results as db_write_worker_results
 from robert_agent.delivery.application import audit as audit_result
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.delivery import results
 from robert_agent.delivery.application import scope as result_scope
 from robert_agent.execution.application import evidence
@@ -235,6 +236,28 @@ def audit_completed_results(
             remediation_attestation=remediation_attestation,
             review_input_policy=task_metadata.get("review_input_policy", "required"),
         )
+        review = pre_pr_review.session(conn, task_id=payload["task_id"])
+        if review or task_metadata.get("pre_pr_review_required"):
+            metadata = values.json_object(result_row[7])
+            if (
+                not review
+                or not action_scope
+                or not pre_pr_review.matches_submission(
+                    review,
+                    payload["attempt_id"],
+                    metadata.get("submission_fingerprint"),
+                    head=action_scope.get("result_head_sha") or "",
+                    result_id=payload["result_id"],
+                )
+            ):
+                audit = {
+                    "ok": False,
+                    "status": AuditStatus.POLICY_VIOLATION.value,
+                    "violations": ["pre_pr_review_proof_mismatch"],
+                    "safe_error": "The final result is missing a matching review and disposition record.",
+                }
+            elif audit["status"] == "accepted":
+                audit["action_scope"]["pre_pr_review"] = review["proof"]
         if tapd_violation:
             audit = {
                 "ok": False,

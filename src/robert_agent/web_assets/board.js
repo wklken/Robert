@@ -255,6 +255,7 @@ const translations = {
     missingArtifact: "File absent on this host; the database contains only its reference.",
     reviewModels: "Review models started: {in_use} / {limit}",
     reviewModelsUnknown: "Review models: not reported",
+    reviewFinalCommit: "Final commit",
     requirement: "Requirement",
     noDescription: "No requirement description.",
     githubDescription: "This task comes from GitHub; the issue or PR body is the requirement.",
@@ -663,6 +664,7 @@ const translations = {
     missingArtifact: "当前机器没有此文件，数据库仅保存了文件引用。",
     reviewModels: "评审模型启动：{in_use} / {limit}",
     reviewModelsUnknown: "评审模型：未上报",
+    reviewFinalCommit: "最终提交",
     requirement: "需求描述",
     noDescription: "暂无需求描述。",
     githubDescription: "任务来自 GitHub，需求以 Issue / PR 正文为准。",
@@ -1690,7 +1692,7 @@ function attentionForCommand(detail, command) {
   )?.event_id;
 }
 function unknownReviewRunIds(detail) {
-  return (detail.tasks || []).flatMap(task => ((task.vote || task.review)?.runs || [])
+  return (detail.tasks || []).flatMap(task => ((task.vote || task.review || task.pre_pr_review)?.runs || [])
     .filter(run => run.can_abandon).map(run => run.run_id)).sort();
 }
 function updateComposerState(detail) {
@@ -1737,9 +1739,10 @@ function renderExecutionHistory(detail) {
     const counts = node("p", "attempt-counts");
     counts.append(node("span", "", attemptCounts(task.attempts)), node("code", "raw-detail", task.task_id));
     entry.append(counts);
-    if (task.vote || task.review) {
-      const review = task.vote || task.review;
+    if (task.vote || task.review || task.pre_pr_review) {
+      const review = task.vote || task.review || task.pre_pr_review;
       entry.append(node("p", "", `${label(review.status)} · ${review.head_sha ? review.head_sha.slice(0, 12) : t("pending")}`));
+      if (review.final_sha) entry.append(node("p", "raw-detail", `${t("reviewFinalCommit")} · ${review.final_sha}`));
       entry.append(node("p", "", review.process_pool
         ? t("reviewModels", { in_use: review.process_pool.in_use, limit: review.process_pool.limit })
         : t("reviewModelsUnknown")));

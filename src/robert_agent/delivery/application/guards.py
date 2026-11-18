@@ -1,6 +1,7 @@
 """application delivery guards responsibilities."""
 
 from robert_agent.delivery.application import scope as publication_scope
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.delivery.application import audit as audit_result
 from robert_agent.execution import operations as execution_operations
 from robert_agent.supervision import git as supervision_git
@@ -8,7 +9,8 @@ from robert_agent.supervision import git as supervision_git
 from robert_agent.delivery.application import outcomes as publication_outcomes
 from robert_agent.delivery import intents as intent_facts
 from robert_agent.delivery import values as publication_values
-from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
+import hashlib
 
 
 def publish_scope_violation(conn, action):
@@ -35,6 +37,31 @@ def publication_scope_guard(conn, action, recovery_guard=None):
     if conn is None:
         return None
     scope = publication_scope.trusted_action_scope(conn, action)
+    reviewed = pre_pr_review.session(conn, task_id=action.get("task_id"))
+    if (reviewed or pre_pr_review.required(conn, action.get("task_id"))) and (
+        not reviewed
+        or not scope
+        or not reviewed["proof"]
+        or scope.get("pre_pr_review") != reviewed["proof"]
+        or reviewed["final_result_id"] != action.get("result_id")
+    ):
+        return {
+            "ok": False,
+            "status": "publish_failed",
+            "retryable": False,
+            "safe_error": "The published result is missing a current pre-publication review proof.",
+        }
+    if reviewed and action["action_type"] == GitHubActionType.OPEN_PR:
+        body = publication_values.decode_json(action["metadata_json"]).get("body")
+        if not isinstance(body, str) or hashlib.sha256(body.encode()).hexdigest() != reviewed["proof"].get(
+            "body_sha256"
+        ):
+            return {
+                "ok": False,
+                "status": "publish_failed",
+                "retryable": False,
+                "safe_error": "The PR description differs from the reviewed submission.",
+            }
     if isinstance(scope, dict) and scope.get("supervision_repair"):
         try:
             supervision_git.binding(scope)

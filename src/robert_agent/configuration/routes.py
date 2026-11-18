@@ -14,6 +14,7 @@ ALLOWED_ROUTE_OVERRIDE_FIELDS = {
     "required_skills",
     "recommended_skills",
     "multi_agent_review",
+    "pre_pr_review",
     "multi_agent_vote",
 }
 
@@ -67,6 +68,8 @@ def resolve_route_config(config, repo, route_policy):
         repo.get("routes", {}).get(route_id),
         (f"repos.{repo.get('full_name', 'unknown-repository')}.routes.{route_id}"),
     )
+    if "pre_pr_review" in global_override or ("pre_pr_review" in repo_override and route_id != "new-pr"):
+        raise ValueError("pre_pr_review is only supported by repository routes.new-pr")
     result = dict(route_policy)
     for field in ALLOWED_ROUTE_OVERRIDE_FIELDS:
         if field in global_override:
@@ -85,6 +88,17 @@ def resolve_route_config(config, repo, route_policy):
     result.setdefault("effort", selected.get("default_effort", selected.get("effort", "default")))
     result.setdefault("required_skills", [])
     result.setdefault("recommended_skills", [])
+    if "pre_pr_review" in result:
+        review = result["pre_pr_review"]
+        names = review.get("workers") if isinstance(review, dict) and set(review) == {"workers"} else None
+        if (
+            not isinstance(names, list)
+            or not names
+            or any(not isinstance(name, str) or name not in by_name for name in names)
+            or len(set(names)) != len(names)
+        ):
+            raise ValueError("pre_pr_review.workers must name distinct configured workers")
+        result["pre_pr_review"] = {"workers": list(names)}
     if "multi_agent_review" in result:
         _validate_multi_review(result, workers)
     if "multi_agent_vote" in result:

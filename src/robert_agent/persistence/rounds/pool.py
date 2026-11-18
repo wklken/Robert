@@ -14,7 +14,7 @@ from robert_agent.persistence.queries import (
 )
 from robert_agent.persistence.queries import sqlite_master as db_read_sqlite_master
 
-RUN_TABLES = ("review_runs", "vote_runs")
+RUN_TABLES = ("review_runs", "vote_runs", "pre_pr_review_runs")
 
 
 def status(conn):
@@ -30,10 +30,12 @@ def status(conn):
             continue
         if "slot_reserved" not in columns:
             return None
-        count += statements.read(
-            conn,
-            select(func.count()).select_from(tables[table]).where(tables[table].c.slot_reserved == sql_constant(1)),
-        )[0][0]
+        run = tables[table]
+        occupied = select(func.count()).select_from(run).where(run.c.slot_reserved == sql_constant(1))
+        if table == "pre_pr_review_runs":
+            # Implementation and disposition hold the parent's regular task slot.
+            occupied = occupied.where(run.c.stage.not_in(("implement", "address_findings")))
+        count += statements.read(conn, occupied)[0][0]
     return {"limit": limit[0], "in_use": count}
 
 

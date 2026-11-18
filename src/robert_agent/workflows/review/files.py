@@ -303,15 +303,18 @@ def render_merged(manifest, records, evaluation):
     models = " + ".join(labels)
     distinct = len({record["model"] for record in records}) == len(records)
     mode = "多模型" if distinct and all(record["model"] != "default" for record in records) else "多 reviewer"
+    title = f"PR #{manifest['pr_number']}" if manifest["pr_number"] else "候选提交"
+    trigger = manifest.get("trigger_url") or manifest.get("trigger_event_fingerprint", manifest["round_id"])
+    context = f"；触发：{trigger}" if manifest["pr_number"] else ""
     lines = [
-        f"# PR #{manifest['pr_number']} Code Review 汇总报告",
+        f"# {title} Code Review 汇总报告",
         "",
         f"> 由 {models} {mode} review，主 agent 汇总整理。",
         "",
         "## Report",
         "",
         f"审查轮次：{manifest.get('round_no', manifest['round_id'])}；代码快照：{manifest['head_sha']}；"
-        f"目标分支：{manifest['base_ref']}；触发：{manifest.get('trigger_url') or manifest.get('trigger_event_fingerprint', manifest['round_id'])}。",
+        f"目标分支：{manifest['base_ref']}{context}。",
         "",
     ]
     for severity in SEVERITIES:

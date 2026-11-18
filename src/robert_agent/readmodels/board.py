@@ -26,6 +26,7 @@ from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.persistence.queries.readviews import task_history
 from robert_agent.persistence.queries.readviews import work_items as work_item_queries
 from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.persistence.rounds import vote as vote_store
 from robert_agent.readmodels.execution import (
     attempt_history,
@@ -502,6 +503,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
         "task_lifecycle": task["lifecycle"] if task else None,
         "execution": execution,
         "review": review_store.board_status(conn, task["task_id"]) if task else None,
+        "pre_pr_review": pre_pr_review.task_status(conn, task["task_id"]) if task else None,
         "vote": vote_store.board_status(conn, task["task_id"]) if task else None,
         "publication": {
             "failures": failures,
@@ -853,6 +855,7 @@ def get_work_item_detail(db_path, work_item_id):
                         "updated_at": task["updated_at"],
                         "attempts": attempts,
                         "review": review_store.board_status(conn, task["task_id"]),
+                        "pre_pr_review": pre_pr_review.task_status(conn, task["task_id"]),
                         "vote": vote_store.board_status(conn, task["task_id"]),
                         "publication_actions": publication_history(conn, task["task_id"]),
                     }

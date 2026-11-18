@@ -16,7 +16,7 @@ from robert_agent.supervision import git as supervision_git
 
 from robert_agent.delivery.application import scope as publication_scope
 from robert_agent.delivery.application import guards as publication_guards
-from robert_agent.delivery.application import tapd_comments
+from robert_agent.delivery.application import tapd_comments, reviewed_pr
 from robert_agent.foundation import tapd_identity
 from robert_agent.delivery import values as publication_values
 from robert_agent.delivery.comment_receipts import comment_records, match_comment
@@ -774,16 +774,61 @@ def publish_action(
         )
     if action["action_type"] == GitHubActionType.COMMENT:
         return publish_comment(action, run_command, conn=conn, recovery_guard=recovery_guard)
+    scope = publication_scope.trusted_action_scope(conn, action) or {}
+    review = scope.get("pre_pr_review")
+    if review and action["action_type"] in {GitHubActionType.PUSH_EXISTING_PR, GitHubActionType.OPEN_PR}:
+        if not reviewed_pr.base_is_current(scope, run_command):
+            return {
+                "ok": False,
+                "status": "publish_failed",
+                "retryable": False,
+                "safe_error": "The reviewed base revision changed or could not be verified.",
+            }
     if action["action_type"] == GitHubActionType.OPEN_PR:
-        return publish_open_pr(
+        if review:
+            target = publication_guards.push_target({**scope, "output_type": "new_pr"}, run_command)
+            if (
+                not reviewed_pr.delivered_head(conn, action, scope)
+                or not target
+                or not target["ok"]
+                or not reviewed_pr.verify_branch(
+                    scope,
+                    target["read_remote"],
+                    scope["branch_name"],
+                    review["head_sha"],
+                    run_command,
+                )
+            ):
+                return {
+                    "ok": False,
+                    "status": "publish_failed",
+                    "retryable": False,
+                    "safe_error": "The remote head does not match the verified reviewed result and push receipt.",
+                }
+        result = publish_open_pr(
             action,
             run_command,
             conn=conn,
             trusted_head_owner=trusted_head_owner,
             recovery_guard=recovery_guard,
         )
+        if (
+            review
+            and result["status"] == "published"
+            and not reviewed_pr.matches_remote_pr(
+                scope, publication_values.decode_json(action["metadata_json"]), result.get("external_id"), run_command
+            )
+        ):
+            return {
+                "ok": False,
+                "status": "publish_failed",
+                "safe_error": "GitHub PR may exist, but its revision or review description could not be verified.",
+            }
+        if review and result["status"] == "published":
+            result["result_head_sha"] = review["head_sha"]
+        return result
     if action["action_type"] == GitHubActionType.PUSH_EXISTING_PR:
-        action_scope = publication_scope.trusted_action_scope(conn, action)
+        action_scope = scope
         if isinstance(action_scope, dict) and action_scope.get("task_kind") in REMEDIATION_TASK_KINDS:
             return publish_remediation_push(
                 action,

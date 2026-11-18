@@ -14,6 +14,7 @@
 | [OpenClaw Issue 派单](issue-dispatch.md) | 两步提交、自动分类、Issue/PR 交付与建单恢复 |
 | [TAPD 来源](tapd.md) | @ 触发、标签选仓库、回评、澄清回复与单据结束 |
 | [操作员消息](operator-messaging.md) | OpenClaw 通知、提问、受认证回复与渠道接入边界 |
+| [新 PR 发布前 Review](pre-pr-review.md) | 按仓库启用、审查恢复、意见处理和发布门禁 |
 | [多模型 PR 评审](multi-model-review.md) | 作者白名单、并发、文件交接、审查与恢复 |
 | [项目记忆与证据阶段](project-memory.md) | 技术提示、审计、发布回执与部署证明 |
 | [多 Agent 投票](multi-agent-vote.md) | 显式触发、澄清、独立选票、汇总与发布 |

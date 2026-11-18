@@ -53,6 +53,8 @@ from robert_agent.workflows import pr_remediation as remediation
 from robert_agent.workflows import routes as route
 from robert_agent.workflows import routing as workflow_routing
 from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds import pre_pr_review
+import hashlib
 from robert_agent.persistence.rounds import vote as vote_store
 import json
 
@@ -199,6 +201,10 @@ def _refresh_prepared_task_locked(
     route_result = workflow_routing.effective_route(config_result, repo, event)
     if route_result["route_id"] != "update-existing-pr":
         return None
+    review = pre_pr_review.session(conn, task_id=state["task_id"])
+    if review and (review["deadline_at"] or review["snapshot_id"] or pre_pr_review.runs(conn, review["round_id"])):
+        # A retrigger can carry review evidence from an earlier attempt.
+        return None
     input_policy = route.review_input_policy(route_result["expected_output"], event)
     if (
         state["expected_output"] in {OutputType.UPDATE_EXISTING_PR, OutputType.REVIEW_COMMENT}
@@ -296,6 +302,8 @@ def _refresh_prepared_task_locked(
     db_write_tasks.update_for_refresh_prepared_task_locked_2(
         conn, input_policy, state["task_id"], event["event_fingerprint"]
     )
+    if review:
+        pre_pr_review.delete_unstarted(conn, review["round_id"])
     upsert_route_decision(conn, state["task_id"], route_result, run_now)
     attempt_metadata_row = db_records.first(
         db_read_attempts.find_metadata_json_by_attempt_id(conn, state["attempt_id"])
@@ -328,6 +336,37 @@ def _refresh_prepared_task_locked(
             conn, reason, "recorded", run_now, metadata={"task_id": state["task_id"], "safe_error": reason}
         )
     return prompt_path
+
+
+def bind_pre_pr_review(
+    conn, repo, event, related_events, plan, task_id, attempt_id, prompt_path, worktree_result, *, previous_review=None
+):
+    review_plan = plan
+    if previous_review:
+        review_plan = previous_review["request"]["plan"]
+    if review_plan and not pre_pr_review.session(conn, task_id=task_id):
+        request = {
+            "plan": review_plan,
+            "repo": {
+                key: repo[key]
+                for key in ("full_name", "repo_root", "worktree_root", "default_base_branch", "github_account")
+            },
+            "event": event,
+            "input_sha256": hashlib.sha256(json.dumps(related_events, sort_keys=True).encode()).hexdigest(),
+            "prompt_path": str(prompt_path),
+            "prompt_sha256": pre_pr_review.digest(prompt_path),
+            "branch": (worktree_result or {}).get("branch_name"),
+        }
+        previous = previous_review["request"] if previous_review else {}
+        if (
+            previous_review
+            and not previous_review["final_result_id"]
+            and previous_review["manifest"].get("candidate")
+            and all(request[key] == previous.get(key) for key in ("input_sha256", "repo", "branch"))
+        ):
+            pre_pr_review.rebind_for_retry(conn, previous_review, task_id, attempt_id)
+        else:
+            pre_pr_review.create(conn, task_id, request)
 
 
 def create_task_attempt_and_prompt(
@@ -534,6 +573,12 @@ def create_task_attempt_and_prompt(
         "request_event_fingerprint": event["event_fingerprint"],
         **({"target_base_branch": event["base_branch"]} if event.get("base_branch") else {}),
         **(
+            {"pre_pr_review_required": True}
+            if route_result.get("pre_pr_review_plan")
+            or (retrigger_wakeup_id and pre_pr_review.session(conn, task_id=parent_task_id))
+            else {}
+        ),
+        **(
             {"refreshed_context": related_events}
             if existing
             else {"refreshed_context": refreshed_context}
@@ -645,6 +690,18 @@ def create_task_attempt_and_prompt(
         run_now,
         run_now,
         json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
+    )
+    bind_pre_pr_review(
+        conn,
+        repo,
+        event,
+        related_events,
+        route_result.get("pre_pr_review_plan"),
+        task_id,
+        attempt_id,
+        prompt_path,
+        worktree_result,
+        previous_review=pre_pr_review.session(conn, task_id=parent_task_id) if retrigger_wakeup_id else None,
     )
     for artifact_type, path in [
         ("prompt", prompt_path),

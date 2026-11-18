@@ -4,6 +4,7 @@ from tests.support import PACKAGE_ROOT  # noqa: F401
 from tests.support import attempt_context as context_tests
 from robert_agent.work.application import preparation
 from robert_agent.foundation import values
+from robert_agent.persistence.rounds import pre_pr_review
 
 
 class TargetPromptTests(unittest.TestCase):
@@ -45,3 +46,18 @@ class TargetPromptTests(unittest.TestCase):
             {"summary": "retry"},
         )
         self.assertEqual(self.targets(Path(resumed["prompt_path"]).read_text()), expected)
+
+    def test_refresh_to_existing_pr_removes_the_unstarted_candidate_gate(self):
+        pre_pr_review.create(self.conn, self.task_id, {"plan": {}})
+        self.conn.execute(
+            "UPDATE tasks SET metadata_json=json_set(metadata_json, '$.pre_pr_review_required', 1) WHERE task_id=?",
+            (self.task_id,),
+        )
+        self.conn.commit()
+        self.refresh(self.add_event())
+        route_id, expected_output = self.conn.execute(
+            "SELECT route_id,expected_output FROM tasks WHERE task_id=?", (self.task_id,)
+        ).fetchone()
+        self.assertEqual((route_id, expected_output), ("update-existing-pr", "update_existing_pr"))
+        self.assertFalse(pre_pr_review.required(self.conn, self.task_id))
+        self.assertIsNone(pre_pr_review.session(self.conn, task_id=self.task_id))
