@@ -1,4 +1,5 @@
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
 import unittest
@@ -204,6 +205,211 @@ class BoardReadModelTests(BoardReadModelFixture):
         )
         self.assertIsNone(detail["pr"]["url"])
         self.assertNotIn("javascript:", json.dumps(detail))
+
+    def _add_failed_followup(self, item, *, task_id="task-followup", failure=None):
+        now = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO tasks(task_id, workstream_id, lifecycle, priority, route_id, expected_output, created_at, updated_at) VALUES (?, ?, 'failed', 'P2', 'review', 'multi_agent_review_report', ?, ?)",
+                (task_id, item["workstream_id"], now, now),
+            )
+            for attempt_no in (1, 2):
+                conn.execute(
+                    "INSERT INTO attempts(attempt_id, task_id, attempt_no, status, started_at, finished_at, failure_json) VALUES (?, ?, ?, 'failed', ?, ?, ?)",
+                    (
+                        f"{task_id}-attempt-{attempt_no}",
+                        task_id,
+                        attempt_no,
+                        now,
+                        now,
+                        json.dumps(
+                            failure or {"safe_error": "PR snapshot changed while fetching; recapture PR metadata"}
+                        ),
+                    ),
+                )
+
+    def test_completed_item_with_a_later_failed_task_needs_attention(self):
+        from robert_agent.readmodels import board
+
+        done = self._seed_six_columns()["done"]
+        self._add_failed_followup(done)
+
+        projected = next(
+            item for item in board.list_board(self.db_path)["items"] if item["work_item_id"] == done["work_item_id"]
+        )
+        self.assertEqual(projected["column"], "waiting")
+        self.assertEqual(projected["reason_code"], "execution_failed")
+        self.assertEqual(projected["valid_commands"], ["reopen"])
+        summary = projected["status_summary"]
+        self.assertEqual(summary["state"], "failed")
+        self.assertEqual(summary["tone"], "danger")
+        self.assertEqual(summary["owner"], "operator")
+        self.assertTrue(summary["needs_action"])
+        self.assertEqual(summary["stage"]["task"], "multi_agent_review_report")
+        self.assertEqual(summary["attempts"], {"total": 2, "failed": 2})
+        self.assertEqual(
+            summary["cause"]["text"],
+            "PR snapshot changed while fetching; recapture PR metadata",
+        )
+        self.assertEqual(summary["cause"]["source"], "attempt")
+        self.assertEqual(summary["primary"], "reopen")
+        overview = board.list_board(self.db_path)
+        self.assertEqual((overview["counts"]["waiting"], overview["counts"]["done"]), (2, 0))
+        self.assertEqual(overview["counts"]["needs_action"], 2)
+        self.assertEqual(board.list_board(self.db_path, column="done")["items"], [])
+
+    def _completed_github_item_with_failed_followup(self):
+        from robert_agent.work.application import commands as work_items
+
+        now = "2026-10-13T06:35:18+00:00"
+        source_key = "github:example/repo!10"
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute(
+                "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, html_url, title, state) VALUES ('pr-10', 'repo-1', ?, 'pull_request', 10, 'https://github.com/example/repo/pull/10', 'PR 10', 'open')",
+                (source_key,),
+            )
+            conn.execute(
+                "INSERT INTO workstreams(workstream_id, repo_id, primary_source_id, lifecycle, created_at, updated_at) VALUES (?, 'repo-1', 'pr-10', 'completed', ?, ?)",
+                (source_key, now, now),
+            )
+            item = work_items.ensure_github_work_item(
+                conn,
+                repo_id="repo-1",
+                source_id="pr-10",
+                workstream_id=source_key,
+                actor_identity="owner",
+                route_confidence="high",
+                now=now,
+            )
+            conn.execute(
+                "INSERT INTO tasks(task_id, workstream_id, lifecycle, priority, route_id, expected_output, created_at, updated_at) VALUES ('task-review', ?, 'completed', 'P2', 'review', 'pr_review_comment', ?, ?)",
+                (source_key, now, now),
+            )
+            conn.execute(
+                "UPDATE work_items SET completed_at = ? WHERE work_item_id = ?",
+                (now, item["work_item_id"]),
+            )
+        self._add_failed_followup({"workstream_id": source_key})
+        return item
+
+    def test_completed_github_item_with_a_later_failed_task_offers_retrigger(self):
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
+        from robert_agent.work.errors import WorkItemConflictError
+
+        item = self._completed_github_item_with_failed_followup()
+        projected = board.list_board(self.db_path)["items"][0]
+        self.assertEqual(projected["column"], "waiting")
+        self.assertEqual(projected["valid_commands"], ["retrigger", "reopen"])
+        self.assertEqual(projected["status_summary"]["primary"], "retrigger")
+        self.assertEqual(projected["task_id"], "task-followup")
+
+        work_items.retrigger_failed_github_task(
+            self.db_path,
+            "task-followup",
+            context=self.context,
+            idempotency_key="rerun-10",
+        )
+        requested = board.list_board(self.db_path)["items"][0]
+        self.assertEqual(requested["column"], "todo")
+        self.assertEqual(requested["reason_code"], "rerun_requested")
+        self.assertEqual(requested["valid_commands"], [])
+        self.assertEqual(requested["status_summary"]["state"], "queued")
+        self.assertEqual(requested["status_summary"]["owner"], "robert")
+        self.assertFalse(requested["status_summary"]["needs_action"])
+
+        with self.assertRaisesRegex(WorkItemConflictError, "retrigger request is already pending"):
+            work_items.execute_command(
+                self.db_path,
+                item["work_item_id"],
+                context=self.context,
+                command="reopen",
+                expected_version=projected["version"],
+                idempotency_key="stale-reopen",
+            )
+
+    def test_completed_github_item_offers_reopen_for_failed_operator_followup(self):
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
+
+        item = self._completed_github_item_with_failed_followup()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute(
+                "UPDATE tasks SET metadata_json=? WHERE task_id='task-followup'",
+                (json.dumps({"trigger_work_item_event_id": "operator-reply"}),),
+            )
+            work_items.record_system_event(
+                conn,
+                item["work_item_id"],
+                event_type="execution_failed",
+                idempotency_key="operator-followup-failed",
+                metadata={"task_id": "task-followup"},
+            )
+
+        projected = board.get_work_item_detail(self.db_path, item["work_item_id"])
+        self.assertEqual(projected["valid_commands"], ["reopen"])
+        self.assertEqual(projected["status_summary"]["primary"], "reopen")
+        result = work_items.execute_command(
+            self.db_path,
+            item["work_item_id"],
+            context=self.context,
+            command="reopen",
+            expected_version=projected["version"],
+            idempotency_key="reopen-failed-followup",
+        )
+        self.assertTrue(result["ok"])
+
+    def test_completed_item_with_a_closed_source_stays_done(self):
+        from robert_agent.readmodels import board
+
+        done = self._seed_six_columns()["done"]
+        self._add_failed_followup(done)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO github_sources(source_id, repo_id, source_key, source_type, number, html_url, title, state) VALUES ('closed-src', 'repo-1', 'github:example/repo#99', 'issue', 99, 'https://github.com/example/repo/issues/99', 'Closed', 'closed')"
+            )
+            conn.execute(
+                "UPDATE work_items SET origin_source_id = 'closed-src' WHERE work_item_id = ?",
+                (done["work_item_id"],),
+            )
+
+        detail = board.get_work_item_detail(self.db_path, done["work_item_id"])
+        self.assertEqual(detail["column"], "done")
+        self.assertEqual(detail["status_summary"]["state"], "completed")
+        self.assertFalse(detail["status_summary"]["needs_action"])
+
+    def test_status_summary_names_state_owner_and_primary_action_per_column(self):
+        from robert_agent.readmodels import board
+
+        self._seed_six_columns()
+        summaries = {
+            item["title"].split()[0].lower(): item["status_summary"] for item in board.list_board(self.db_path)["items"]
+        }
+        expected = {
+            "backlog": ("draft", "neutral", "operator", False, "start"),
+            "todo": ("queued", "neutral", "robert", False, None),
+            "doing": ("running", "running", "robert", False, None),
+            "waiting": ("needs_reply", "attention", "initiator", True, "reply"),
+            "review": ("in_review", "info", "github", False, "open_pr"),
+            "done": ("completed", "success", "none", False, None),
+        }
+        for name, (state, tone, owner, needs_action, primary) in expected.items():
+            summary = summaries[name]
+            self.assertEqual(
+                (summary["state"], summary["tone"], summary["owner"], summary["needs_action"], summary["primary"]),
+                (state, tone, owner, needs_action, primary),
+                name,
+            )
+        needing_action = board.list_board(self.db_path, attention="true")["items"]
+        self.assertEqual([item["title"] for item in needing_action], ["Waiting card"])
+        overview = board.list_board(self.db_path, limit=1)
+        self.assertEqual(overview["counts"]["needs_action"], 1)
+        self.assertEqual([item["title"] for item in overview["attention_items"]], ["Waiting card"])
+        self.assertEqual(summaries["waiting"]["cause"]["text"], "Choose the compatibility target.")
+        self.assertEqual(summaries["waiting"]["cause"]["source"], "attention")
+        self.assertEqual(summaries["waiting"]["owner_identity"], "owner")
 
     def test_filters_cursor_detail_and_timeline_are_safe(self):
         from robert_agent.readmodels import board

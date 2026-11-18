@@ -196,6 +196,125 @@ def _waiting_source_context(conn, task_id):
     return bool(task and not operator_queries.source_read(conn, task)[0])
 
 
+def _retrigger_pending(conn, task):
+    return bool(db_records.first(db_read_wakeups.find_for_project_item(conn, task["task_id"])))
+
+
+def _failed_task_recovery(conn, task, attention):
+    """Commands that start a new run of a failed task, or none while one is owed."""
+    binding = execution_store.get_binding(conn, "task", task["task_id"])
+    if _retrigger_pending(conn, task) or (binding and binding["binding_status"] == BindingStatus.ATTENTION):
+        return []
+    operator_failure = json_object(task["metadata_json"]).get("trigger_work_item_event_id") and any(
+        a["type"] == "execution_failed" and a["metadata"].get("task_id") == task["task_id"] for a in attention
+    )
+    return ["retry" if operator_failure else "retrigger"]
+
+
+# reason_code -> (state, tone, owner) for the waiting column.
+WAITING_STATES = {
+    "execution_failed": ("failed", "danger", "operator"),
+    "workflow_attention": ("failed", "danger", "operator"),
+    "audit_inspection_exhausted": ("failed", "danger", "operator"),
+    "review_attention": ("failed", "danger", "operator"),
+    "publication_failed": ("publish_failed", "danger", "operator"),
+    "manual_worker_unavailable": ("worker_unavailable", "danger", "operator"),
+    "worker_cleanup_pending": ("environment", "danger", "admin"),
+    "closed_source_running": ("source_closed", "attention", "operator"),
+    "source_closed": ("source_closed", "attention", "operator"),
+    "unmerged_pr_closed": ("pr_closed", "attention", "operator"),
+    "operator_question": ("needs_reply", "attention", "initiator"),
+    "completion_acceptance_requested": ("needs_acceptance", "attention", "initiator"),
+    "operator_decision_required": ("needs_decision", "attention", "operator"),
+    "no_runnable_task": ("stuck", "attention", "operator"),
+}
+REVIEW_STATES = {
+    "open_pr": ("in_review", "info", "github"),
+    "unmerged_pr_closed": ("pr_closed", "attention", "operator"),
+}
+PRIMARY_COMMANDS = ("retrigger", "retry", "retry_publish", "reply", "approve", "start", "reopen")
+
+
+def _task_attempt_counts(conn, task_id):
+    total, failed = db_read_attempts.count_by_task_status(conn, task_id)[0]
+    return {"total": total, "failed": failed}
+
+
+def _summary_cause(card, facts, attention, state):
+    """The single most specific operator-facing reason, with where it came from."""
+    execution = card.get("execution") or {}
+    review = card.get("vote") or card.get("review") or {}
+    candidates = []
+    if state in {"failed", "worker_unavailable"}:
+        candidates += [
+            ("review", review.get("error"), execution.get("finished_at")),
+            ("attempt", execution.get("failure"), execution.get("finished_at")),
+        ]
+    if state == "publish_failed":
+        failure = (card["publication"]["failures"] or [{}])[0]
+        candidates.append(("publication", failure.get("reason"), failure.get("failed_at")))
+    if state == "environment":
+        candidates.append(("cleanup", (facts["cleanup_pending"] or [""])[0], None))
+    if state == "failed" and facts["workflow_attention"]:
+        candidates.append(("workflow", facts["workflow_attention"][0], None))
+    if attention:
+        candidates.append(("attention", attention[0]["summary"], attention[0]["created_at"]))
+    for source, text, at in candidates:
+        text = (text or "").strip()
+        if text:
+            return {
+                "text": text,
+                "source": source,
+                "at": at,
+                "attempt_no": execution.get("attempt_no") if source in {"attempt", "review"} else None,
+            }
+    return None
+
+
+def _status_summary(conn, card, row, *, task, facts, attention):
+    """Operator-facing status shared by cards, details and attention counts.
+
+    Values are codes; the web client owns their wording in each language.
+    """
+    column, reason = card["column"], card["reason_code"]
+    if column == "history":
+        state, tone, owner = "canceled", "neutral", "none"
+    elif column == "done":
+        state, tone, owner = "completed", "success", "none"
+    elif column == "backlog":
+        state, tone, owner = "draft", "neutral", "operator"
+    elif column == "todo":
+        state, tone, owner = "queued", "neutral", "robert"
+    elif column == "doing":
+        state, tone, owner = ("publishing" if reason == "publishing" else "running"), "running", "robert"
+    elif column == "review":
+        state, tone, owner = REVIEW_STATES.get(reason, ("review_attention", "attention", "operator"))
+    else:
+        state, tone, owner = WAITING_STATES.get(reason, ("needs_attention", "attention", "operator"))
+    commands = card["valid_commands"]
+    primary = next((command for command in PRIMARY_COMMANDS if command in commands), None)
+    if state == "in_review" and card.get("pr") and card["pr"].get("url"):
+        primary = "open_pr"
+    elif state in {"completed", "canceled", "queued", "running", "publishing"}:
+        primary = None
+    execution = card.get("execution") or {}
+    return {
+        "state": state,
+        "tone": tone,
+        "owner": owner,
+        "owner_identity": row["created_by"] if owner == "initiator" else None,
+        "needs_action": owner in {"operator", "initiator", "admin"} and state != "draft",
+        "stage": {
+            "task": (task["expected_output"] or task["route_id"]) if task else None,
+            "phase": execution.get("phase"),
+        },
+        "attempts": _task_attempt_counts(conn, task["task_id"]) if task else {"total": 0, "failed": 0},
+        "cause": _summary_cause(card, facts, attention, state),
+        "primary": primary,
+        "since": execution.get("finished_at") or execution.get("heartbeat_at") or row["updated_at"],
+    }
+
+
 def _project_item(conn, row, *, controls=None, facts=None):
     work_item_id = row["work_item_id"]
     workstream_id = row["workstream_id"]
@@ -221,8 +340,32 @@ def _project_item(conn, row, *, controls=None, facts=None):
         None,
     )
 
+    # A completed item whose latest task failed afterwards still needs the
+    # operator; only a closed source ends the item regardless of that failure.
+    failed_after_completion = bool(
+        row["completed_at"]
+        and task
+        and task["lifecycle"] == TaskLifecycle.FAILED
+        and not running
+        and not publication_in_progress
+        and not facts["source_closed"]
+    )
+    rerun_requested = bool(failed_after_completion and row["origin_type"] != "web" and _retrigger_pending(conn, task))
     if row["canceled_at"]:
         column, reason_code, reason_summary = "history", "canceled", "Canceled by the operator"
+    elif rerun_requested:
+        column, reason_code, reason_summary = (
+            "todo",
+            "rerun_requested",
+            "A new run was requested; waiting for the daemon to start it.",
+        )
+    elif failed_after_completion:
+        column, reason_code, reason_summary = (
+            "waiting",
+            "execution_failed",
+            (execution or {}).get("failure")
+            or "The latest run failed after this item completed; inspect it and run it again.",
+        )
     elif row["completed_at"]:
         column, reason_code, reason_summary = "done", "completed", "Completion is satisfied"
     elif facts["source_closed"] and running:
@@ -425,22 +568,23 @@ def _project_item(conn, row, *, controls=None, facts=None):
             ) + ["cancel"]
         elif task and task["lifecycle"] == TaskLifecycle.FAILED and not running and not publication_in_progress:
             if row["origin_type"] != "web":
-                binding = execution_store.get_binding(conn, "task", task["task_id"])
-                ownership_blocked = binding and binding["binding_status"] == BindingStatus.ATTENTION
-                pending = db_records.first(db_read_wakeups.find_for_project_item(conn, task["task_id"]))
-                operator_failure = json_object(task["metadata_json"]).get("trigger_work_item_event_id") and any(
-                    a["type"] == "execution_failed" and a["metadata"].get("task_id") == task["task_id"]
-                    for a in attention
-                )
-                recovery_command = "retry" if operator_failure else "retrigger"
-                card["valid_commands"] = ([] if pending or ownership_blocked else [recovery_command]) + ["cancel"]
+                card["valid_commands"] = _failed_task_recovery(conn, task, attention) + ["cancel"]
             else:
                 card["valid_commands"] = ["retry", "cancel"]
     if not facts["approval_task_id"] and any(a["type"] == "operator_decision_required" for a in attention):
         if not any(a["type"] == "completion_acceptance_requested" for a in attention):
             card["valid_commands"] = [command for command in card["valid_commands"] if command != "approve"]
+    if rerun_requested:
+        # Reopening now would start a second run beside the requested one.
+        card["valid_commands"] = []
+    elif failed_after_completion:
+        # Completed items accept only reopen on the work item; a rerun acts on
+        # the failed task itself.
+        recovery = _failed_task_recovery(conn, task, attention) if row["origin_type"] != "web" else []
+        card["valid_commands"] = [command for command in recovery if command == "retrigger"] + ["reopen"]
     if column == "done" and facts["source_closed"]:
         card["valid_commands"] = []
+    card["status_summary"] = _status_summary(conn, card, row, task=task, facts=facts, attention=attention)
     return card
 
 
@@ -551,6 +695,12 @@ def list_board(
             + terminal["counts"].get(column_id, 0)
             for column_id in [name for name, _label in COLUMNS] + ["history"]
         }
+        attention_items = [item for item in projections if item["status_summary"]["needs_action"]]
+        counts["needs_action"] = len(attention_items)
+        attention_preview = [
+            {key: item[key] for key in ("work_item_id", "title", "repo_full_name", "column", "status_summary")}
+            for item in attention_items[:8]
+        ]
         agents = sorted({item["agent"] for item in projections} | set(terminal["agents"]) | {"Auto"})
         if cursor_value:
             projections = [item for item in projections if (item["updated_at"], item["work_item_id"]) < cursor_value]
@@ -586,6 +736,7 @@ def list_board(
     return {
         "columns": [{"id": column_id, "label": label, "count": counts[column_id]} for column_id, label in COLUMNS],
         "counts": counts,
+        "attention_items": attention_preview,
         "capacity": {
             "running": sum(per_repo_running.values()),
             "by_repo": per_repo_running,
