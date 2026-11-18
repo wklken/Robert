@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from sqlalchemy import func, insert, select, update as sql_update
+from sqlalchemy import delete, func, insert, select, update as sql_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from robert_agent.foundation.contracts.execution import ModelRunStatus
@@ -58,6 +58,18 @@ def create(conn, task_id, request):
             request_json=json.dumps(request, sort_keys=True),
             created_at=timestamp,
             updated_at=timestamp,
+        ),
+    )
+
+
+def delete_unstarted(conn, round_id):
+    return statements.write(
+        conn,
+        delete(SESSION).where(
+            SESSION.c.round_id == round_id,
+            SESSION.c.deadline_at.is_(None),
+            SESSION.c.snapshot_id.is_(None),
+            ~select(RUN.c.run_id).where(RUN.c.round_id == round_id).exists(),
         ),
     )
 

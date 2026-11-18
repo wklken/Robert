@@ -331,7 +331,7 @@ def update_for_refresh_prepared_task_locked_2(conn, input_policy, task_id, reque
         .values(
             {
                 "metadata_json": func.json_set(
-                    tables["tasks"].c["metadata_json"],
+                    func.json_remove(tables["tasks"].c["metadata_json"], sql_constant("$.pre_pr_review_required")),
                     sql_constant("$.review_input_policy"),
                     bindparam("p0"),
                     sql_constant("$.request_event_fingerprint"),

@@ -196,6 +196,10 @@ def _refresh_prepared_task_locked(
     route_result = workflow_routing.effective_route(config_result, repo, event)
     if route_result["route_id"] != "update-existing-pr":
         return None
+    review = pre_pr_review.session(conn, task_id=state["task_id"])
+    if review and (review["deadline_at"] or review["snapshot_id"] or pre_pr_review.runs(conn, review["round_id"])):
+        # A retrigger can carry review evidence from an earlier attempt.
+        return None
     input_policy = route.review_input_policy(route_result["expected_output"], event)
     if (
         state["expected_output"] in {OutputType.UPDATE_EXISTING_PR, OutputType.REVIEW_COMMENT}
@@ -293,6 +297,8 @@ def _refresh_prepared_task_locked(
     db_write_tasks.update_for_refresh_prepared_task_locked_2(
         conn, input_policy, state["task_id"], event["event_fingerprint"]
     )
+    if review:
+        pre_pr_review.delete_unstarted(conn, review["round_id"])
     upsert_route_decision(conn, state["task_id"], route_result, run_now)
     attempt_metadata_row = db_records.first(
         db_read_attempts.find_metadata_json_by_attempt_id(conn, state["attempt_id"])
