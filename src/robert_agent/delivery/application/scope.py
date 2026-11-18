@@ -61,6 +61,8 @@ def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, comman
     action_scope["pr_authors"] = authors
     attempt_metadata = _object(row[4])
     task_metadata = _object(row[6])
+    if task_metadata.get("target_base_branch"):
+        action_scope["base_branch"] = task_metadata["target_base_branch"]
     if "supervision_repair" in task_metadata:
         action_scope.update(
             supervision_repair=True,

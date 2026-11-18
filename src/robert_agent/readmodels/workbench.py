@@ -343,14 +343,14 @@ def _derive_operator_state(
     )
 
 
-def _source_payload(workstream):
+def _source_payload(workstream, fallback_title=None):
     return {
         "source_id": workstream.get("primary_source_id"),
         "repo_id": workstream.get("repo_id"),
         "repo_full_name": workstream.get("repo_full_name"),
         "type": workstream.get("source_type"),
         "number": workstream.get("source_number"),
-        "title": workstream.get("source_title") or "Untitled GitHub work item",
+        "title": workstream.get("source_title") or fallback_title or "Untitled GitHub work item",
         "url": workstream.get("github_url"),
         "state": workstream.get("source_state"),
         "author_login": workstream.get("author_login"),
@@ -405,7 +405,10 @@ def _item_from_workstream(state, workstream):
         board_item = state["board_items"].get(origin)
         ancestor = streams.get(origin, {})
     lifecycle = (
-        {key: board_item[key] for key in ("work_item_id", "column", "reason_code", "reason_summary", "pr")}
+        {
+            key: board_item[key]
+            for key in ("work_item_id", "column", "reason_code", "reason_summary", "pr", "status_summary")
+        }
         if board_item
         else None
     )
@@ -449,7 +452,7 @@ def _item_from_workstream(state, workstream):
         "reason_summary": reason_summary,
         "priority": task["priority"] if task else "P2",
         "updated_at": (task or workstream).get("updated_at"),
-        "source": _source_payload(workstream),
+        "source": _source_payload(workstream, fallback_title=board_item["title"] if board_item else None),
         "agent": {
             "task_id": task_id,
             "route_id": task.get("route_id") if task else None,

@@ -4,7 +4,7 @@ from functools import cache
 
 from robert_agent.persistence.expressions import sql_constant
 
-from sqlalchemy import bindparam, or_, select, tuple_, case, func, cast, String
+from sqlalchemy import and_, bindparam, or_, select, tuple_, case, func, cast, String
 
 from robert_agent.persistence import statements
 from robert_agent.persistence.dialects import sqlite
@@ -49,6 +49,27 @@ def unresolved_attention(conn, work_item_id, event_types):
     )
 
 
+def _reopened_by_failure(items):
+    """A completed owner whose newest related task failed is active again."""
+    stream, task = tables["workstreams"], tables["tasks"]
+    latest = (
+        select(task.c.lifecycle)
+        .select_from(task.join(stream, stream.c.workstream_id == task.c.workstream_id))
+        .where(
+            or_(stream.c.workstream_id == items.c.workstream_id, stream.c.origin_workstream_id == items.c.workstream_id)
+        )
+        .order_by(task.c.created_at.desc(), task.c.task_id.desc())
+        .limit(1)
+        .correlate(items)
+        .scalar_subquery()
+    )
+    return and_(
+        func.coalesce(items.c.completed_at, "") != "",
+        func.coalesce(items.c.canceled_at, "") == "",
+        func.coalesce(latest, "") == sql_constant("failed"),
+    )
+
+
 def work_items_with_repositories(
     conn, *, repo=None, include_history=True, workstream_ids=None, attached_only=False, active_only=False, item_ids=None
 ):
@@ -63,7 +84,12 @@ def work_items_with_repositories(
     if not include_history:
         query = query.where(or_(items.c.canceled_at.is_(None), items.c.canceled_at == sql_constant("")))
     if active_only:
-        query = query.where(func.coalesce(items.c.completed_at, "") == "", func.coalesce(items.c.canceled_at, "") == "")
+        query = query.where(
+            or_(
+                and_(func.coalesce(items.c.completed_at, "") == "", func.coalesce(items.c.canceled_at, "") == ""),
+                _reopened_by_failure(items),
+            )
+        )
     if item_ids is not None:
         query = query.where(items.c.work_item_id.in_(item_ids))
     if attached_only:
@@ -177,7 +203,8 @@ def terminal_board_page(
 ):
     """Count/filter historical owners in SQL; materialize at most one page of IDs.
 
-    Terminal owners have a fixed column regardless of descendant execution.
+    Terminal owners have a fixed column regardless of descendant execution,
+    except completed owners whose newest task failed; those are projected live.
     Current task selection retains the same live/active/latest precedence as
     current_task_filtered; only visible page cards need full lifecycle details.
     """
@@ -237,7 +264,10 @@ def terminal_board_page(
                 current, current.c.owner_id == item.c.workstream_id
             )
         )
-        .where(or_(func.coalesce(item.c.completed_at, "") != "", func.coalesce(item.c.canceled_at, "") != ""))
+        .where(
+            or_(func.coalesce(item.c.completed_at, "") != "", func.coalesce(item.c.canceled_at, "") != ""),
+            ~_reopened_by_failure(item),
+        )
     )
     if repo:
         stmt = stmt.where(or_(item.c.repo_id == repo, repository.c.full_name == repo))

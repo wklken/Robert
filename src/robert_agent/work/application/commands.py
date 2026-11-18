@@ -1129,6 +1129,10 @@ def execute_command(
             elif command == WorkCommand.REOPEN:
                 if item["completed_at"] is None or item["canceled_at"] is not None:
                     raise WorkItemConflictError("only a completed work item can be reopened")
+                if audit_task and db_records.first(
+                    db_read_wakeups.find_for_retrigger_failed_github_task(conn, item["repo_id"], audit_task["task_id"])
+                ):
+                    raise WorkItemConflictError("a retrigger request is already pending")
                 db_write_work_items.update_for_execute_command_3(conn, now, work_item_id)
                 parent = _active_or_latest_task(conn, item["workstream_id"])
                 parent_task_id = _finish_parent_for_child(conn, parent, now)

@@ -68,6 +68,20 @@ class MentionTests(unittest.TestCase):
         self.assertTrue(tapd_policy.parse_comment(f"<p>{NAME}：结论</p><p>回执 abc</p>", NAME).automatic)
         self.assertFalse(tapd_policy.parse_comment(f"<p>说明 {NAME}：</p>", NAME).automatic)
 
+    def test_html_inside_markdown_context_does_not_authorize_a_mention(self):
+        for body in (
+            f"```html\n<span>example</span>\n@{NAME}\n```",
+            f"~~~html\n<div>example</div>\n@{NAME}\n~~~",
+            f"<p>说明</p>\n```\n@{NAME}\n```",
+            f"<p>说明</p>\n    <span>@{NAME}</span>",
+            f"<p>说明</p>\n`<span>@{NAME}</span>`",
+            f"<p>说明</p>\n> <span>@{NAME}</span>",
+        ):
+            with self.subTest(body=body):
+                parsed = tapd_policy.parse_comment(body, NAME)
+                self.assertFalse(parsed.mentions)
+                self.assertIn(f"@{NAME}", parsed.text)
+
     def test_visible_text_keeps_paragraphs_and_entities(self):
         parsed = tapd_policy.parse_comment("<p>a &amp; b</p><p><br  /></p><p>c&nbsp;d</p>", NAME)
         self.assertEqual(parsed.text, "a & b\n\nc\xa0d")
