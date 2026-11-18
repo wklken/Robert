@@ -51,7 +51,7 @@ def find_workstream_id_by_public_ref(conn, repo_id, public_ref):
     return statements.read(conn, query)
 
 
-def find_open_derived_pull_requests(conn, repo_id, origin_workstream_id):
+def find_open_derived_pull_requests(conn, repo_id, origin_workstream_id, *, base_branch=None):
     stream = tables["workstreams"]
     source = tables["github_sources"]
     action = tables["github_actions"]
@@ -77,6 +77,8 @@ def find_open_derived_pull_requests(conn, repo_id, origin_workstream_id):
         )
         .limit(2)
     )
+    if base_branch is not None:
+        query = query.where(func.json_extract(receipt, "$.base") == base_branch)
     return statements.read(conn, query)
 
 

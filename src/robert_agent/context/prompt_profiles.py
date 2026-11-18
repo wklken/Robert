@@ -42,6 +42,7 @@ GUIDANCE = {
     for resource, section, names in (
         ("issue-dispatch", "Work", ("issue-dispatch",)),
         ("tapd", "Work", ("tapd",)),
+        ("backport", "Work", ("backport",)),
         ("worker", "Boundaries", ("worker-boundaries",)),
         ("worker", "Work", ("collaboration", "resume", "skills", "memory", "knowledge")),
         ("worker", "Verification", ("unit-tests", "verification")),
