@@ -49,9 +49,7 @@ class ReviewSubmissionRejected(RuntimeError):
         )
 
 
-class Coordinator(StageCoordinator):
-    store = store
-    workspace = review_workspace
+class ReviewStages(StageCoordinator):
     artifact_files = review_files
     slot_stores = SLOT_STORES
     voter_stage = "review"
@@ -62,6 +60,112 @@ class Coordinator(StageCoordinator):
     }
     artifact_kinds = ("result", "report", "evaluation", "context_summary", "source_index")
     workflow_name = "review"
+
+    def prepare_context(self):
+        review_workspace.verify_snapshot(self.manifest)
+        if not self.manifest.get("frozen"):
+            prompt = self.prompt("prepare-prompt.md", render_prompt(review_prepare_input(self.manifest)).text)
+
+            def validate(output, model):
+                summary = review_files.safe_path(output / "context-summary.md", output)
+                index = review_files.safe_path(output / "source-index.json", output)
+                if not summary.read_text(encoding="utf-8").strip():
+                    raise ValueError("primary context summary is empty")
+                source_index = json.loads(index.read_text(encoding="utf-8"))
+                if (
+                    not isinstance(source_index, dict)
+                    or not isinstance(source_index.get("files"), list)
+                    or not isinstance(source_index.get("reading_notes"), str)
+                    or not source_index["reading_notes"].strip()
+                ):
+                    raise ValueError("invalid primary source index")
+                tree = Path(self.manifest["worktree_path"])
+                for item in source_index["files"]:
+                    if (
+                        not isinstance(item, dict)
+                        or not isinstance(item.get("reason"), str)
+                        or not item["reason"].strip()
+                    ):
+                        raise ValueError("source index entry requires a reason")
+                    name = review_files._source_path(item.get("path"))
+                    if not review_files.safe_path(tree / name, tree).is_file():
+                        raise ValueError("source index entry references missing source")
+                return {
+                    "context_summary_path": str(summary),
+                    "context_summary_sha256": store.digest(summary),
+                    "source_index_path": str(index),
+                    "source_index_sha256": store.digest(index),
+                }
+
+            result = self.run_phase("prepare", self.request["workers"][0], prompt, validate)
+            for kind, name in [("context_summary", "context-summary.md"), ("source_index", "source-index.json")]:
+                shutil.copyfile(result[kind + "_path"], Path(self.manifest["context_dir"]) / name)
+            self.manifest = review_workspace.freeze_context(self.manifest)
+            self.save_manifest()
+
+    def review(self):
+        self.phase(RoundStatus.REVIEWING.value)
+
+        def review_one(worker):
+            def validate(output, model, worker=worker):
+                result_path = output / "result.json"
+                result = review_files.read_result(result_path, self.manifest)
+                report_path = review_files.safe_path(output / "report.md", output)
+                report = review_files.render_individual(result, worker["name"], model)
+                if report_path.exists() and report_path.read_text(encoding="utf-8") != report:
+                    raise ValueError("derived review report changed")
+                report_path.write_text(report, encoding="utf-8")
+                return {
+                    "model": model,
+                    "result_path": str(result_path),
+                    "result_sha256": store.digest(result_path),
+                    "report_path": str(report_path),
+                    "report_sha256": store.digest(report_path),
+                }
+
+            try:
+                return self.run_phase("review", worker, self.manifest["prompt_path"], validate), None
+            except StageStopped:
+                raise
+            except (ValueError, OSError, RuntimeError) as exc:
+                return None, f"{worker['name']}: {exc}"
+
+        results = self.parallel(self.request["workers"], review_one)
+        records = [record for record, error in results if record]
+        failures = [error for record, error in results if error]
+        if failures:
+            raise RuntimeError("; ".join(failures))
+        return records
+
+    def evaluate(self, records):
+        self.phase(RoundStatus.SYNTHESIZING.value)
+        inputs = review_files.write_synthesis_inputs(self.manifest, records)
+        prompt_input = review_synthesize_input(
+            self.manifest,
+            inputs,
+            severities=review_files.SEVERITIES,
+            recommendations=review_files.RECOMMENDATIONS,
+            dispositions=review_files.DISPOSITIONS,
+        )
+        prompt = self.prompt(
+            f"synthesis-prompt-{inputs['sha256']}.md",
+            render_prompt(prompt_input).text,
+        )
+
+        def validate(output, model):
+            if store.digest(inputs["path"]) != inputs["sha256"]:
+                raise ValueError("synthesis inputs changed")
+            path = output / "evaluation.json"
+            review_files.read_evaluation(path, self.manifest, records)
+            return {"evaluation_path": str(path), "evaluation_sha256": store.digest(path)}
+
+        result = self.run_phase("synthesis", self.request["workers"][0], prompt, validate, input_hash=inputs["sha256"])
+        return review_files.read_evaluation(result["evaluation_path"], self.manifest, records)
+
+
+class Coordinator(ReviewStages):
+    store = store
+    workspace = review_workspace
 
     def __init__(self, db_path, task_id, attempt_id, *, fetch_pr=read_pr, **kwargs):
         super().__init__(db_path, task_id, attempt_id, **kwargs)
@@ -103,107 +207,12 @@ class Coordinator(StageCoordinator):
                     if retry or "changed while fetching" not in str(exc):
                         raise
             self.save_manifest()
-        review_workspace.verify_snapshot(self.manifest)
-        if not self.manifest.get("frozen"):
-            prompt = self.prompt("prepare-prompt.md", render_prompt(review_prepare_input(self.manifest)).text)
-
-            def validate(output, model):
-                summary = review_files.safe_path(output / "context-summary.md", output)
-                index = review_files.safe_path(output / "source-index.json", output)
-                if not summary.read_text(encoding="utf-8").strip():
-                    raise ValueError("primary context summary is empty")
-                source_index = json.loads(index.read_text(encoding="utf-8"))
-                if (
-                    not isinstance(source_index, dict)
-                    or not isinstance(source_index.get("files"), list)
-                    or not isinstance(source_index.get("reading_notes"), str)
-                    or not source_index["reading_notes"].strip()
-                ):
-                    raise ValueError("invalid primary source index")
-                tree = Path(self.manifest["worktree_path"])
-                for item in source_index["files"]:
-                    if (
-                        not isinstance(item, dict)
-                        or not isinstance(item.get("reason"), str)
-                        or not item["reason"].strip()
-                    ):
-                        raise ValueError("source index entry requires a reason")
-                    name = review_files._source_path(item.get("path"))
-                    if not review_files.safe_path(tree / name, tree).is_file():
-                        raise ValueError("source index entry references missing source")
-                return {
-                    "context_summary_path": str(summary),
-                    "context_summary_sha256": store.digest(summary),
-                    "source_index_path": str(index),
-                    "source_index_sha256": store.digest(index),
-                }
-
-            result = self.run_phase("prepare", self.request["workers"][0], prompt, validate)
-            for kind, name in [("context_summary", "context-summary.md"), ("source_index", "source-index.json")]:
-                shutil.copyfile(result[kind + "_path"], Path(self.manifest["context_dir"]) / name)
-            self.manifest = review_workspace.freeze_context(self.manifest)
-            self.save_manifest()
+        self.prepare_context()
         if not same_revision(self.manifest, self.fetch_pr(repo["full_name"], self.session["pr_number"])):
             raise StageSuperseded("PR head/base changed after context preparation")
 
-    def review(self):
-        self.phase(RoundStatus.REVIEWING.value)
-
-        def review_one(worker):
-            def validate(output, model, worker=worker):
-                result_path = output / "result.json"
-                result = review_files.read_result(result_path, self.manifest)
-                report_path = review_files.safe_path(output / "report.md", output)
-                report = review_files.render_individual(result, worker["name"], model)
-                if report_path.exists() and report_path.read_text(encoding="utf-8") != report:
-                    raise ValueError("derived review report changed")
-                report_path.write_text(report, encoding="utf-8")
-                return {
-                    "model": model,
-                    "result_path": str(result_path),
-                    "result_sha256": store.digest(result_path),
-                    "report_path": str(report_path),
-                    "report_sha256": store.digest(report_path),
-                }
-
-            try:
-                return self.run_phase("review", worker, self.manifest["prompt_path"], validate), None
-            except StageStopped:
-                raise
-            except (ValueError, OSError, RuntimeError) as exc:
-                return None, f"{worker['name']}: {exc}"
-
-        results = self.parallel(self.request["workers"], review_one)
-        records = [record for record, error in results if record]
-        failures = [error for record, error in results if error]
-        if failures:
-            raise RuntimeError("; ".join(failures))
-        return records
-
     def synthesize(self, records):
-        self.phase(RoundStatus.SYNTHESIZING.value)
-        inputs = review_files.write_synthesis_inputs(self.manifest, records)
-        prompt_input = review_synthesize_input(
-            self.manifest,
-            inputs,
-            severities=review_files.SEVERITIES,
-            recommendations=review_files.RECOMMENDATIONS,
-            dispositions=review_files.DISPOSITIONS,
-        )
-        prompt = self.prompt(
-            f"synthesis-prompt-{inputs['sha256']}.md",
-            render_prompt(prompt_input).text,
-        )
-
-        def validate(output, model):
-            if store.digest(inputs["path"]) != inputs["sha256"]:
-                raise ValueError("synthesis inputs changed")
-            path = output / "evaluation.json"
-            review_files.read_evaluation(path, self.manifest, records)
-            return {"evaluation_path": str(path), "evaluation_sha256": store.digest(path)}
-
-        result = self.run_phase("synthesis", self.request["workers"][0], prompt, validate, input_hash=inputs["sha256"])
-        evaluation = review_files.read_evaluation(result["evaluation_path"], self.manifest, records)
+        evaluation = self.evaluate(records)
         body = review_files.render_merged(self.manifest, records, evaluation)
         body += f"\n<!-- robert-review round={self.round_id} -->\n"
         redacted = redaction.redact_text(body)

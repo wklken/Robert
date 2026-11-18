@@ -153,9 +153,27 @@ def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info,
         or _git(repo_root, "rev-parse", base_local_ref).strip() != base_sha
     ):
         raise ValueError("PR snapshot changed while fetching; recapture PR metadata")
+    return _build_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, github_context)
+
+
+def prepare_candidate_snapshot(
+    repo_root, worktree_root, artifact_root, round_id, repo, base_ref, base_sha, head_sha, event
+):
+    info = {
+        "head": {"sha": head_sha},
+        "base": {"ref": base_ref, "sha": base_sha, "repo": {"full_name": repo}},
+        "kind": "new-pr-candidate",
+    }
+    return _build_snapshot(Path(repo_root), Path(worktree_root), Path(artifact_root), round_id, info, [event])
+
+
+def _build_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, github_context):
+    number = pr_info.get("number")
+    head_sha = pr_info["head"]["sha"]
+    base_sha, base_ref = pr_info["base"]["sha"], pr_info["base"]["ref"]
     merge_base = _git(repo_root, "merge-base", base_sha, head_sha).strip()
     snapshot_id = _digest(json.dumps([round_id, number, head_sha, base_sha, base_ref, merge_base]))[:24]
-    tree = worktree_root / "review" / f"pr-{number}" / round_id / snapshot_id
+    tree = worktree_root / "review" / (f"pr-{number}" if number else "candidate") / round_id / snapshot_id
     artifacts = artifact_root / round_id / snapshot_id
     context = artifacts / "context"
     if tree.exists() or artifacts.exists():
@@ -216,7 +234,7 @@ def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info,
         "base_ref": base_ref,
         "merge_base_sha": merge_base,
         "pr_number": number,
-        "repo": (base.get("repo") or {}).get("full_name", ""),
+        "repo": (pr_info["base"].get("repo") or {}).get("full_name", ""),
         "worktree_path": str(tree),
         "context_dir": str(context),
         "artifact_root": str(artifacts),

@@ -42,6 +42,19 @@
           },
           "additionalProperties": false
         },
+        "pre_pr_review": {
+          "type": "object",
+          "required": ["workers"],
+          "properties": {
+            "workers": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            }
+          },
+          "additionalProperties": false
+        },
         "multi_agent_review": {
           "type": "object",
           "properties": {

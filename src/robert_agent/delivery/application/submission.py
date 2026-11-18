@@ -6,6 +6,7 @@ from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, Sourc
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import errors as db_errors
 from robert_agent.persistence import transactions as db_transactions
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.persistence.dialects import sqlite as db_sqlite
 
 from robert_agent.persistence import records as db_records
@@ -219,6 +220,15 @@ def _lookup(db_path, envelope, digest):
         }
 
 
+def _review_required():
+    return {
+        "ok": False,
+        "status": "failed_validation",
+        "reason_code": "pre_pr_review_required",
+        "safe_error": "The configured pre-publication review and finding dispositions must finish first.",
+    }
+
+
 def _prepare(db_path, envelope):
     with closing(db_database.connect(db_path, timeout=0.1)) as conn:
         settings, rejection = result_validation.context(
@@ -226,6 +236,14 @@ def _prepare(db_path, envelope):
         )
         if rejection:
             return None, rejection
+        reviewed = pre_pr_review.session(conn, task_id=envelope["task_id"])
+        if (reviewed or pre_pr_review.required(conn, envelope["task_id"])) and (
+            not reviewed
+            or not pre_pr_review.matches_submission(
+                reviewed, envelope["attempt_id"], result_contract.semantic_fingerprint(envelope)
+            )
+        ):
+            return None, _review_required()
         try:
             normalized = result_contract.normalize(envelope, settings)
         except result_contract.InvalidSubmission as exc:
@@ -378,6 +396,17 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
         bound = db_records.first(db_read_attempts.record_result_db(conn, payload["attempt_id"], payload["task_id"]))
         if not bound or json.loads(bound[0] or "{}").get("result_contract") != result_contract.CONTRACT_ID:
             return {"ok": False, "status": "unsupported_contract"}
+        reviewed = pre_pr_review.session(conn, task_id=payload["task_id"])
+        if (reviewed or pre_pr_review.required(conn, payload["task_id"])) and (
+            not reviewed
+            or not pre_pr_review.matches_submission(
+                reviewed,
+                payload["attempt_id"],
+                metadata["submission_fingerprint"],
+                head=metadata["submission_head_sha"] or "",
+            )
+        ):
+            return _review_required()
         existing = db_records.first(
             db_read_worker_results.find_result_id_and_metadata_json_by_attempt_id(conn, payload["attempt_id"])
         )
@@ -451,6 +480,8 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
             result_created_at,
             json.dumps(metadata, sort_keys=True),
         )
+        if reviewed:
+            pre_pr_review.bind_result(conn, reviewed["round_id"], result_id)
         for index, action in enumerate(actions):
             action_created_at = (created_at + timedelta(microseconds=index)).isoformat()
             db_write_github_actions.record_result_db(

@@ -53,6 +53,8 @@ from robert_agent.workflows import pr_remediation as remediation
 from robert_agent.workflows import routes as route
 from robert_agent.workflows import routing as workflow_routing
 from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds import pre_pr_review
+import hashlib
 from robert_agent.persistence.rounds import vote as vote_store
 import json
 
@@ -325,6 +327,37 @@ def _refresh_prepared_task_locked(
     return prompt_path
 
 
+def bind_pre_pr_review(
+    conn, repo, event, related_events, plan, task_id, attempt_id, prompt_path, worktree_result, *, previous_review=None
+):
+    review_plan = plan
+    if previous_review:
+        review_plan = previous_review["request"]["plan"]
+    if review_plan and not pre_pr_review.session(conn, task_id=task_id):
+        request = {
+            "plan": review_plan,
+            "repo": {
+                key: repo[key]
+                for key in ("full_name", "repo_root", "worktree_root", "default_base_branch", "github_account")
+            },
+            "event": event,
+            "input_sha256": hashlib.sha256(json.dumps(related_events, sort_keys=True).encode()).hexdigest(),
+            "prompt_path": str(prompt_path),
+            "prompt_sha256": pre_pr_review.digest(prompt_path),
+            "branch": (worktree_result or {}).get("branch_name"),
+        }
+        previous = previous_review["request"] if previous_review else {}
+        if (
+            previous_review
+            and not previous_review["final_result_id"]
+            and previous_review["manifest"].get("candidate")
+            and all(request[key] == previous.get(key) for key in ("input_sha256", "repo", "branch"))
+        ):
+            pre_pr_review.rebind_for_retry(conn, previous_review, task_id, attempt_id)
+        else:
+            pre_pr_review.create(conn, task_id, request)
+
+
 def create_task_attempt_and_prompt(
     conn,
     data_dir,
@@ -528,6 +561,12 @@ def create_task_attempt_and_prompt(
         "review_input_policy": task["review_input_policy"],
         "request_event_fingerprint": event["event_fingerprint"],
         **(
+            {"pre_pr_review_required": True}
+            if route_result.get("pre_pr_review_plan")
+            or (retrigger_wakeup_id and pre_pr_review.session(conn, task_id=parent_task_id))
+            else {}
+        ),
+        **(
             {"refreshed_context": related_events}
             if existing
             else {"refreshed_context": refreshed_context}
@@ -639,6 +678,18 @@ def create_task_attempt_and_prompt(
         run_now,
         run_now,
         json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
+    )
+    bind_pre_pr_review(
+        conn,
+        repo,
+        event,
+        related_events,
+        route_result.get("pre_pr_review_plan"),
+        task_id,
+        attempt_id,
+        prompt_path,
+        worktree_result,
+        previous_review=pre_pr_review.session(conn, task_id=parent_task_id) if retrigger_wakeup_id else None,
     )
     for artifact_type, path in [
         ("prompt", prompt_path),

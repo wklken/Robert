@@ -349,7 +349,11 @@ def build_task(conn, task_id, result_limit=5):
         task["review"] = review_store.task_status(conn, task_id)
     from robert_agent.persistence.rounds import vote as vote_store
 
+    from robert_agent.persistence.rounds import pre_pr_review
+
     task["vote"] = vote_store.task_status(conn, task_id)
+    if candidate := pre_pr_review.task_status(conn, task_id):
+        task["pre_pr_review"] = candidate
     task["events"] = [_row_dict(row) for row in db_read_task_events.find_for_build_task(conn, task_id)]
     return task
 

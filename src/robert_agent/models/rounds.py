@@ -133,3 +133,61 @@ class ReviewProcessPool(Base):
         CheckConstraint("singleton=1"),
         CheckConstraint("max_concurrency>0"),
     )
+
+
+class PrePrReviewSession(Base):
+    __tablename__ = "pre_pr_review_sessions"
+
+    round_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    task_id: Mapped[str] = mapped_column(Text, ForeignKey("tasks.task_id"), unique=True)
+    status: Mapped[str] = mapped_column(Text, server_default="queued")
+    request_json: Mapped[str] = mapped_column(Text)
+    snapshot_id: Mapped[str | None] = mapped_column(Text)
+    report_path: Mapped[str | None] = mapped_column(Text)
+    report_sha256: Mapped[str | None] = mapped_column(Text)
+    proof_json: Mapped[str | None] = mapped_column(Text)
+    deadline_at: Mapped[str | None] = mapped_column(Text)
+    next_retry_at: Mapped[str | None] = mapped_column(Text)
+    final_result_id: Mapped[str | None] = mapped_column(Text, ForeignKey("worker_results.result_id"))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text)
+
+
+class PrePrReviewSnapshot(Base):
+    __tablename__ = "pre_pr_review_snapshots"
+
+    snapshot_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    round_id: Mapped[str] = mapped_column(Text, ForeignKey("pre_pr_review_sessions.round_id"), index=True)
+    head_sha: Mapped[str] = mapped_column(Text)
+    base_sha: Mapped[str] = mapped_column(Text)
+    manifest_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+
+
+class PrePrReviewRun(Base):
+    __tablename__ = "pre_pr_review_runs"
+
+    run_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    round_id: Mapped[str] = mapped_column(Text, ForeignKey("pre_pr_review_sessions.round_id"))
+    stage: Mapped[str] = mapped_column(Text)
+    worker_id: Mapped[str] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(Text)
+    attempt_no: Mapped[int] = mapped_column(Integer)
+    owner_attempt_id: Mapped[str] = mapped_column(Text, ForeignKey("attempts.attempt_id"))
+    status: Mapped[str] = mapped_column(Text)
+    output_dir: Mapped[str] = mapped_column(Text, unique=True)
+    prompt_sha256: Mapped[str] = mapped_column(Text)
+    slot_reserved: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    started_at: Mapped[str | None] = mapped_column(Text)
+    dispatch_json: Mapped[str | None] = mapped_column(Text)
+    artifact_json: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("stage IN ('implement','prepare','review','synthesis','address_findings')"),
+        UniqueConstraint("round_id", "stage", "worker_id", "attempt_no"),
+        Index("pre_pr_review_runs_reserved", "slot_reserved", sqlite_where=text("slot_reserved=1")),
+    )

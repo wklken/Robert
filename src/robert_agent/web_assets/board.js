@@ -1066,7 +1066,7 @@ function attentionForCommand(detail, command) {
   )?.event_id;
 }
 function unknownReviewRunIds(detail) {
-  return (detail.tasks || []).flatMap(task => ((task.vote || task.review)?.runs || [])
+  return (detail.tasks || []).flatMap(task => ((task.vote || task.review || task.pre_pr_review)?.runs || [])
     .filter(run => run.can_abandon).map(run => run.run_id)).sort();
 }
 function updateComposerState(detail) {
@@ -1101,9 +1101,10 @@ function renderExecutionHistory(detail) {
     const entry = node("section", "execution-history-task");
     entry.append(node("h3", "", `${t(task.expected_output || task.route_id || "task")} · ${t(task.lifecycle)}`));
     entry.append(node("p", "attempt-counts", `${attemptCounts(task.attempts)} · ${task.task_id}`));
-    if (task.vote || task.review) {
-      const review = task.vote || task.review;
+    if (task.vote || task.review || task.pre_pr_review) {
+      const review = task.vote || task.review || task.pre_pr_review;
       entry.append(node("p", "", `${review.round_id} · ${review.head_sha || "pending"} · ${t(review.status)}`));
+      if (review.final_sha) entry.append(node("p", "", `Final: ${review.final_sha}`));
       if (review.process_pool) entry.append(node("p", "", `Model processes: ${review.process_pool.in_use} / ${review.process_pool.limit}`));
       else entry.append(node("p", "", "Model processes: unavailable"));
       if (review.error) entry.append(node("p", "", review.error));

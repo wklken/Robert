@@ -38,6 +38,7 @@ from robert_agent.persistence import execution_control as execution_store
 from robert_agent.foundation import commands as control_commands
 from robert_agent.foundation import values
 from robert_agent.execution import rounds as native_rounds
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.workflows import routes as route
 from robert_agent.workflows import routing as workflow_routing
 from robert_agent.persistence.rounds import review as review_store
@@ -489,6 +490,7 @@ def dispatch_queued_locked(
         }
         with closing(db_database.connect(db_path)) as conn:
             native_review = native_rounds.session(conn, task_id=task_info["task_id"])
+            candidate_review = pre_pr_review.session(conn, task_id=task_info["task_id"])
             dispatch_bound = dispatch_queries.for_task(conn, task_info["task_id"]) is not None
         if not native_review and (config_result or dispatch_bound):
             with closing(db_database.connect(db_path)) as conn, conn:
@@ -578,6 +580,63 @@ def dispatch_queued_locked(
                     worker_kwargs["worker_agent_config"] = supervision_repair_worker.launch_profile(
                         config_result, task_info["task_id"], task_info["attempt_id"], repair_authorization["worker"]
                     )
+        if candidate_review:
+            plan = candidate_review["request"]["plan"]
+            if task_info.get("routing_mode") == "manual" and not candidate_review["request"].get("implementer_bound"):
+                with closing(db_database.connect(db_path)) as conn, conn:
+                    db_transactions.begin(conn, immediate=True)
+                    if not dry_run and not current_dispatch_target(conn, task_info["attempt_id"]):
+                        continue
+                    plan = pre_pr_review.bind_implementer(conn, candidate_review["round_id"], selected_worker)
+            profiles = [plan["implementer"], *plan["workers"]]
+            current = {worker["name"]: worker for worker in (config_result or {}).get("workers", [])}
+            if config_result and any(
+                profile["name"] not in current
+                or any(
+                    profile[key] != current[profile["name"]][key]
+                    for key in ("agent", "command_argv", "environment_allowlist")
+                )
+                for profile in profiles
+            ):
+                with closing(db_database.connect(db_path)) as conn, conn:
+                    now = values.utc_now()
+                    db_write_attempts.update_for_dispatch_queued_locked(conn, now, task_info["attempt_id"])
+                    pre_pr_review.update(
+                        conn,
+                        candidate_review["round_id"],
+                        status="attention",
+                        error="current worker configuration differs from the recorded review plan",
+                    )
+                    work_application_lifecycle.finalize_failed_task(
+                        conn,
+                        task_info["task_id"],
+                        task_info["workstream_id"],
+                        now,
+                        {"status": "review_configuration_changed"},
+                    )
+                continue
+            worker_kwargs.update(
+                worktree_path=str(Path(db_path).resolve().parent),
+                worker_agent_config={
+                    "agent": "command",
+                    "command_argv": [
+                        sys.executable,
+                        "-m",
+                        "robert_agent.workflows.pre_pr_review.coordinator",
+                        "--db",
+                        str(Path(db_path).resolve()),
+                        "--task-id",
+                        task_info["task_id"],
+                        "--attempt-id",
+                        task_info["attempt_id"],
+                    ],
+                    "timeout_seconds": plan["timeout_seconds"],
+                    "environment_allowlist": sorted(
+                        {"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}
+                        | {name for profile in profiles for name in profile["environment_allowlist"]}
+                    ),
+                },
+            )
         if native_review:
             configured = native_review["request"]["workers"]
             timeout = (config_result or {}).get("hard_timeout_seconds", 3600)

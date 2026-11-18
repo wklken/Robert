@@ -45,7 +45,7 @@ Paths below are relative to `src/robert_agent/`.
 | `delivery/` | Submission contract, pure policies, locks, result/intent facts, selection and notification persistence | `delivery/application/`: audit, submission, trusted scope, guarded effects, intents, receipts, notifications, reconciliation and publication |
 | `supervision/` | Rules, lineage, model decision grants, durable recovery records, receipt proof and health projections | `supervision/application/`: observation, checks, decision calls and replies, publication recovery coordination |
 | `context/` | Unified prompt contracts/rendering, stage inputs, skills, review guidance, project memory and runtime knowledge | `context/application/`: transactional human knowledge review |
-| `workflows/` | Concrete review, vote, PR remediation and maintenance policies/processes | Compose domain capabilities; shared execution does not select a workflow implementation |
+| `workflows/` | Concrete review, pre-publication PR review, vote, PR remediation and maintenance policies/processes | Compose domain capabilities; shared execution does not select a workflow implementation |
 | `configuration/` | v2 loading, normalization, schema validation and route/supervision settings | Boundary parsing only; no execution or workflow imports |
 | `readmodels/` | Read-only dashboard, board, status, execution, usage and history projections | No HTTP dependency and no lifecycle mutations |
 | `models/` | Static SQLAlchemy table mappings preserving existing storage encodings | No I/O or imports of persistence or domain callers |

@@ -253,3 +253,48 @@ def vote_synthesize_input(manifest, inputs_path, inputs_hash, records):
         inputs_hash,
     )
     return _vote_input("vote.synthesize", manifest, output, frozen=True, extra=(selected,))
+
+
+def address_findings_input(manifest, candidate_path, report_path, report_sha, decision_ids):
+    identity = {"candidate_sha": manifest["head_sha"], "report_sha256": report_sha}
+    output = _files_output(
+        "review_dispositions",
+        _REVIEW_DIR,
+        ("dispositions.json",),
+        "Robert's new-pr coordinator",
+        {
+            **identity,
+            "final_sha": "<full HEAD SHA after committing>",
+            "dispositions": [
+                {"id": finding, "status": "fixed", "reason": "<concrete change and evidence>"}
+                for finding in decision_ids
+            ],
+            "verification": [
+                {
+                    "command": ["<check>"],
+                    "status": "passed",
+                    "purpose": "<behavior tested>",
+                    "exit_code": 0,
+                    "required": True,
+                    "source": "worker_reported",
+                }
+            ],
+            "body": "<updated original PR description>",
+        },
+    )
+    return PromptInput(
+        "review.address_findings",
+        identity,
+        output,
+        authority={"source_access": "assigned worktree", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
+        context_items=(
+            _file_item(
+                "candidate",
+                "Original implementation and verification handoff",
+                "Robert",
+                candidate_path,
+                manifest["head_sha"],
+            ),
+            _file_item("report", "Frozen report with the findings to address", "Robert", report_path, report_sha),
+        ),
+    )
