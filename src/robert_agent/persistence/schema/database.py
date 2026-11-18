@@ -2,10 +2,7 @@
 
 from robert_agent.persistence.schema import execution_control as execution_schema
 
-from sqlalchemy.dialects.sqlite import dialect
-from sqlalchemy.schema import CreateIndex, CreateTable
-from robert_agent.models.rounds import PrePrReviewRun, PrePrReviewSession, PrePrReviewSnapshot
-
+from robert_agent.persistence.schema import pre_pr_review
 from robert_agent.persistence.schema import review_rounds as review_schema
 from robert_agent.persistence.schema import source_providers
 from robert_agent.persistence.schema import vote_rounds as vote_schema
@@ -524,11 +521,7 @@ def init_database(db_path, schema_path=None):
         _migrate_pr_remediation(conn)
         review_schema.initialize(conn)
         vote_schema.initialize(conn)
-        for model in (PrePrReviewSession, PrePrReviewSnapshot, PrePrReviewRun):
-            table = model.__table__
-            conn.execute(str(CreateTable(table, if_not_exists=True).compile(dialect=dialect())))
-            for index in table.indexes:
-                conn.execute(str(CreateIndex(index, if_not_exists=True).compile(dialect=dialect())))
+        pre_pr_review.initialize(conn)
         if built_in_schema and _data_migration_pending(
             conn, SUPERVISION_MIGRATION_NAME, SUPERVISION_MIGRATION_CHECKSUM
         ):

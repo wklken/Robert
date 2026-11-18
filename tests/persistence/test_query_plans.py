@@ -11,6 +11,7 @@ from sqlalchemy.dialects.sqlite import dialect
 
 from robert_agent.persistence import statements
 from robert_agent.persistence.queries import attempts, notifications, tasks
+from robert_agent.persistence.schema import pre_pr_review
 from robert_agent.persistence.schema.database import init_database
 
 
@@ -19,6 +20,7 @@ class NotificationQueryPlanTests(unittest.TestCase):
         fixture = Path(__file__).parents[1] / "fixtures/persistence/pre_orm_5e0e952.sql"
         with closing(sqlite3.connect(":memory:")) as conn:
             conn.executescript(fixture.read_text())
+            pre_pr_review.initialize(conn)
             conn.execute(
                 "UPDATE attempts SET metadata_json=json_set(metadata_json, '$.resume.not_before_at', ?)",
                 ("2026-11-08T00:00:00+00:00",),
