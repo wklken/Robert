@@ -66,7 +66,7 @@ def _reopened_by_failure(items):
     return and_(
         func.coalesce(items.c.completed_at, "") != "",
         func.coalesce(items.c.canceled_at, "") == "",
-        latest == sql_constant("failed"),
+        func.coalesce(latest, "") == sql_constant("failed"),
     )
 
 

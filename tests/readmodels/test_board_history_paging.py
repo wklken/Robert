@@ -138,6 +138,14 @@ class BoardHistoryPagingTests(BoardReadModelFixture):
         # Five active cards may need lifecycle evaluation, plus one page and its lookahead.
         self.assertLessEqual(project.call_count, 5 + 7 + 1)
 
+    def test_done_partition_keeps_completed_items_without_a_task(self):
+        item = self._create("Completed without a task")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE work_items SET completed_at=? WHERE work_item_id=?", (NEWEST, item["work_item_id"]))
+        page = board.list_board(self.db_path, column="done")
+        self.assertEqual(page["counts"]["done"], 1)
+        self.assertEqual(self.item_ids(page), [item["work_item_id"]])
+
     def test_terminal_pages_preserve_order_counts_and_agent_filters(self):
         self.seed_filter_history()
         filters = {"repo": "example/repo", "priority": "P1"}

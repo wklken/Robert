@@ -258,8 +258,7 @@ class BoardReadModelTests(BoardReadModelFixture):
         self.assertEqual(overview["counts"]["needs_action"], 2)
         self.assertEqual(board.list_board(self.db_path, column="done")["items"], [])
 
-    def test_completed_github_item_with_a_later_failed_task_offers_retrigger(self):
-        from robert_agent.readmodels import board
+    def _completed_github_item_with_failed_followup(self):
         from robert_agent.work.application import commands as work_items
 
         now = "2026-10-13T06:35:18+00:00"
@@ -292,7 +291,14 @@ class BoardReadModelTests(BoardReadModelFixture):
                 (now, item["work_item_id"]),
             )
         self._add_failed_followup({"workstream_id": source_key})
+        return item
 
+    def test_completed_github_item_with_a_later_failed_task_offers_retrigger(self):
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
+        from robert_agent.work.errors import WorkItemConflictError
+
+        item = self._completed_github_item_with_failed_followup()
         projected = board.list_board(self.db_path)["items"][0]
         self.assertEqual(projected["column"], "waiting")
         self.assertEqual(projected["valid_commands"], ["retrigger", "reopen"])
@@ -312,6 +318,48 @@ class BoardReadModelTests(BoardReadModelFixture):
         self.assertEqual(requested["status_summary"]["state"], "queued")
         self.assertEqual(requested["status_summary"]["owner"], "robert")
         self.assertFalse(requested["status_summary"]["needs_action"])
+
+        with self.assertRaisesRegex(WorkItemConflictError, "retrigger request is already pending"):
+            work_items.execute_command(
+                self.db_path,
+                item["work_item_id"],
+                context=self.context,
+                command="reopen",
+                expected_version=projected["version"],
+                idempotency_key="stale-reopen",
+            )
+
+    def test_completed_github_item_offers_reopen_for_failed_operator_followup(self):
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
+
+        item = self._completed_github_item_with_failed_followup()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute(
+                "UPDATE tasks SET metadata_json=? WHERE task_id='task-followup'",
+                (json.dumps({"trigger_work_item_event_id": "operator-reply"}),),
+            )
+            work_items.record_system_event(
+                conn,
+                item["work_item_id"],
+                event_type="execution_failed",
+                idempotency_key="operator-followup-failed",
+                metadata={"task_id": "task-followup"},
+            )
+
+        projected = board.get_work_item_detail(self.db_path, item["work_item_id"])
+        self.assertEqual(projected["valid_commands"], ["reopen"])
+        self.assertEqual(projected["status_summary"]["primary"], "reopen")
+        result = work_items.execute_command(
+            self.db_path,
+            item["work_item_id"],
+            context=self.context,
+            command="reopen",
+            expected_version=projected["version"],
+            idempotency_key="reopen-failed-followup",
+        )
+        self.assertTrue(result["ok"])
 
     def test_completed_item_with_a_closed_source_stays_done(self):
         from robert_agent.readmodels import board

@@ -581,7 +581,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
         # Completed items accept only reopen on the work item; a rerun acts on
         # the failed task itself.
         recovery = _failed_task_recovery(conn, task, attention) if row["origin_type"] != "web" else []
-        card["valid_commands"] = recovery + ["reopen"]
+        card["valid_commands"] = [command for command in recovery if command == "retrigger"] + ["reopen"]
     if column == "done" and facts["source_closed"]:
         card["valid_commands"] = []
     card["status_summary"] = _status_summary(conn, card, row, task=task, facts=facts, attention=attention)
