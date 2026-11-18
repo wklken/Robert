@@ -189,11 +189,11 @@ def _valid_commands(column, attention, *, running=False, publishing=False):
     return ["cancel"]
 
 
-def _waiting_github_context(conn, task_id):
-    from robert_agent.work import operator_queries as github_operator
+def _waiting_source_context(conn, task_id):
+    from robert_agent.work import operator_queries
 
-    task = next(iter(github_operator.pending_tasks(conn, task_id=task_id)), None)
-    return bool(task and not github_operator.source_read(conn, task)[0])
+    task = next(iter(operator_queries.pending_tasks(conn, task_id=task_id)), None)
+    return bool(task and not operator_queries.source_read(conn, task)[0])
 
 
 def _retrigger_pending(conn, task):
@@ -419,12 +419,13 @@ def _project_item(conn, row, *, controls=None, facts=None):
         and not running
         and not publication_in_progress
         and not any(a["type"] == "operator_decision_required" for a in attention)
-        and _waiting_github_context(conn, task["task_id"])
+        and _waiting_source_context(conn, task["task_id"])
     ):
+        source_name = "TAPD" if row["origin_type"] == SourceProvider.TAPD else "GitHub"
         column, reason_code, reason_summary = (
             "todo",
-            "github_context_refresh_pending",
-            "Queued; waiting for the background scanner to refresh GitHub context.",
+            f"{row['origin_type']}_context_refresh_pending",
+            f"Queued; waiting for the background scanner to refresh {source_name} context.",
         )
     elif (
         task
