@@ -652,6 +652,17 @@ def list_board(conn):
     return statements.read(conn, query4, {})
 
 
+def count_by_task_status(conn, task_id):
+    attempts = tables["attempts"]
+    query = select(
+        func.count(literal_column("*")),
+        func.coalesce(
+            func.sum(case((attempts.c["status"] == sql_constant(AttemptStatus.FAILED.value), 1), else_=0)), 0
+        ),
+    ).where(attempts.c["task_id"] == bindparam("p0"))
+    return statements.read(conn, query, {"p0": task_id})
+
+
 def find_for_project_item(conn, task_id):
     query1 = (
         select(sql_constant(1))
