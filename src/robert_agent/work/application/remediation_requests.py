@@ -232,7 +232,7 @@ def collect_pr_remediation_decisions(
         now=run_now,
     )
     if direct_dispatch and decisions:
-        current = current_config(conn, config)
+        current = current_config(conn, config, reload_for_dispatch=True)
         # The runtime attaches the Python executable to the repository before the cycle.
         configured_repo = {key: value for key, value in repo.items() if key != "python_bin"}
         if (

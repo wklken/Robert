@@ -2,6 +2,7 @@ from contextlib import closing
 import json
 import sqlite3
 import sys
+from unittest.mock import patch
 
 from tests.support.pr_remediation_integration import PrRemediationIntegrationFixture
 from robert_agent.runtime.cycle import with_python_bin
@@ -85,6 +86,34 @@ class ModelPrSupervisionTests(PrRemediationIntegrationFixture):
                     observation = decisions.snapshot(conn, root_id, config, now)
                     self.assertEqual(observation["candidates"], [])
                     self.assertEqual(decisions.read(conn, root_id), {})
+
+    def test_direct_dispatch_rechecks_daemon_enabled_with_supervision_off(self):
+        self.repo["pr_automation"]["dispatch_mode"] = "direct"
+        config = {
+            "ok": True,
+            "config_path": str(self.db_path.with_suffix(".yml")),
+            "db_path": str(self.db_path),
+            "repos": [self.repo],
+            "supervision": {"mode": "off"},
+            "daemon": {"enabled": True},
+        }
+        edited = {**config, "daemon": {"enabled": False}}
+        with (
+            closing(sqlite3.connect(self.db_path)) as conn,
+            conn,
+            patch("robert_agent.configuration.command.validate_config", return_value=edited),
+        ):
+            self.assertEqual(
+                remediation_requests.collect_pr_remediation_decisions(
+                    conn,
+                    "repo:example/backend",
+                    self.repo,
+                    self.runner(),
+                    "2026-07-26T00:01:00+00:00",
+                    config=config,
+                ),
+                [],
+            )
 
     def test_direct_dispatch_leaves_failed_attempt_retry_to_model(self):
         self.repo["pr_automation"]["dispatch_mode"] = "direct"
