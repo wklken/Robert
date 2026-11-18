@@ -17,6 +17,13 @@ class BackportCommandTests(unittest.TestCase):
                 self.assertEqual(request.source_pr, 3533)
                 self.assertEqual(request.targets, ("release/1.25", "release/1.26"))
 
+    def test_words_inside_literal_branch_names_are_preserved(self):
+        request = backports.parse_request(
+            "@robert backport #10 to fixes/search-and-replace, release/研发和测试 and stable",
+            "robert",
+        )
+        self.assertEqual(request.targets, ("fixes/search-and-replace", "release/研发和测试", "stable"))
+
     def test_context_invalid_targets_and_multiple_commands_are_inert(self):
         for text in (
             "> @robert cherry-pick #10 to release/1.25",

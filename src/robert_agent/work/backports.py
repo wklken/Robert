@@ -40,7 +40,7 @@ def parse_request(body, mention_name):
             re.I,
         )
         if match:
-            targets = tuple(dict.fromkeys(re.split(r"\s*(?:[,，、]|\band\b|和)\s*", match[2])))
+            targets = tuple(dict.fromkeys(re.split(r"\s*[,，、]\s*|\s+(?:and|和)\s+", match[2])))
             if not targets or not all(valid_branch(target) for target in targets):
                 return None
             commands.append(BackportRequest(int(match[1]), targets))
