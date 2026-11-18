@@ -1,6 +1,7 @@
 """Select the assigned workspace for an attempt."""
 
 import re
+import hashlib
 
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, SourceProvider
 
@@ -57,10 +58,15 @@ def prepare_worktree(repo, event, route_result, dry_run):
             "number": (
                 event.get("existing_pr_number") or event["number"]
                 if workspace_mode in _PULL_REQUEST_MODES
-                else source_reference(event)
+                else (
+                    source_reference(event) + "-" + hashlib.sha256(event["event_fingerprint"].encode()).hexdigest()[:12]
+                    if event.get("backport")
+                    else source_reference(event)
+                )
             ),
             "branch_slug": (event.get("branch_slug") or event.get("title") or "task"),
             "head_branch": event.get("existing_pr_head_branch"),
+            "base_branch": event.get("base_branch") or repo["default_base_branch"],
         },
         dry_run,
     )

@@ -136,7 +136,47 @@ body.drawer-open { overflow: hidden; }
 }
 
 .execution-history > summary, .detail-section > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
-.execution-history > details { padding: 10px 0; border-bottom: 1px solid var(--borderColor-muted); }
+.execution-history > details { border-bottom: 1px solid var(--borderColor-muted); }
 .execution-history > details > summary { cursor: pointer; font-size: 13px; }
 
 .scope-note { color: var(--fgColor-muted); font-size: 12px; margin: 8px 0 14px; }
+
+/* Rows: tone stripe and a one-line reason for items that need someone. */
+.work-row { position: relative; }
+.work-row[data-tone="danger"] { box-shadow: inset 3px 0 0 var(--fgColor-danger); }
+.work-row[data-tone="attention"] { box-shadow: inset 3px 0 0 var(--fgColor-attention); }
+.work-why { margin: 4px 0 0; color: var(--fgColor-danger); font-size: 12px; line-height: 1.45; }
+
+/* Detail: conclusion first, progress next, traces on demand. */
+.layer-label { margin: 0; padding: 14px 18px 0; color: var(--fgColor-muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.now-panel { margin: 8px 18px 4px; padding: 0; border: 1px solid var(--borderColor-default); border-radius: var(--radius-medium); overflow: hidden; }
+.now-panel[data-tone="danger"] { border-color: var(--borderColor-danger); }
+.now-panel[data-tone="attention"] { border-color: var(--borderColor-attention); }
+.now-head { margin: 0; padding: 12px 14px; font-size: 15px; font-weight: 600; background: var(--bgColor-muted); }
+.now-panel[data-tone="danger"] .now-head { color: var(--fgColor-danger); background: var(--bgColor-danger-muted); }
+.now-panel[data-tone="attention"] .now-head { color: var(--fgColor-attention); background: var(--bgColor-attention-muted); }
+.now-panel[data-tone="running"] .now-head { color: var(--fgColor-running); background: var(--bgColor-running-muted); }
+.facts { display: grid; grid-template-columns: 78px minmax(0, 1fr); margin: 0; padding: 4px 14px; }
+.facts dt, .facts dd { margin: 0; padding: 8px 0; border-top: 1px solid var(--borderColor-muted); font-size: 13px; line-height: 1.5; }
+.facts dt { color: var(--fgColor-muted); }
+.facts dt:first-of-type, .facts dt:first-of-type + dd { border-top: 0; }
+.facts dd > span { display: block; }
+.fact-source { margin-top: 2px; color: var(--fgColor-muted); font-size: 12px; }
+.fact-unknown { color: var(--fgColor-muted); font-style: italic; }
+.next-step { padding: 10px 14px 12px; border-top: 1px solid var(--borderColor-muted); }
+.next-step h4 { margin: 0 0 8px; font-size: 12px; color: var(--fgColor-muted); }
+.now-panel .consequence, .now-panel .no-action { margin: 0; padding: 0 14px 12px; color: var(--fgColor-muted); font-size: 12px; }
+.raw-detail { color: var(--fgColor-muted); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.progress-section .pr-link { display: inline-block; margin: 0 0 10px; font-weight: 600; }
+.progress-column { margin: 0 0 8px; font-weight: 600; }
+
+.disclosure-card, .execution-history { margin: 8px 18px; padding: 0; border: 1px solid var(--borderColor-default); border-radius: var(--radius-medium); }
+.disclosure-card > summary, .execution-history > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; list-style: none; }
+.disclosure-card > summary::-webkit-details-marker, .execution-history > summary::-webkit-details-marker { display: none; }
+.disclosure-card > summary::before, .execution-history > summary::before { content: "›"; flex: 0 0 auto; color: var(--fgColor-muted); transition: transform .15s; }
+.disclosure-card[open] > summary::before, .execution-history[open] > summary::before { transform: rotate(90deg); }
+.disclosure-card > summary > span:first-of-type, .execution-history > summary > span:first-of-type { flex: 1; min-width: 0; }
+.disclosure-card > :not(summary), .execution-history > :not(summary) { margin-inline: 14px; }
+.disclosure-card[open], .execution-history[open] { padding-bottom: 10px; }
+.execution-history > details { padding: 8px 0; }
+.execution-history > details[data-status="failed"] > summary { color: var(--fgColor-danger); }

@@ -290,12 +290,15 @@ class StageCoordinator:
             store.update(conn, self.round_id, manifest_json=json.dumps(self.manifest, ensure_ascii=False))
             db_write_attempts.set_worktree_path_by_attempt_id(conn, self.manifest["worktree_path"], self.attempt_id)
 
+    def recovery_workers(self):
+        return {worker["name"]: worker for worker in self.request["workers"]}
+
     def reconcile_running(self):
         """Finish previous model processes before scheduling any new phase."""
         store = self.store
         with store.connect(self.db_path) as conn:
             previous = store.runs(conn, self.round_id)
-        workers = {worker["name"]: worker for worker in self.request["workers"]}
+        workers = self.recovery_workers()
         pending = []
         for run in previous:
             if run["status"] == ModelRunStatus.STARTING and not run["dispatch"]:
@@ -353,6 +356,14 @@ class StageCoordinator:
                 with self.store.connect(self.db_path) as conn:
                     run_store.release_finished_slot(conn, run)
 
+    def stage_worktree(self, run):
+        return self.manifest["worktree_path"]
+
+    def stage_environment(self, run):
+        return model_environment.stage_environment(
+            self.manifest, run["output_dir"], self.data_dir, workflow_name=self.workflow_name
+        )
+
     def launch_with_slot(self, run, worker, prompt_path, environment):
         store = self.store
         while True:
@@ -364,6 +375,7 @@ class StageCoordinator:
             with task_publication_lock(self.db_path, self.task_id) as locked:
                 if locked:
                     self.check_active()
+                    worktree = self.stage_worktree(run)
                     with store.connect(self.db_path) as conn:
                         db_transactions.begin(conn, immediate=True)
                         if not attempt_is_active(conn, self.task_id, self.attempt_id):
@@ -374,7 +386,7 @@ class StageCoordinator:
                             task_id=self.task_id,
                             attempt_id=run["run_id"],
                             prompt_path=prompt_path,
-                            worktree_path=self.manifest["worktree_path"],
+                            worktree_path=worktree,
                             worker_agent_config=worker,
                             model=run["model"],
                             reasoning_effort=worker["default_effort"],
@@ -405,6 +417,9 @@ class StageCoordinator:
         store = self.store
         self.check_active()
         with store.connect(self.db_path) as conn:
+            db_transactions.begin(conn, immediate=True)
+            if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                raise StageStopped("review attempt is no longer current")
             store.update_run(
                 conn,
                 run["run_id"],
@@ -517,6 +532,12 @@ class StageCoordinator:
         if launched.get("returncode", 0) != 0:
             raise RuntimeError(f"review worker exited with code {launched['returncode']}")
 
+    def phase_input_changed(self, stage):
+        return stage == "synthesis" or (stage == "prepare" and not self.manifest.get("frozen"))
+
+    def check_launch_budget(self, stage, prompt_hash, previous):
+        """Workflow hook for a durable limit on stage launches."""
+
     def run_phase(self, stage, worker, prompt_path, validate, *, input_hash=None):
         """Adopt a complete unregistered file, or run only this failed stage."""
         store = self.store
@@ -536,7 +557,7 @@ class StageCoordinator:
                     )
                 continue
             if run["prompt_sha256"] != prompt_hash:
-                if stage == "synthesis" or (stage == "prepare" and not self.manifest.get("frozen")):
+                if self.phase_input_changed(stage):
                     if run["status"] in {ModelRunStatus.RUNNING, ModelRunStatus.SUCCEEDED}:
                         with store.connect(self.db_path) as conn:
                             store.update_run(
@@ -574,6 +595,7 @@ class StageCoordinator:
             previous = [
                 r for r in store.runs(conn, self.round_id) if r["stage"] == stage and r["worker_id"] == worker["name"]
             ]
+            self.check_launch_budget(stage, prompt_hash, previous)
             model = worker["default_model"]
             limited = [
                 r
@@ -608,9 +630,7 @@ class StageCoordinator:
             )
             store.update_run(conn, run["run_id"], status=ModelRunStatus.WAITING.value)
         try:
-            environment = model_environment.stage_environment(
-                self.manifest, run["output_dir"], self.data_dir, workflow_name=self.workflow_name
-            )
+            environment = self.stage_environment(run)
             launched = self.launch_with_slot(run, worker, prompt_path, environment)
             if not launched.get("ok"):
                 if launched.get("pid") and not _wait_for_group_exit(launched):

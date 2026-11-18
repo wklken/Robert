@@ -37,7 +37,7 @@ def occupied_attempt(attempt):
 def native_slot_owned(task):
     """One ordinary slot belongs to a round until all model slots are released."""
     reservations = []
-    for kind in ("review", "vote"):
+    for kind in ("review", "vote", "pre_pr_review"):
         session = tables[f"{kind}_sessions"].alias(f"{kind}_capacity_session")
         run = tables[f"{kind}_runs"].alias(f"{kind}_capacity_run")
         reservations.append(

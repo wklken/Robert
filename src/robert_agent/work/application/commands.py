@@ -407,6 +407,7 @@ def _create_task(
     now,
     workstream_id=None,
     lineage_key=None,
+    reviewed_retry=False,
 ):
     workstream_id = workstream_id or item["workstream_id"]
     task_id = f"task-{uuid4().hex}"
@@ -423,6 +424,8 @@ def _create_task(
     if repair and repair.get("automatic") is True:
         routing_mode, requested_worker = "manual", repair["worker"]
         metadata["supervision_repair"] = repair
+    if reviewed_retry:
+        metadata["pre_pr_review_retry"] = parent_task_id
     if trigger_event_id:
         metadata["trigger_work_item_event_id"] = trigger_event_id
     if lineage_key:
@@ -541,6 +544,12 @@ def retrigger_failed_github_task(
 
                     if dispatch_status(process_metadata)["status"] != "dead":
                         raise WorkItemConflictError("worker termination must be confirmed before retry")
+            from robert_agent.persistence.rounds import pre_pr_review
+
+            if pre_pr_review.session(conn, task_id=task_id) and (
+                not native_exit["all_stopped"] or not native_rounds.exit_observation_current(conn, task_id, native_exit)
+            ):
+                raise WorkItemConflictError("Pre-publication review processes must be reconciled before retry")
             if cutover_recovery:
                 if not native_exit["all_stopped"] or not native_rounds.exit_observation_current(
                     conn, task_id, native_exit
@@ -844,6 +853,22 @@ def create_work_item(
             raise
 
 
+def _check_reviewed_retry(conn, locks, db_path, task_id):
+    from robert_agent.delivery.lock import task_publication_lock
+    from robert_agent.persistence.rounds import pre_pr_review
+
+    entry = pre_pr_review.session(conn, task_id=task_id)
+    if not entry:
+        if pre_pr_review.required(conn, task_id):
+            raise WorkItemConflictError("The saved pre-publication review is unavailable.")
+        return False
+    if not locks.enter_context(task_publication_lock(db_path, task_id)) or any(
+        run["slot_reserved"] for run in pre_pr_review.runs(conn, entry["round_id"])
+    ):
+        raise WorkItemConflictError("Reconcile the pre-publication review processes before retrying.")
+    return True
+
+
 def _finish_parent_for_child(conn, parent_task, now):
     if not parent_task:
         return None
@@ -1104,6 +1129,10 @@ def execute_command(
             elif command == WorkCommand.REOPEN:
                 if item["completed_at"] is None or item["canceled_at"] is not None:
                     raise WorkItemConflictError("only a completed work item can be reopened")
+                if audit_task and db_records.first(
+                    db_read_wakeups.find_for_retrigger_failed_github_task(conn, item["repo_id"], audit_task["task_id"])
+                ):
+                    raise WorkItemConflictError("a retrigger request is already pending")
                 db_write_work_items.update_for_execute_command_3(conn, now, work_item_id)
                 parent = _active_or_latest_task(conn, item["workstream_id"])
                 parent_task_id = _finish_parent_for_child(conn, parent, now)
@@ -1254,6 +1283,12 @@ def execute_command(
                         ):
                             raise WorkItemConflictError("The question owner changed. Refresh before replying.")
                         parent = question_task
+                    reviewed_retry = (
+                        command == WorkCommand.RETRY
+                        and item["origin_type"] == "web"
+                        and parent is not None
+                        and _check_reviewed_retry(conn, locks, db_path, parent["task_id"])
+                    )
                     parent_task_id = _finish_parent_for_child(conn, parent, now)
                     db_write_work_items.update_for_execute_command_2(conn, now, work_item_id)
                     item = _load_item(conn, work_item_id)
@@ -1267,6 +1302,7 @@ def execute_command(
                         now=now,
                         workstream_id=parent["workstream_id"] if question_task_id else None,
                         lineage_key=supervision_lineage.get_task_lineage(conn, parent_task_id),
+                        reviewed_retry=reviewed_retry,
                     )
                 resolved_event_id = unresolved["event_id"] if unresolved else None
 

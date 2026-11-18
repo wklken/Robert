@@ -169,5 +169,24 @@ body { background: var(--bgColor-default); }
 }
 
 .mission-workspace > .snapshot-notice { padding: 0 0 12px; margin-bottom: 16px; }
+
+/* One plain sentence before the panels: is anything wrong, and where to go. */
+.ops-conclusion { display: grid; gap: 6px; margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--borderColor-default); border-left: 4px solid var(--fgColor-success); border-radius: var(--radius-medium, 10px); background: var(--bgColor-success-muted); }
+.ops-conclusion.warning { border-left-color: var(--fgColor-attention); background: var(--bgColor-attention-muted); }
+.ops-conclusion.critical { border-left-color: var(--fgColor-danger); background: var(--bgColor-danger-muted); }
+.ops-conclusion p { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 14px; font-weight: 600; line-height: 1.5; }
+.ops-conclusion p > span { flex: 1; min-width: 0; }
+.ops-conclusion p .button { flex: 0 0 auto; display: inline-flex; align-items: center; padding: 0 12px; text-decoration: none; }
+.ops-conclusion code { padding: 1px 5px; border-radius: 4px; background: var(--bgColor-inset); font-size: 12px; }
+
+.knowledge-pipeline { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px; padding: 0; list-style: none; counter-reset: none; }
+.knowledge-pipeline li { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--borderColor-muted); border-radius: 6px; background: var(--bgColor-muted); font-size: 12px; }
+.knowledge-pipeline strong { font-size: 13px; }
+.knowledge-pipeline span { color: var(--fgColor-muted); line-height: 1.45; }
+@media (max-width: 760px) { .knowledge-pipeline { grid-template-columns: 1fr; } }
 .command-title p { font-size: 13px; }
 .nav-label { text-transform: none; letter-spacing: normal; }
+.ops-conclusion .state-icon { display: inline-grid; flex: 0 0 auto; place-items: center; width: 20px; height: 20px; border: 1.5px solid currentColor; font-size: 11px; }
+.ops-conclusion .critical .state-icon { color: var(--fgColor-danger); }
+.ops-conclusion .warning .state-icon { color: var(--fgColor-attention); }
+.ops-conclusion .ok .state-icon { color: var(--fgColor-success); }

@@ -45,14 +45,13 @@ class _Visible(HTMLParser):
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.visible, self.own, self.hidden, self.tags = [], [], 0, False
+        self.visible, self.own, self.hidden = [], [], 0
 
     def _break(self):
         self.visible.append("\n")
         self.own.append("\n")
 
     def handle_starttag(self, tag, attrs):
-        self.tags = True
         if tag in _BLOCKS:
             self._break()
         if tag in _HIDDEN:
@@ -71,7 +70,7 @@ class _Visible(HTMLParser):
 
 
 def _plain_own_text(text):
-    """Remove Markdown quotes and code from a body that has no HTML structure."""
+    """Remove Markdown quotes and code before interpreting any HTML examples."""
     kept, fence, quoted = [], None, False
     for line in text.splitlines():
         marker = _FENCE.match(line)
@@ -93,6 +92,14 @@ def _squeeze(text):
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
+def own_comment_text(body):
+    """Visible command text outside HTML/Markdown quotations and code."""
+    parser = _Visible()
+    parser.feed(_plain_own_text(body or ""))
+    parser.close()
+    return _squeeze("".join(parser.own))
+
+
 def _marker(mention_name):
     return re.compile(rf"(?<![\w@])@(?ai:{re.escape(mention_name)})(?![\w-]|\.[\w-])")
 
@@ -107,7 +114,7 @@ def parse_comment(body, mention_name):
     parser.feed(body or "")
     parser.close()
     text = _squeeze("".join(parser.visible))
-    own = _squeeze("".join(parser.own) if parser.tags else _plain_own_text(body or ""))
+    own = own_comment_text(body)
     automatic = own.casefold().startswith((f"{mention_name}：".casefold(), f"{mention_name}:".casefold()))
     return ParsedComment(text, automatic, not automatic and bool(_marker(mention_name).search(own)))
 

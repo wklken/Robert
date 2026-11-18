@@ -64,6 +64,17 @@ def effective_route(config_result, repo, event, route_id=None):
         repo,
         policy,
     )
+    if resolved.get("pre_pr_review"):
+        configured = {worker["name"]: worker for worker in config_result["workers"]}
+        resolved["pre_pr_review_plan"] = {
+            "workers": [configured[name] for name in resolved["pre_pr_review"]["workers"]],
+            "implementer": {
+                **configured[resolved["worker"]],
+                "default_model": resolved["model"],
+                "default_effort": resolved["effort"],
+            },
+            "timeout_seconds": config_result.get("hard_timeout_seconds", 3600),
+        }
     if resolved["id"] == "review-pr":
         selected = route_config.review_workers_for_author(resolved, event.get("pr_author_login"))
         if len(selected) > 1:

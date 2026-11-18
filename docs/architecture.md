@@ -259,7 +259,11 @@ flowchart TD
 TAPD 请求由扫描通道写入来源行和事件，授权状态在第一次观察时固定。仓库循环中的
 `tapd_intake.collect_decisions` 按当前配置与已保存的单据结束状态复核，再交给同一条
 workstream、路由和准备流程。存在一个打开的派生 PR 时，TAPD 请求进入该 PR 的
-workstream。修改路由复用同一分支，回评目标仍是原单据。发布审核检查 GitHub 动作和
+workstream。明确的多分支回移由 [work/backports.py](../src/robert_agent/work/backports.py) 解析，
+受理先保存每个目标的独立事件，再处置原始命令。每个目标工作流及创建的 PR 都直接关联原单据，
+因此取消和来源状态对账覆盖全部目标。按目标 base 选择已有 PR；没有匹配时创建独立任务。
+本地已接受回复通过同一分发能力保存目标请求。任务保存 base，工作区、提示和发布审核沿用这份范围。
+修改路由复用同一分支，回评目标仍是原单据。发布审核检查 GitHub 动作和
 本次推送的提交信息中的 TAPD 标识。PR 创建确认后即建立本地关联，后续回评使用
 已保存的正文及 PR 链接。PR 终态、修复轮次终态和已提交的 GitHub review 通过
 [`work/tapd_notices.py`](../src/robert_agent/work/tapd_notices.py) 查找原单据，
@@ -516,6 +520,9 @@ flowchart TD
 配置、命令与限制见 [持续任务监督](features/task-supervision.md)。
 
 ## 多模型评审与投票
+
+[新 PR 发布前 Review](features/pre-pr-review.md) 使用本地候选快照和独立 run，
+复用共享模型阶段和并发额度。结构化处置与验证绑定最终提交，审计和发布核对持久证明。
 
 两种内建协调器共用 `StageCoordinator` 和 SQLite 模型进程池。一轮占一个任务并发槽，
 各阶段模型再申请共享额度。图用两个模型说明阶段顺序，实际数量来自配置。

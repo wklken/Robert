@@ -7,9 +7,10 @@ import os
 from robert_agent.persistence.rounds import pool as model_pool
 from robert_agent.persistence.rounds import review as review_store
 from robert_agent.persistence.rounds import vote as vote_store
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.execution.stages import terminate_children as stop_children
 
-STORES = (review_store, vote_store)
+STORES = (review_store, vote_store, pre_pr_review)
 SLOT_STORES = tuple(zip(STORES, model_pool.RUN_TABLES))
 
 
@@ -22,7 +23,11 @@ def owner(conn, task_id):
 
 
 def session(conn, *, task_id):
-    return owner(conn, task_id)[1]
+    # Existing callers consume remote review/vote routing and source identity.
+    for store in (review_store, vote_store):
+        if entry := store.session(conn, task_id=task_id):
+            return entry
+    return None
 
 
 def _exit_snapshot(conn, task_id):

@@ -26,6 +26,7 @@ STAGES = {
     "maintenance.repair": StageProfile("stdout-json", (OutputType.NEW_PR,)),
     "review.prepare": StageProfile("atomic-files", ("review_context",), boundary="review"),
     "review.evaluate": StageProfile("atomic-files", ("review_result",), boundary="review"),
+    "review.address_findings": StageProfile("atomic-files", ("review_dispositions",)),
     "review.synthesize": StageProfile("atomic-files", ("review_evaluation",), boundary="review"),
     "vote.prepare": StageProfile("atomic-files", ("prepared_request",), boundary="vote"),
     "vote.cast": StageProfile("atomic-files", ("ballot",), boundary="vote"),
@@ -42,6 +43,7 @@ GUIDANCE = {
     for resource, section, names in (
         ("issue-dispatch", "Work", ("issue-dispatch",)),
         ("tapd", "Work", ("tapd",)),
+        ("backport", "Work", ("backport",)),
         ("worker", "Boundaries", ("worker-boundaries",)),
         ("worker", "Work", ("collaboration", "resume", "skills", "memory", "knowledge")),
         ("worker", "Verification", ("unit-tests", "verification")),

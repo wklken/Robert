@@ -51,6 +51,18 @@ class BoardLifecycleTests(unittest.TestCase):
         self.assertIn(b'id="board-app"', web.build_http_response("/", self.db)[2])
         self.assertIn(b'id="workbench-app"', web.build_http_response("/work", self.db)[2])
 
+    def test_work_queue_names_local_tasks_by_their_board_title(self):
+        from robert_agent.readmodels import workbench
+
+        item = self.create("Local pagination fix", start=True)
+        listed = next(
+            entry for entry in workbench.list_work_items(self.db)["items"] if entry["id"] == item["workstream_id"]
+        )
+        self.assertEqual(listed["source"]["title"], "Local pagination fix")
+        self.assertEqual(listed["lifecycle"]["status_summary"]["state"], "queued")
+        detail = workbench.get_work_item(self.db, item["workstream_id"])
+        self.assertEqual(detail["source"]["title"], "Local pagination fix")
+
     def test_expired_route_approval_does_not_activate_a_completed_workstream(self):
         item = self.create(start=True)
         decision = self.event(item, "operator_decision_required")

@@ -336,7 +336,9 @@ def authorized_repair(conn, task_id, config, repo_id, action_type=None):
     if not binding or not policy or (action_type is not None and action_type not in ACTIONS):
         return None
     repo = _repo(config, policy)
-    if repo is None or (authorization := _auto_authorization(config, policy, repo)) is None:
+    if repo is None or repo.get("routes", {}).get(ROUTE, {}).get("pre_pr_review"):
+        return None
+    if (authorization := _auto_authorization(config, policy, repo)) is None:
         return None
     if binding.get("policy_digest") != authorization["policy_digest"] or binding.get("worker") != policy["worker"]:
         return None

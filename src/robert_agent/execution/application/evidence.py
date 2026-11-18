@@ -18,6 +18,7 @@ from robert_agent.foundation import values
 from robert_agent.execution import command as command_heartbeat
 from robert_agent.execution import progress as worker_snapshot
 from robert_agent.execution import rounds as native_rounds
+from robert_agent.persistence.rounds import pre_pr_review
 import hashlib
 import json
 import os
@@ -256,7 +257,11 @@ def terminal_transport_failure(logs):
 
 def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
 
-    review = native_rounds.session(conn, task_id=task_id) if conn is not None else None
+    review = (
+        native_rounds.session(conn, task_id=task_id) or pre_pr_review.session(conn, task_id=task_id)
+        if conn is not None
+        else None
+    )
     if review:
         revision_changed = (
             review["status"] == RoundStatus.SUPERSEDED

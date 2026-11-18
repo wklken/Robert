@@ -183,7 +183,8 @@ def github_followup_allows_new_subject(conn, repo, event, parent_task_id):
         ticket = work_queries.tapd_origin(conn, ticket_stream) if ticket_task else None
         if ticket and work_queries.tapd_reply_in_attention(conn, ticket_stream, ticket_task, ticket["url"]):
             parked_task_id = ticket_task
-    facts = control_queries.lifecycle_facts(conn, item, parked_publication_task_id=parked_task_id)
+    scope_item = {**item, "workstream_id": event["workstream_id"]} if event.get("backport") else item
+    facts = control_queries.lifecycle_facts(conn, scope_item, parked_publication_task_id=parked_task_id)
     ticket_closed = facts["source_closed"] and not (
         tapd_derived_pr and event.get("source_type") == SourceType.PULL_REQUEST
     )

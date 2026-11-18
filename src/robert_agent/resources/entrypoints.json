@@ -36,6 +36,7 @@
   "robert_agent.worker.snapshot",
   "robert_agent.workflows.maintenance.worker",
   "robert_agent.workflows.review.coordinator",
+  "robert_agent.workflows.pre_pr_review.coordinator",
   "robert_agent.workflows.routes",
   "robert_agent.workflows.vote.coordinator"
 ]

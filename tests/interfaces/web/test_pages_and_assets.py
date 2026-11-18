@@ -224,9 +224,9 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertEqual(headers["content-type"], "text/html; charset=utf-8")
         for text in (
             b"Backlog",
-            b"TODO",
-            b"Doing",
-            b"Waiting for you",
+            b"Queued",
+            b"Executing",
+            b"Needs attention",
             b"Review",
             b"Done",
             b"New task",

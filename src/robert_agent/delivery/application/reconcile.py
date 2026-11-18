@@ -6,6 +6,7 @@ Returned evidence is deliberately small so a remote response can never leak
 an unbounded body, command output, or credential into Robert state.
 """
 
+from robert_agent.delivery.application import reviewed_pr
 from robert_agent.delivery.comment_receipts import comment_records, match_comment
 from robert_agent.delivery.application import scope as publication_scope
 from robert_agent.delivery.application import guards as publication_guards
@@ -376,6 +377,8 @@ def _reconcile_open_pr(action, action_scope, run_command):
             and marker in body
             and (not expected_owner or _owner_matches(expected_owner, actual_owner))
         )
+        if exact and scope.get("pre_pr_review"):
+            exact = reviewed_pr.matches_remote_pr(scope, metadata, detail.get("number"), run_command)
         if exact:
             matches.append(detail)
             continue
@@ -390,6 +393,7 @@ def _reconcile_open_pr(action, action_scope, run_command):
         return _result(
             "confirmed_effect",
             "open_pr_marker_match",
+            source_sha=(scope.get("pre_pr_review") or {}).get("head_sha"),
             external_id=str(detail.get("number") or ""),
             target_url=detail.get("url") or "",
         )

@@ -4,6 +4,7 @@ from robert_agent.foundation.contracts.execution import BindingStatus, ModelRunS
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
 
 from robert_agent.persistence.stores import review_sessions as db_write_review_sessions
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import vote_sessions as db_write_vote_sessions
 from robert_agent.persistence.stores import workstreams as db_write_workstreams
@@ -117,5 +118,8 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
     db_write_workstreams.cancel_execution_filtered(conn, facts["streams"], now)
     db_write_review_sessions.cancel_execution_filtered(conn, facts["streams"], now)
     db_write_vote_sessions.cancel_execution_filtered(conn, facts["streams"], now)
+    for (task_id,) in task_ids:
+        if entry := pre_pr_review.session(conn, task_id=task_id):
+            pre_pr_review.update(conn, entry["round_id"], status="canceled", proof_json=None)
     db_write_github_actions.cancel_execution_filtered(conn, facts["streams"])
     db_write_wakeups.update_for_cancel_execution(conn, now, item["work_item_id"])

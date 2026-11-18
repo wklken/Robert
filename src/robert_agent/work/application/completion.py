@@ -66,6 +66,11 @@ def _materialize_open_pr_workstream(conn, repo_id, repo_full_name, origin_workst
     pr_number = int(match.group(1))
     pr_source_key = discover.source_key(repo_full_name, "pull_request", pr_number)
     pr_source_id = values.github_source_id(pr_source_key)
+    ticket = work_queries.tapd_origin(conn, origin_workstream_id)
+    if ticket:
+        item = work_items.resolve_work_item_for_workstream(conn, origin_workstream_id)
+        if item:
+            origin_workstream_id = item["workstream_id"]
     if tapd_identity.is_source_key(origin_workstream_id):
         linked = db_records.first(db_read_workstreams.find_origin_workstream_id_by_workstream_id(conn, pr_source_key))
         if linked and linked[0] == origin_workstream_id:
