@@ -95,10 +95,31 @@ fallback stops automatic recovery and records the failure. Quoted error text
 and errors followed by a successful protocol completion do not trigger a switch.
 Native review/vote stages apply the same switch per stage and worker, preserve
 their shared prompt and snapshot, and stop if the fallback is also rate limited.
-`pr_automation` is optional and defaults to disabled. Enabling CI remediation
-requires a non-empty `check_allowlist`; its limits are per durable PR snapshot
-episode. Conflict remediation and CI publication use ordinary non-force pushes
-only after the current remote PR head and base match the audited snapshot.
+`pr_automation.ci` and `pr_automation.conflict` default to disabled. CI
+remediation requires a non-empty `check_allowlist`. When `dispatch_mode` is
+`follow_supervision` (the default), `supervision.mode: decide` requires a
+matching model grant for each repair. Set `dispatch_mode: direct` on a
+repository to dispatch the first eligible attempt for each PR snapshot.
+When conflict repair is enabled too, CI repair waits for confirmed
+mergeability. If failed Actions logs arrive late, the same snapshot becomes
+eligible on a later poll while its attempt remains unclaimed and in budget.
+An eligible retry after a failed repair needs a Supervisor decision in `decide` mode. Otherwise Robert records it for operator attention.
+Configure `skills.search_paths` so Robert can find the
+[skills required by the remediation routes](../src/robert_agent/workflows/routes.py).
+
+```yaml
+pr_automation:
+  dispatch_mode: direct
+  conflict:
+    enabled: true
+  ci:
+    enabled: true
+    check_allowlist: [CI]
+```
+
+Episode limits apply to the observed PR snapshot. The publisher uses a
+non-force push to the existing PR after checking its current head and base.
+The next health observation verifies the pushed SHA.
 
 ### Scheduling and timeout defaults
 

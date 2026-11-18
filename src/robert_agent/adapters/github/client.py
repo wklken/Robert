@@ -26,3 +26,13 @@ def command_key(args):
         index = args.index("--hostname")
         del args[index : index + 2]
     return json.dumps(args)
+
+
+def is_actions_job_log_read(args):
+    return (
+        len(args) == 8
+        and tuple(args[:4]) == ("gh", "run", "view", "--repo")
+        and args[5] == "--job"
+        and args[6].isdigit()
+        and args[7] == "--log-failed"
+    )

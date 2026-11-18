@@ -48,8 +48,12 @@ Existing repository `pr_automation` enablement, CI check allowlists and episode
 budgets still apply. Known recovery candidates require the existing
 `supervision.recovery` repository/action allowlists. Worker retry retains its
 existing process-identity, evidence and one-shot recovery budget. In this mode
-these automatic consumers wait for a matching model choice; they cannot race
-the model's `wait` decision or silently fall back to their old automatic choice.
+these automatic consumers wait for a matching model choice. A repository
+can explicitly set `pr_automation.dispatch_mode: direct` to let the PR
+remediation policy dispatch the first eligible attempt for a snapshot.
+Retries after failed repair attempts still require a matching model
+choice. Unsupported CI conclusions, missing evidence and exhausted
+budgets remain visible in the durable episode and operator attention.
 Normal result ingestion, initial execution, audit/publication validation,
 cancellation and required cleanup retain their existing lifecycle owners.
 

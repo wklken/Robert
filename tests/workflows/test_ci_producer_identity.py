@@ -57,7 +57,7 @@ class CIProducerIdentityTests(unittest.TestCase):
                 responses[("gh", "api", f"repos/{REPO}/actions/runs/{run['id']}/jobs?per_page=100")] = {
                     "jobs": [{"id": job_id, "name": "unit", "status": "completed", "conclusion": "failure"}],
                 }
-                responses[("gh", "api", f"repos/{REPO}/actions/jobs/{job_id}/logs")] = "Test failed"
+                responses[("gh", "run", "view", "--repo", REPO, "--job", str(job_id), "--log-failed")] = "Test failed"
         for check in check_runs:
             if check["conclusion"] == "failure":
                 responses[("gh", "api", f"repos/{REPO}/check-runs/{check['id']}/annotations?per_page=100")] = []

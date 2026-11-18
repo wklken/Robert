@@ -518,6 +518,20 @@ def upsert_health_episodes(
             None,
         )
         if ci_summary.get("status") == "failing" and not suppress_current_ci_episode:
+            if (
+                repo["pr_automation"].get("dispatch_mode") == "direct"
+                and current_ci
+                and current_ci["status"] == RemediationStatus.EXHAUSTED
+                and db_write_pr_remediation_episodes.reopen_unclaimed_ci_episode(conn, current_ci["episode_id"], now)
+            ):
+                _audit_transition(
+                    conn,
+                    current_ci,
+                    RemediationStatus.EXHAUSTED.value,
+                    RemediationStatus.OPEN.value,
+                    "failure_evidence_available",
+                    now,
+                )
             episode = _create_episode(
                 conn,
                 workstream=workstream,

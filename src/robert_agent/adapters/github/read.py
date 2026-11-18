@@ -76,7 +76,8 @@ class GitHubReadSession:
         args = list(args)
         if args[:2] == ["gh", "api"] and "--hostname" not in args:
             args.extend(["--hostname", self.host])
-        if args[:3] == ["gh", "search", "issues"]:
+        job_log_read = github_client.is_actions_job_log_read(args)
+        if args[:3] == ["gh", "search", "issues"] or job_log_read:
             kwargs["env"] = {**os.environ, **(kwargs.get("env") or {}), "GH_HOST": self.host}
         method = None
         for flag in ("-X", "--method"):
@@ -93,6 +94,8 @@ class GitHubReadSession:
             self._stats["cache_hits"] += 1
             return copy.deepcopy(self._memo[key])
         endpoint = args[2].split("?")[0] if args[:2] == ["gh", "api"] else "search/issues"
+        if job_log_read:
+            endpoint = "actions/jobs/:number/failed-steps"
         endpoint = re.sub(r"/\d+(?=/|$)", "/:number", endpoint)
         metric = self._stats["endpoints"].setdefault(endpoint, {"calls": 0, "duration_seconds": 0.0})
         started = time.monotonic()
