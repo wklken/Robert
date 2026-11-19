@@ -1714,9 +1714,64 @@ def find_dispatch_workspace_ownership(conn, attempt_id, task_id):
         .correlate(current)
         .exists()
     )
+    task = tables["tasks"].alias("continuation_task")
+    ancestor = tables["tasks"].alias("delivery_ancestor")
+    parents = (
+        select(
+            ancestor.c.task_id,
+            ancestor.c.parent_task_id,
+            ancestor.c.workstream_id,
+            ancestor.c.route_id,
+            ancestor.c.lifecycle,
+        )
+        .where(ancestor.c.task_id == select(task.c.parent_task_id).where(task.c.task_id == task_id).scalar_subquery())
+        .cte("delivery_ancestors", recursive=True)
+    )
+    parents = parents.union(
+        select(
+            ancestor.c.task_id,
+            ancestor.c.parent_task_id,
+            ancestor.c.workstream_id,
+            ancestor.c.route_id,
+            ancestor.c.lifecycle,
+        )
+        .join(parents, ancestor.c.task_id == parents.c.parent_task_id)
+        .where(
+            parents.c.route_id == "comment-analysis",
+            parents.c.lifecycle == "completed",
+            ancestor.c.workstream_id == parents.c.workstream_id,
+        )
+    )
+    parent = parents
+    result = tables["worker_results"].alias("delivery_question_result")
+    owned_continuation = (
+        select(1)
+        .select_from(
+            previous.join(parent, parent.c.task_id == previous.c.task_id)
+            .join(task, task.c.task_id == current.c.task_id)
+            .join(result, result.c.attempt_id == previous.c.attempt_id)
+        )
+        .where(
+            task.c.task_id == current.c.task_id,
+            task.c.workstream_id == parent.c.workstream_id,
+            task.c.route_id == parent.c.route_id,
+            task.c.route_id.in_(("new-pr", "update-existing-pr")),
+            parent.c.lifecycle == "completed",
+            previous.c.status == "completed",
+            previous.c.attempt_id == func.json_extract(metadata, "$.continuation.previous_attempt_id"),
+            parent.c.task_id == func.json_extract(metadata, "$.continuation.previous_task_id"),
+            func.json_extract(metadata, "$.continuation.strategy") == "resume_from_worktree",
+            previous.c.worktree_path == current.c.worktree_path,
+            previous.c.branch_name == current.c.branch_name,
+            result.c.output_type == "waiting_for_user",
+            func.json_extract(valid_json_or_empty(result.c.metadata_json), "$.audit.status") == "accepted",
+        )
+        .correlate(current)
+        .exists()
+    )
     return statements.read(
         conn,
-        select(current.c.worktree_path, current.c.branch_name, owned_resume).where(
+        select(current.c.worktree_path, current.c.branch_name, or_(owned_resume, owned_continuation)).where(
             current.c.attempt_id == attempt_id, current.c.task_id == task_id
         ),
     )

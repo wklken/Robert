@@ -510,6 +510,9 @@ def create_task_attempt_and_prompt(
     github_context = attempt_context.write_github_context_artifacts(prompt_dir, attempt_id, related_events)
     runtime_context = attempt_context.runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
+    continuation = (worktree_result or {}).get("continuation")
+    if continuation:
+        runtime_context["recovery_context"] = continuation
 
     db_write_workstreams.insert_for_create_task_attempt_and_prompt(
         conn,
@@ -572,6 +575,7 @@ def create_task_attempt_and_prompt(
         "review_input_policy": task["review_input_policy"],
         "request_event_fingerprint": event["event_fingerprint"],
         **({"target_base_branch": event["base_branch"]} if event.get("base_branch") else {}),
+        **({"target_base_branch": runtime_context["target_base_branch"]} if continuation else {}),
         **(
             {"pre_pr_review_required": True}
             if route_result.get("pre_pr_review_plan")
@@ -678,6 +682,10 @@ def create_task_attempt_and_prompt(
     existing_pr_head_sha = source_events.event_existing_pr_head_sha(event)
     attempt_metadata = {"existing_pr_head_sha": existing_pr_head_sha} if existing_pr_head_sha else {}
     attempt_metadata["result_contract"] = result_contract.CONTRACT_ID
+    if continuation:
+        attempt_metadata["continuation"] = {
+            key: continuation[key] for key in ("previous_task_id", "previous_attempt_id", "strategy")
+        }
     if rendered:
         attempt_metadata["prompt_contract"] = rendered.metadata
     db_write_attempts.insert_for_create_task_attempt_and_prompt(

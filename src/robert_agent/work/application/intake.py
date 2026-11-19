@@ -275,14 +275,31 @@ def admit_requests(
                     "workstream_id": event["workstream_id"],
                     "source_relationship": workstream.source_relationship(event),
                 }
+                delivery = work_queries.waiting_delivery_context(conn, waiting_task["task_id"])
                 route_result = workflow_routing.effective_route(
                     config_result,
                     repo,
                     event,
+                    route_id=delivery["route_id"] if delivery else None,
+                )
+                related_events = (
+                    github_requests.dedupe_events_by_fingerprint(
+                        [
+                            event,
+                            *work_queries.task_related_events(conn, delivery["task_id"], include_consumed=True),
+                            *waiting_context_events,
+                        ]
+                    )
+                    if delivery
+                    else [event] + waiting_context_events
                 )
                 try:
                     conn.commit()  # External Git I/O must not retain the SQLite writer lock.
-                    worktree_result = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
+                    worktree_result = (
+                        assigned_workspace.prepare_delivery_continuation(repo, delivery, dry_run)
+                        if delivery
+                        else assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
+                    )
                 except ControlDeadlineExceeded:
                     raise
                 except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
@@ -326,7 +343,7 @@ def admit_requests(
                     run_now,
                     worktree_result=worktree_result,
                     parent_task_id=waiting_task["task_id"],
-                    related_events=[event] + waiting_context_events,
+                    related_events=related_events,
                 )
                 if task_info is None:
                     continue
