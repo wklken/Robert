@@ -180,6 +180,11 @@ worktree 和文件 hash 校验不提供操作系统沙箱。Worker 按协议只�
 [控制子进程](../src/robert_agent/runtime/control.py)、[扫描与发布入口](../src/robert_agent/runtime/scan.py)、
 [服务生成](../src/robert_agent/adapters/services/native.py)。
 
+独立监督可显式配置
+[本地 Messages 网关适配器](../src/robert_agent/adapters/services/supervision_model.py)。
+该入口只负责无工具模型传输、思考块过滤和输出校验；决策调度、授权及业务动作
+仍由监督用例和既有消费者负责。
+
 ## 模块关系
 
 箭头表示主要调用关系，节点按责任分组，不表示全部 Python import。
@@ -605,7 +610,9 @@ helper、原子文件、stdout JSON 保持各自结果格式和完成条件。�
 ## PR 自修复
 
 CI 和冲突修复默认关闭，按仓库 `pr_automation` 显式开启；CI 还要求非空
-`check_allowlist`。Episode 将系统请求限制在当前 PR 的版本、次数和预算内。
+`check_allowlist` 或 `workflow_path_allowlist`。默认等待所有配置的名称和路径；
+`check_mode: observed` 只等待当前 PR head 实际出现的已选 CI，支持组件路径过滤和动态名称。
+未观察到已选 CI 或 CI API 读取失败时继续等待。Episode 将系统请求限制在当前 PR 的版本、次数和预算内。
 仓库可用 `pr_automation.dispatch_mode: direct` 直接派发每个版本的首次
 合规修复。开启冲突修复时，CI 修复等待 GitHub 确认可合并。修复任务失败后的
 合规重试仍由 `decide` 模式下的 Supervisor 决定，其余模式记录需处理通知。

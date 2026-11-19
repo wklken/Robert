@@ -18,6 +18,31 @@ from tests.support.github_board_recovery import GitHubBoardRecoveryFixture
 
 
 class GitHubBoardRecoveryTests(GitHubBoardRecoveryFixture):
+    def test_cancel_completed_item_prevents_queued_followup_from_starting(self):
+        self.read()
+        with closing(sqlite3.connect(self.db)) as c, c:
+            c.execute("UPDATE work_items SET completed_at=?", (values.utc_now(),))
+        item = board.get_work_item_detail(self.db, self.item["work_item_id"])
+        work_items.execute_command(
+            self.db,
+            item["work_item_id"],
+            context=self.fixture.context,
+            command="cancel",
+            expected_version=item["version"],
+            idempotency_key="cancel-completed-queued",
+        )
+        self.cycle()
+        with closing(sqlite3.connect(self.db)) as c:
+            self.assertEqual(
+                c.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (self.task_id,)).fetchone()[0], "canceled"
+            )
+            self.assertEqual(
+                c.execute("SELECT count(*) FROM attempts WHERE task_id=?", (self.task_id,)).fetchone()[0], 0
+            )
+            self.assertEqual(
+                c.execute("SELECT status FROM wakeups WHERE task_id=?", (self.task_id,)).fetchone()[0], "canceled"
+            )
+
     def test_reply_prepares_existing_task_with_body_and_operator_response(self):
         self.read()
         result = self.cycle()

@@ -96,7 +96,15 @@ and errors followed by a successful protocol completion do not trigger a switch.
 Native review/vote stages apply the same switch per stage and worker, preserve
 their shared prompt and snapshot, and stop if the fallback is also rate limited.
 `pr_automation.ci` and `pr_automation.conflict` default to disabled. CI
-remediation requires a non-empty `check_allowlist`. When `dispatch_mode` is
+remediation requires a non-empty `check_allowlist` or `workflow_path_allowlist`.
+Names and paths are exact selectors; either can select a workflow. Paths match
+Actions workflow runs, including dynamically named runs such as CodeQL, while
+names also match external check runs. `check_mode: all` (the default) waits for
+every configured name and path. Use `check_mode: observed` for component workflows
+with path filters: only selected workflows and checks observed for the current
+PR head must complete. No selected observations or an unsuccessful CI API read
+leaves CI waiting. Failed checks still require available failure evidence.
+When `dispatch_mode` is
 `follow_supervision` (the default), `supervision.mode: decide` requires a
 matching model grant for each repair. Set `dispatch_mode: direct` on a
 repository to dispatch the first eligible attempt for each PR snapshot.
@@ -115,6 +123,19 @@ pr_automation:
   ci:
     enabled: true
     check_allowlist: [CI]
+```
+
+For component workflows or dynamically named runs, select their stable paths:
+
+```yaml
+pr_automation:
+  ci:
+    enabled: true
+    check_mode: observed
+    workflow_path_allowlist:
+      - .github/workflows/backend.yml
+      - .github/workflows/frontend.yml
+      - dynamic/github-code-scanning/codeql
 ```
 
 Episode limits apply to the observed PR snapshot. The publisher uses a
