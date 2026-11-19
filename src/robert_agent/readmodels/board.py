@@ -1,7 +1,13 @@
 """Deterministic read models for the DD repository task board."""
 
 from robert_agent.foundation.contracts.execution import BindingStatus
-from robert_agent.foundation.contracts.work import ACTIVE_TASK_LIFECYCLES, SourceProvider, TaskLifecycle, WorkCommand
+from robert_agent.foundation.contracts.work import (
+    ACTIVE_TASK_LIFECYCLES,
+    RemediationStatus,
+    SourceProvider,
+    TaskLifecycle,
+    WorkCommand,
+)
 
 import base64
 import json
@@ -97,7 +103,7 @@ def _cursor_encode(values):
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
-def _cursor_decode(value):
+def _cursor_decode(value, *, board=False):
     if not value:
         return None
     try:
@@ -105,11 +111,15 @@ def _cursor_decode(value):
         decoded = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
     except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise BoardQueryError("invalid cursor") from exc
-    if (
-        not isinstance(decoded, list)
-        or len(decoded) != 2
-        or not all(isinstance(part, str) and part for part in decoded)
-    ):
+    if not isinstance(decoded, list):
+        raise BoardQueryError("invalid cursor")
+    if board and len(decoded) == 3:
+        if type(decoded[0]) is not int or decoded[0] not in {0, 1}:
+            raise BoardQueryError("invalid cursor")
+        parts = decoded[1:]
+    else:
+        parts = decoded
+    if len(parts) != 2 or not all(isinstance(part, str) and part for part in parts):
         raise BoardQueryError("invalid cursor")
     return tuple(decoded)
 
@@ -154,6 +164,30 @@ def _latest_attempt(conn, task_id):
 
 def _derived_pr(conn, root_workstream_id):
     return db_records.first(db_read_workstreams.find_for_derived_pr(conn, root_workstream_id, root_workstream_id))
+
+
+def _exhausted_pr_remediation(conn, pr):
+    health = json_object(pr["metadata_json"]).get("pr_remediation_health")
+    if not isinstance(health, dict):
+        health = {}
+    head, base = health.get("head_sha"), health.get("base_sha")
+    latest = {}
+    for episode in task_history.remediation_for_workstreams(conn, [pr["workstream_id"]]):
+        if (
+            head
+            and base
+            and (
+                base != episode["observed_base_sha"]
+                or head not in (episode["observed_head_sha"], episode["result_head_sha"])
+            )
+        ):
+            continue
+        latest.setdefault(episode["episode_kind"], episode)
+    if health.get("mergeable") is True:
+        latest.pop("merge_conflict", None)
+    if health.get("ci_status") == "green":
+        latest.pop("ci", None)
+    return next((episode for episode in latest.values() if episode["status"] == RemediationStatus.EXHAUSTED), None)
 
 
 def _valid_commands(column, attention, *, running=False, publishing=False):
@@ -216,6 +250,7 @@ def _failed_task_recovery(conn, task, attention):
 WAITING_STATES = {
     "execution_failed": ("failed", "danger", "operator"),
     "workflow_attention": ("failed", "danger", "operator"),
+    "pr_remediation_exhausted": ("failed", "danger", "operator"),
     "audit_inspection_exhausted": ("failed", "danger", "operator"),
     "review_attention": ("failed", "danger", "operator"),
     "publication_failed": ("publish_failed", "danger", "operator"),
@@ -246,6 +281,8 @@ def _summary_cause(card, facts, attention, state):
     execution = card.get("execution") or {}
     review = card.get("vote") or card.get("review") or {}
     candidates = []
+    if card["reason_code"] == "pr_remediation_exhausted":
+        candidates.append(("remediation", card["reason_summary"], None))
     if state in {"failed", "worker_unavailable"}:
         candidates += [
             ("review", review.get("error"), execution.get("finished_at")),
@@ -296,6 +333,8 @@ def _status_summary(conn, card, row, *, task, facts, attention):
     primary = next((command for command in PRIMARY_COMMANDS if command in commands), None)
     if state == "in_review" and card.get("pr") and card["pr"].get("url"):
         primary = "open_pr"
+    elif reason == "pr_remediation_exhausted" and "request_changes" in commands:
+        primary = "request_changes"
     elif state in {"completed", "canceled", "queued", "running", "publishing"}:
         primary = None
     execution = card.get("execution") or {}
@@ -329,6 +368,9 @@ def _project_item(conn, row, *, controls=None, facts=None):
     attempt = _latest_attempt(conn, task["task_id"]) if task else None
     execution = execution_summary(conn, task["task_id"]) if task else None
     pr = _derived_pr(conn, workstream_id) if workstream_id else None
+    exhausted_remediation = None
+    if pr and (pr["state"] or "open").lower() == "open":
+        exhausted_remediation = _exhausted_pr_remediation(conn, pr)
     running = bool(facts["running"])
     publication_in_progress = bool(facts["actions"])
     failures = facts["publish_failures"]
@@ -475,6 +517,13 @@ def _project_item(conn, row, *, controls=None, facts=None):
         )
     elif task and task["lifecycle"] in ACTIVE_TASK_LIFECYCLES:
         column, reason_code, reason_summary = "todo", task["lifecycle"], "Runnable work is queued"
+    elif exhausted_remediation:
+        reason = safe_text(json_object(exhausted_remediation["metadata_json"]).get("last_transition_reason"))
+        column, reason_code, reason_summary = (
+            "waiting",
+            "pr_remediation_exhausted",
+            f"Automated PR remediation stopped: {reason or 'budget_exhausted'}.",
+        )
     elif pr and (pr["state"] or "open").lower() == "open":
         column, reason_code, reason_summary = "review", "open_pr", f"PR #{pr['number']} is open"
     elif not row["activated_at"]:
@@ -537,6 +586,8 @@ def _project_item(conn, row, *, controls=None, facts=None):
         "updated_at": row["updated_at"],
     }
     card["valid_commands"] = _valid_commands(column, attention, running=running, publishing=publication_in_progress)
+    if reason_code == "pr_remediation_exhausted":
+        card["valid_commands"] = ["request_changes", "cancel"]
     if not row["canceled_at"] and not row["completed_at"]:
         if facts["source_closed"] or facts["cleanup_pending"]:
             card["valid_commands"] = ["cancel"]
@@ -629,7 +680,7 @@ def _matches(item, *, repo, agent, priority, attention, query):
         return False
     if attention is not None:
         wanted = attention in {True, "true", "1", "yes"}
-        if (item["column"] == "waiting" or bool(item["attention_signals"])) != wanted:
+        if (item["status_summary"]["needs_action"] or bool(item["attention_signals"])) != wanted:
             return False
     if query:
         haystack = " ".join(
@@ -669,7 +720,13 @@ def list_board(
         raise BoardQueryError("invalid priority")
     if attention is not None and attention not in {True, False, "true", "false", "1", "0", "yes", "no"}:
         raise BoardQueryError("attention must be a boolean")
-    cursor_value = _cursor_decode(cursor)
+    cursor_value = _cursor_decode(cursor, board=True)
+    legacy_cursor = bool(cursor_value and len(cursor_value) == 2)
+
+    def page_key(item):
+        updated = (item["updated_at"], item["work_item_id"])
+        return updated if legacy_cursor else (int(item["column"] not in {"done", "history"}), *updated)
+
     with closing(_connect(db_path)) as conn:
         db_transactions.begin(conn)  # Historical and active partitions share one read snapshot.
         controls = execution_store.read_controls(conn)
@@ -681,7 +738,7 @@ def list_board(
             priority=priority,
             attention=attention,
             query=query,
-            before=cursor_value,
+            before=cursor_value[-2:] if cursor_value and (legacy_cursor or cursor_value[0] == 0) else None,
             limit=limit + 1,
             include_history=include_history,
             attention_types=sorted(ATTENTION_EVENTS),
@@ -706,12 +763,12 @@ def list_board(
         ]
         agents = sorted({item["agent"] for item in projections} | set(terminal["agents"]) | {"Auto"})
         if cursor_value:
-            projections = [item for item in projections if (item["updated_at"], item["work_item_id"]) < cursor_value]
+            projections = [item for item in projections if page_key(item) < cursor_value]
         if column:
             projections = [item for item in projections if item["column"] == column]
         page = sorted(
             projections + [dict(row) for row in terminal["rows"]],
-            key=lambda item: (item["updated_at"], item["work_item_id"]),
+            key=page_key,
             reverse=True,
         )[: limit + 1]
         has_more = len(page) > limit
@@ -727,9 +784,7 @@ def list_board(
             else {}
         )
         items = [historical.get(item["work_item_id"], item) for item in selected]
-        next_cursor = (
-            _cursor_encode([items[-1]["updated_at"], items[-1]["work_item_id"]]) if has_more and items else None
-        )
+        next_cursor = _cursor_encode(page_key(items[-1])) if has_more and items else None
         running_rows = db_read_attempts.list_board(conn)
         per_repo_running = {row[0]: row[1] for row in running_rows}
         repos = [

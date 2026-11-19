@@ -1,8 +1,8 @@
 """Shared stores operations for github_sources."""
 
-from robert_agent.persistence.expressions import sql_constant
+from robert_agent.persistence.expressions import sql_constant, valid_json_or_empty
 
-from sqlalchemy import update, bindparam, null, case, func
+from sqlalchemy import select, update, bindparam, null, case, func
 from sqlalchemy.dialects.sqlite import insert
 
 
@@ -22,6 +22,27 @@ def insert_fixture(conn):
         }
     )
     return statements.write(conn, stmt, {})
+
+
+def record_pr_remediation_health(conn, workstream_id, health_json):
+    source = tables["github_sources"]
+    stream = tables["workstreams"]
+    primary_source = (
+        select(stream.c.primary_source_id).where(stream.c.workstream_id == bindparam("workstream_id")).scalar_subquery()
+    )
+    metadata = valid_json_or_empty(source.c.metadata_json)
+    path = "$.pr_remediation_health"
+    health = func.json(bindparam("health_json"))
+    stmt = (
+        update(source)
+        .values(metadata_json=func.json_set(metadata, path, health))
+        .where(
+            source.c.source_id == primary_source,
+            source.c.source_type == "pull_request",
+            func.json_extract(metadata, path).is_distinct_from(health),
+        )
+    )
+    return statements.write(conn, stmt, {"workstream_id": workstream_id, "health_json": health_json})
 
 
 def insert_canary_fixture(conn, source_key, source_type, number, html_url):

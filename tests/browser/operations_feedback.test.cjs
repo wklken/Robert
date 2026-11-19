@@ -22,6 +22,26 @@ test('operations describes recent workflows and total runs accurately', () => {
   assert.match(nodes.get('summary-metrics').innerHTML,/59667/);
   assert.equal(vm.runInContext('stateLabel("completed")',context),'已完成');
 });
+test('operations alert count links to the same filtered notification records', () => {
+  const {context,nodes} = dashboard();
+  context.data = {notification_center:[
+    {id:'global',severity:'warning',summary:'Global service warning'},
+    {id:'task',severity:'critical',task_id:'failed',summary:'Task failed'},
+    {id:'aggregate',severity:'critical',summary:'1 task needs attention'},
+    {id:'routine',severity:'info',summary:'Routine'},
+  ]};
+  vm.runInContext('renderMetrics(data)',context);
+  const conclusion = nodes.get('ops-conclusion').innerHTML;
+  assert.match(conclusion,/3 条告警记录/);
+  assert.match(conclusion,/href="\/operations#notifications\/attention"/);
+  assert.doesNotMatch(conclusion,/去任务看板/);
+  context.window.location.hash = '#notifications/attention';
+  vm.runInContext('setView=(view)=>{state.currentView=view;};applyHash();renderNotifications(data)',context);
+  assert.equal(vm.runInContext('state.currentView',context),'notifications');
+  assert.equal(vm.runInContext('state.notificationSeverity',context),'attention');
+  assert.match(nodes.get('notification-count').textContent,/3 \/ 4/);
+  assert.doesNotMatch(nodes.get('notification-center').innerHTML,/Routine/);
+});
 test('notification severity filters preserve order and distinguish empty matches', () => {
   const {context,nodes} = dashboard();
   context.data={notification_center:[{id:'one',severity:'info',title:'Routine'},{id:'two',severity:'critical',title:'Failure'},{id:'three',severity:'warning',title:'Warning'}]};

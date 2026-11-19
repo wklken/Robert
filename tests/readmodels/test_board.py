@@ -8,6 +8,121 @@ from tests.support.board import BoardReadModelFixture
 
 
 class BoardReadModelTests(BoardReadModelFixture):
+    def test_active_cards_precede_newer_completed_cards_across_pages(self):
+        from robert_agent.readmodels import board
+
+        seeded = self._seed_six_columns()
+        seeded["done2"] = self._create("Second done card")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE work_items SET updated_at = '2027-01-01T00:00:00Z' WHERE work_item_id = ?",
+                (seeded["done"]["work_item_id"],),
+            )
+            conn.execute(
+                "UPDATE work_items SET completed_at = '2027-01-02T00:00:00Z', "
+                "updated_at = '2027-01-02T00:00:00Z' WHERE work_item_id = ?",
+                (seeded["done2"]["work_item_id"],),
+            )
+        for column in (None, "waiting", "done"):
+            with self.subTest(column=column):
+                pages = []
+                cursor = None
+                while True:
+                    page = board.list_board(self.db_path, column=column, limit=1, cursor=cursor)
+                    pages.extend(page["items"])
+                    cursor = page["next_cursor"]
+                    if not cursor:
+                        break
+                expected = {
+                    item["work_item_id"]
+                    for key, item in seeded.items()
+                    if column is None or key == column or (column == "done" and key == "done2")
+                }
+                self.assertEqual(len(pages), len(expected))
+                self.assertEqual({item["work_item_id"] for item in pages}, expected)
+                if column is None:
+                    self.assertEqual(pages[-1]["column"], "done")
+                    self.assertTrue(all(item["column"] != "done" for item in pages[:-2]))
+                    self.assertEqual([item["title"] for item in pages[-2:]], ["Second done card", "Done card"])
+
+        import base64
+
+        boundary = ["2027-01-02T00:00:00Z", seeded["done2"]["work_item_id"]]
+        legacy_cursor = base64.urlsafe_b64encode(json.dumps(boundary).encode()).decode().rstrip("=")
+        remaining = board.list_board(self.db_path, cursor=legacy_cursor)["items"]
+        self.assertEqual(len(remaining), len(seeded) - 1)
+        self.assertEqual(remaining[0]["title"], "Done card")
+
+    def test_exhausted_pr_remediation_is_visible_in_attention_and_clears_when_resolved(self):
+        from robert_agent.readmodels import board
+
+        seeded = self._seed_six_columns()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO pr_remediation_episodes(
+                  episode_id, workstream_id, episode_kind, subject_key,
+                  observed_head_sha, observed_base_sha, status, first_seen_at,
+                  updated_at, terminal_at, metadata_json
+                ) VALUES ('ci-old', 'github:example/repo!12', 'ci', 'head:base',
+                          'head', 'base', 'exhausted', '2026-07-20T00:00:00Z',
+                          '2026-07-20T00:01:00Z', '2026-07-20T00:01:00Z',
+                          '{"last_transition_reason":"failure_evidence_unavailable"}')
+                """
+            )
+        detail = board.get_work_item_detail(self.db_path, seeded["review"]["work_item_id"])
+        self.assertEqual(detail["column"], "waiting")
+        self.assertEqual(detail["reason_code"], "pr_remediation_exhausted")
+        self.assertIn("failure_evidence_unavailable", detail["reason_summary"])
+        self.assertIn("failure_evidence_unavailable", detail["status_summary"]["cause"]["text"])
+        self.assertTrue(detail["status_summary"]["needs_action"])
+        self.assertEqual(detail["valid_commands"], ["request_changes", "cancel"])
+        self.assertEqual(board.list_board(self.db_path)["counts"]["needs_action"], 2)
+        attention = board.list_board(self.db_path, attention=True)
+        self.assertIn(seeded["review"]["work_item_id"], {item["work_item_id"] for item in attention["items"]})
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO pr_remediation_episodes(
+                  episode_id, workstream_id, episode_kind, subject_key,
+                  observed_head_sha, observed_base_sha, status, first_seen_at,
+                  updated_at, terminal_at, metadata_json
+                ) VALUES ('ci-new', 'github:example/repo!12', 'ci', 'head2:base',
+                          'head2', 'base', 'resolved', '2026-07-21T00:00:00Z',
+                          '2026-07-21T00:01:00Z', '2026-07-21T00:01:00Z', '{}')
+                """
+            )
+        detail = board.get_work_item_detail(self.db_path, seeded["review"]["work_item_id"])
+        self.assertEqual(detail["column"], "review")
+        self.assertFalse(detail["status_summary"]["needs_action"])
+        self.assertEqual(board.list_board(self.db_path)["counts"]["needs_action"], 1)
+
+    def test_exhausted_remediation_does_not_flag_a_new_snapshot_or_green_rerun(self):
+        from robert_agent.persistence import database
+        from robert_agent.readmodels import board
+        from robert_agent.workflows.pr_remediation import upsert_health_episodes
+
+        item = self._seed_six_columns()["review"]
+        stream = {"workstream_id": "github:example/repo!12", "repo_id": "repo-1", "number": 12}
+        repo = {"pr_automation": {"ci": {"enabled": True}, "conflict": {"enabled": False}}}
+        snapshot = {"state": "open", "head_sha": "head", "base_sha": "base", "mergeable": True}
+        now = "2026-07-20T00:00:00Z"
+
+        def observe(observed, ci):
+            with closing(database.connect(self.db_path)) as conn, conn:
+                upsert_health_episodes(conn, repo=repo, workstream=stream, snapshot=observed, ci_summary=ci, now=now)
+
+        observe(snapshot, {"status": "manual", "reason": "failure_evidence_unavailable"})
+        self.assertEqual(board.get_work_item_detail(self.db_path, item["work_item_id"])["column"], "waiting")
+
+        for observed, ci in (
+            ({**snapshot, "head_sha": "new-head"}, {"status": "waiting"}),
+            (snapshot, {"status": "green"}),
+        ):
+            with self.subTest(head=observed["head_sha"], status=ci["status"]):
+                observe(observed, ci)
+                self.assertEqual(board.get_work_item_detail(self.db_path, item["work_item_id"])["column"], "review")
+
     def test_projection_places_each_item_in_exactly_one_of_six_columns(self):
         from robert_agent.readmodels import board
 

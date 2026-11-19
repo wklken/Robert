@@ -17,6 +17,7 @@ from robert_agent.persistence.queries import projections as db_read_projections
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.persistence.stores import audit_events as db_write_audit_events
+from robert_agent.persistence.stores import github_sources as db_write_github_sources
 from robert_agent.persistence.stores import notifications as db_write_notifications
 from robert_agent.persistence.stores import pr_ci_observations as db_write_pr_ci_observations
 from robert_agent.persistence.stores import pr_remediation_episodes as db_write_pr_remediation_episodes
@@ -389,6 +390,19 @@ def upsert_health_episodes(
                     transitions.append(transition)
         return transitions
 
+    db_write_github_sources.record_pr_remediation_health(
+        conn,
+        workstream["workstream_id"],
+        json.dumps(
+            {
+                "head_sha": snapshot.get("head_sha"),
+                "base_sha": snapshot.get("base_sha"),
+                "mergeable": snapshot.get("mergeable"),
+                "ci_status": ci_summary.get("status") if ci_summary else None,
+            },
+            sort_keys=True,
+        ),
+    )
     keep_waiting_ids = set()
     suppress_current_ci_episode = False
     suppress_current_conflict_episode = False
