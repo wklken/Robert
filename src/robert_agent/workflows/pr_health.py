@@ -215,6 +215,7 @@ def _workflow_observation(
         "external_id": str(workflow.get("id") or ""),
         "attempt_no": int(workflow.get("run_attempt") or 1),
         "check_name": check_name,
+        "workflow_path": str(workflow.get("path") or ""),
         "status": workflow.get("status") or "",
         "conclusion": conclusion,
         "details_url": workflow.get("html_url"),
@@ -327,9 +328,11 @@ def collect_ci_observations(
     *,
     check_allowlist,
     max_summary_chars,
+    workflow_path_allowlist=(),
     runner=subprocess.run,
 ):
     allowed = set(check_allowlist)
+    allowed_paths = set(workflow_path_allowlist)
     workflow_payload = github_client.try_read_json(
         [
             "gh",
@@ -340,17 +343,8 @@ def collect_ci_observations(
         ],
         runner=runner,
     )
-    observations = [
-        _workflow_observation(
-            repo_full_name,
-            workflow,
-            max_summary_chars=max_summary_chars,
-            runner=runner,
-        )
-        for workflow in _items(workflow_payload, "workflow_runs")
-        if workflow.get("head_sha") == head_sha and workflow.get("name") in allowed
-    ]
-
+    if workflow_payload is None:
+        return []
     checks_payload = github_client.try_read_json(
         [
             "gh",
@@ -361,6 +355,19 @@ def collect_ci_observations(
         ],
         runner=runner,
     )
+    if checks_payload is None:
+        return []
+    observations = [
+        _workflow_observation(
+            repo_full_name,
+            workflow,
+            max_summary_chars=max_summary_chars,
+            runner=runner,
+        )
+        for workflow in _items(workflow_payload, "workflow_runs")
+        if workflow.get("head_sha") == head_sha
+        and (workflow.get("name") in allowed or workflow.get("path") in allowed_paths)
+    ]
     observations.extend(
         _check_observation(
             repo_full_name,
@@ -390,26 +397,44 @@ def _observation_freshness(observation):
     )
 
 
-def summarize_ci(observations, check_allowlist):
+def summarize_ci(observations, check_allowlist, *, workflow_path_allowlist=(), check_mode="all"):
+    allowed = set(check_allowlist)
+    allowed_paths = set(workflow_path_allowlist)
     latest = {}
     for observation in observations:
         check_name = observation.get("check_name")
-        if check_name not in check_allowlist:
+        selected_path = (
+            observation.get("workflow_path")
+            if observation.get("source_kind") == "workflow_run" and observation.get("workflow_path") in allowed_paths
+            else None
+        )
+        if check_name not in allowed and not selected_path:
             continue
-        identity = (observation.get("source_kind", ""), observation.get("producer_id", ""), check_name)
+        identity = (
+            observation.get("source_kind", ""),
+            observation.get("producer_id", ""),
+            ("path", selected_path) if selected_path else ("name", check_name),
+        )
         current = latest.get(identity)
         if current is None or _observation_freshness(observation) > _observation_freshness(current):
             latest[identity] = observation
 
     names = {observation["check_name"] for observation in latest.values()}
-    missing = [name for name in check_allowlist if name not in names]
+    paths = {
+        observation.get("workflow_path")
+        for observation in latest.values()
+        if observation.get("source_kind") == "workflow_run"
+    }
+    missing = [name for name in check_allowlist if name not in names] if check_mode == "all" else []
+    missing_paths = [path for path in workflow_path_allowlist if path not in paths] if check_mode == "all" else []
     incomplete = {
         observation["check_name"] for observation in latest.values() if observation.get("status") != "completed"
     }
-    if missing or incomplete:
+    if not latest or missing or missing_paths or incomplete:
         return {
             "status": "waiting",
             "missing_checks": missing,
+            "missing_workflow_paths": missing_paths,
             "incomplete_checks": sorted(incomplete),
             "observations": list(latest.values()),
         }

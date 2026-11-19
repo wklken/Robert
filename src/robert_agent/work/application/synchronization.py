@@ -143,6 +143,7 @@ def scan_repo(config, repo, session, hints):
                         repo["full_name"],
                         snapshot["head_sha"],
                         check_allowlist=ci["check_allowlist"],
+                        workflow_path_allowlist=ci.get("workflow_path_allowlist", []),
                         max_summary_chars=ci["max_failure_summary_chars"],
                         runner=recorded,
                     )

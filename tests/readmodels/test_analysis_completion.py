@@ -69,7 +69,7 @@ class AnalysisCompletionTests(unittest.TestCase):
         item = self.reconcile()
         self.assertEqual(item["column"], "done")
         self.assertIsNotNone(item["completed_at"])
-        self.assertEqual(item["valid_commands"], ["reopen"])
+        self.assertEqual(item["valid_commands"], ["reopen", "cancel"])
         replay = self.reconcile()
         self.assertEqual(replay["version"], item["version"])
         with closing(sqlite3.connect(self.db)) as conn:

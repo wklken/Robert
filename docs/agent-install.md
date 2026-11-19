@@ -219,7 +219,9 @@ with the [configuration reference](reference.md#configuration):
 - Only `version: 2` is accepted. SQLite is the only execution engine; no engine block exists.
 - Keep GitHub polling in `github`, capacity in `scheduler`, timeouts in
   `supervision`, and retention in `maintenance`. Enable repository PR automation
-  only when requested; CI requires a nonempty check_allowlist.
+  only when requested; CI requires a nonempty check_allowlist or
+  workflow_path_allowlist. Use check_mode: observed for component workflows with
+  path filters or dynamically named runs selected by their exact workflow path.
 - Keep `data_dir` consistent between daemon and web. Web options are command
   flags, not YAML keys. Do not copy internal normalized validation output back
   into the public configuration.

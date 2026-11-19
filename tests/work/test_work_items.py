@@ -297,6 +297,115 @@ class WorkItemMigrationTests(unittest.TestCase):
 
 
 class WorkItemCommandTests(WorkItemCommandFixture):
+    def test_cancel_completed_item_retracts_retrigger_and_preserves_history(self):
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
+        from robert_agent.work.errors import WorkItemConflictError
+
+        task_id = self._failed_github_task()
+        unrelated = self._create(start=True, idempotency_key="unrelated-queued")
+        completed_at = "2026-10-19T00:00:00+00:00"
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE work_items SET completed_at=? WHERE work_item_id='wi-pr-21'", (completed_at,))
+            conn.execute(
+                "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) "
+                "VALUES ('original-completed','github:example/repo!21','completed',?,?)",
+                (completed_at, completed_at),
+            )
+            conn.execute(
+                "INSERT INTO github_actions(action_id,task_id,action_type,audit_status,publish_status,created_at) "
+                "VALUES ('published-comment','original-completed','comment','accepted','published',?)",
+                (completed_at,),
+            )
+        requested = work_items.retrigger_failed_github_task(
+            self.db_path, task_id, context=self.context, idempotency_key="rerun-completed"
+        )
+        item = board.get_work_item_detail(self.db_path, "wi-pr-21")
+        result = work_items.execute_command(
+            self.db_path,
+            item["work_item_id"],
+            context=self.context,
+            command="cancel",
+            expected_version=item["version"],
+            idempotency_key="cancel-completed",
+        )
+        self.assertTrue(result["ok"])
+        self.assertIsNotNone(result["item"]["canceled_at"])
+        self.assertEqual(result["item"]["completed_at"], completed_at)
+        self.assertEqual(result["item"]["version"], item["version"] + 1)
+        replay = work_items.execute_command(
+            self.db_path,
+            item["work_item_id"],
+            context=self.context,
+            command="cancel",
+            expected_version=item["version"],
+            idempotency_key="cancel-completed",
+        )
+        self.assertEqual(replay, result)
+        archived = board.get_work_item_detail(self.db_path, item["work_item_id"])
+        self.assertEqual(archived["column"], "history")
+        self.assertEqual(archived["valid_commands"], [])
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            self.assertEqual(
+                conn.execute("SELECT status FROM wakeups WHERE wakeup_id=?", (requested["wakeup_id"],)).fetchone()[0],
+                "canceled",
+            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 3)
+            self.assertEqual(
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (unrelated["task_id"],)).fetchone()[0],
+                "detected",
+            )
+            self.assertEqual(
+                conn.execute("SELECT status FROM wakeups WHERE task_id=?", (unrelated["task_id"],)).fetchone()[0],
+                "pending",
+            )
+            self.assertEqual(
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (task_id,)).fetchone()[0], "canceled"
+            )
+            self.assertEqual(
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id='original-completed'").fetchone()[0],
+                "completed",
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT publish_status FROM github_actions WHERE action_id='published-comment'"
+                ).fetchone()[0],
+                "published",
+            )
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM work_item_events WHERE event_type='canceled'").fetchone()[0], 1
+            )
+        with self.assertRaises(WorkItemConflictError):
+            work_items.retrigger_failed_github_task(
+                self.db_path, task_id, context=self.context, idempotency_key="rerun-after-cancel"
+            )
+
+    def test_completed_item_with_closed_source_can_be_canceled(self):
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
+
+        task_id = self._failed_github_task()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE work_items SET completed_at='2026-10-19T00:00:00+00:00'")
+            conn.execute("UPDATE github_sources SET state='closed'")
+            conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id=?", (task_id,))
+        item = board.get_work_item_detail(self.db_path, "wi-pr-21")
+        result = work_items.execute_command(
+            self.db_path,
+            item["work_item_id"],
+            context=self.context,
+            command="cancel",
+            expected_version=item["version"],
+            idempotency_key="cancel-closed-completed",
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(board.get_work_item_detail(self.db_path, item["work_item_id"])["column"], "history")
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "closed")
+            self.assertEqual(
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (task_id,)).fetchone()[0], "completed"
+            )
+
     def test_retrigger_failed_github_task_queues_one_idempotent_wakeup(self):
         from robert_agent.work.application import commands as work_items
 

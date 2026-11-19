@@ -137,6 +137,20 @@
               },
               "default": []
             },
+            "check_mode": {
+              "type": "string",
+              "enum": ["all", "observed"],
+              "default": "all"
+            },
+            "workflow_path_allowlist": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "default": []
+            },
             "max_attempts": {
               "type": "integer",
               "minimum": 1,

@@ -142,12 +142,15 @@ def collect_pr_remediation_decisions(
                 repo["full_name"],
                 snapshot["head_sha"],
                 check_allowlist=ci_policy["check_allowlist"],
+                workflow_path_allowlist=ci_policy.get("workflow_path_allowlist", []),
                 max_summary_chars=ci_policy["max_failure_summary_chars"],
                 runner=runner,
             )
             ci_summary = pr_health.summarize_ci(
                 observations,
                 ci_policy["check_allowlist"],
+                workflow_path_allowlist=ci_policy.get("workflow_path_allowlist", []),
+                check_mode=ci_policy.get("check_mode", "all"),
             )
         workstream_record = {
             "workstream_id": workstream_id,

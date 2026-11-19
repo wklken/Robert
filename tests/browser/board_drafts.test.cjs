@@ -88,3 +88,20 @@ test('cancel requires another review when the unknown launch set changes', () =>
   assert.equal(vm.runInContext('state.composer.send.disabled', context), false);
   assert.equal(vm.runInContext('state.composer.abandonment.checked', context), false);
 });
+
+test('completed tasks expose a cancel button and submit the existing cancel command', () => {
+  const { context, submit } = scenario('cancel', {
+    column: 'done', completed_at: '2026-10-21T02:38:56Z', valid_commands: ['reopen', 'cancel'],
+    status_summary: { state: 'completed', owner: 'none', primary: null },
+  }, {});
+  vm.runInContext('state.composer = null; actions = renderActions(state.detail);', context);
+  const actions = vm.runInContext('actions', context);
+  const buttons = actions.children.flatMap(child => child.children || []);
+  const cancel = buttons.find(child => child.dataset.command === 'cancel');
+  assert.ok(cancel);
+  assert.equal(cancel.disabled, false);
+  cancel.events.click();
+  submit();
+  assert.equal(vm.runInContext('captured.command', context), 'cancel');
+  assert.equal(vm.runInContext('captured.version', context), 1);
+});
