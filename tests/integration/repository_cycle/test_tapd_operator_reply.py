@@ -205,7 +205,7 @@ class TapdOperatorReplyTests(TapdCycleCase):
                 conn.execute("UPDATE wakeups SET status='canceled' WHERE task_id=?", (self.task,))
             return None
 
-        with mock.patch.object(assigned_workspace, "prepare_worktree", side_effect=cancel):
+        with mock.patch.object(assigned_workspace, "prepare_delivery_continuation", side_effect=cancel):
             self.cycle()
         self.assertEqual(self.attempts(), [])
         self.assertEqual(self.query("SELECT lifecycle FROM tasks WHERE task_id=?", (self.task,)), [("canceled",)])
@@ -217,7 +217,7 @@ class TapdOperatorReplyTests(TapdCycleCase):
             self.set_snapshot_time(self.requested + timedelta(seconds=2))
             return None
 
-        with mock.patch.object(assigned_workspace, "prepare_worktree", side_effect=change):
+        with mock.patch.object(assigned_workspace, "prepare_delivery_continuation", side_effect=change):
             self.cycle()
         self.assertEqual(self.attempts(), [])
         self.assertEqual(self.query("SELECT status FROM wakeups WHERE task_id=?", (self.task,)), [("pending",)])

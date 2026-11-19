@@ -48,7 +48,7 @@ dev = [
   "mypy",
   "pip-audit",
   # Pin the formatter so local runs and CI produce the same style.
-  "ruff==0.17.4",
+  "ruff==0.17.5",
   "twine",
   "types-PyYAML",
 ]

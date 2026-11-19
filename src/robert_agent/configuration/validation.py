@@ -128,12 +128,15 @@ def _normalize(config, path, skip_external):
         limit = raw.get("max_concurrency", scheduler["max_concurrency"])
         if limit > scheduler["max_concurrency"]:
             raise ValueError(f"repos[{index}].max_concurrency exceeds global max_concurrency")
-        if raw["pr_automation"]["ci"]["enabled"] and not raw["pr_automation"]["ci"]["check_allowlist"]:
-            raise ValueError(f"repos[{index}].pr_automation.ci.check_allowlist must not be empty when enabled")
         ci = raw["pr_automation"]["ci"]
-        ci["check_allowlist"] = [check.strip() for check in ci["check_allowlist"]]
-        if len(ci["check_allowlist"]) != len(set(ci["check_allowlist"])):
-            raise ValueError(f"repos[{index}].pr_automation.ci.check_allowlist entries must be unique")
+        if ci["enabled"] and not (ci["check_allowlist"] or ci["workflow_path_allowlist"]):
+            raise ValueError(
+                f"repos[{index}].pr_automation.ci.check_allowlist or workflow_path_allowlist must not be empty when enabled"
+            )
+        for field in ("check_allowlist", "workflow_path_allowlist"):
+            ci[field] = [entry.strip() for entry in ci[field]]
+            if len(ci[field]) != len(set(ci[field])):
+                raise ValueError(f"repos[{index}].pr_automation.ci.{field} entries must be unique")
         result["repos"].append(
             {
                 **raw,

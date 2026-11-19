@@ -354,7 +354,7 @@ class BoardReadModelTests(BoardReadModelFixture):
         )
         self.assertEqual(projected["column"], "waiting")
         self.assertEqual(projected["reason_code"], "execution_failed")
-        self.assertEqual(projected["valid_commands"], ["reopen"])
+        self.assertEqual(projected["valid_commands"], ["reopen", "cancel"])
         summary = projected["status_summary"]
         self.assertEqual(summary["state"], "failed")
         self.assertEqual(summary["tone"], "danger")
@@ -416,7 +416,7 @@ class BoardReadModelTests(BoardReadModelFixture):
         item = self._completed_github_item_with_failed_followup()
         projected = board.list_board(self.db_path)["items"][0]
         self.assertEqual(projected["column"], "waiting")
-        self.assertEqual(projected["valid_commands"], ["retrigger", "reopen"])
+        self.assertEqual(projected["valid_commands"], ["retrigger", "reopen", "cancel"])
         self.assertEqual(projected["status_summary"]["primary"], "retrigger")
         self.assertEqual(projected["task_id"], "task-followup")
 
@@ -429,7 +429,7 @@ class BoardReadModelTests(BoardReadModelFixture):
         requested = board.list_board(self.db_path)["items"][0]
         self.assertEqual(requested["column"], "todo")
         self.assertEqual(requested["reason_code"], "rerun_requested")
-        self.assertEqual(requested["valid_commands"], [])
+        self.assertEqual(requested["valid_commands"], ["cancel"])
         self.assertEqual(requested["status_summary"]["state"], "queued")
         self.assertEqual(requested["status_summary"]["owner"], "robert")
         self.assertFalse(requested["status_summary"]["needs_action"])
@@ -464,7 +464,7 @@ class BoardReadModelTests(BoardReadModelFixture):
             )
 
         projected = board.get_work_item_detail(self.db_path, item["work_item_id"])
-        self.assertEqual(projected["valid_commands"], ["reopen"])
+        self.assertEqual(projected["valid_commands"], ["reopen", "cancel"])
         self.assertEqual(projected["status_summary"]["primary"], "reopen")
         result = work_items.execute_command(
             self.db_path,
@@ -494,6 +494,38 @@ class BoardReadModelTests(BoardReadModelFixture):
         self.assertEqual(detail["column"], "done")
         self.assertEqual(detail["status_summary"]["state"], "completed")
         self.assertFalse(detail["status_summary"]["needs_action"])
+        self.assertEqual(detail["valid_commands"], ["cancel"])
+
+    def test_completed_item_without_followup_can_be_canceled(self):
+        from robert_agent.readmodels import board
+
+        done = self._seed_six_columns()["done"]
+        detail = board.get_work_item_detail(self.db_path, done["work_item_id"])
+        self.assertEqual(detail["column"], "done")
+        self.assertEqual(detail["valid_commands"], ["reopen", "cancel"])
+        self.assertIsNone(detail["status_summary"]["primary"])
+
+    def test_pending_retrigger_of_completed_item_still_offers_cancel(self):
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
+
+        item = self._completed_github_item_with_failed_followup()
+        work_items.retrigger_failed_github_task(
+            self.db_path, "task-followup", context=self.context, idempotency_key="rerun-cancelable"
+        )
+        requested = board.get_work_item_detail(self.db_path, item["work_item_id"])
+        self.assertEqual(requested["column"], "todo")
+        self.assertEqual(requested["valid_commands"], ["cancel"])
+
+    def test_canceled_item_with_completed_marker_and_failed_task_has_no_commands(self):
+        from robert_agent.readmodels import board
+
+        item = self._completed_github_item_with_failed_followup()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE work_items SET canceled_at=completed_at WHERE work_item_id=?", (item["work_item_id"],))
+        archived = board.get_work_item_detail(self.db_path, item["work_item_id"])
+        self.assertEqual(archived["column"], "history")
+        self.assertEqual(archived["valid_commands"], [])
 
     def test_status_summary_names_state_owner_and_primary_action_per_column(self):
         from robert_agent.readmodels import board

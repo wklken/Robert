@@ -12,6 +12,32 @@ _PUBLIC_REF = re.compile(r"rbt-[0-9a-z]{6,32}")
 _PULL_REQUEST_MODES = frozenset({"existing_pr", "review_pr"})
 
 
+def prepare_delivery_continuation(repo, saved, dry_run):
+    """Preserve a completed delivery attempt's owned edits after a user reply."""
+    path, branch = saved["worktree_path"], saved["branch_name"]
+    if not path or not branch:
+        return {"ok": False, "status": "blocked_unavailable_worktree"}
+    error = worktree.check_worktree_reuse(
+        repo["repo_root"], repo["worktree_root"], path, dry_run=dry_run, branch_name=branch, allow_dirty=True
+    )
+    return {
+        "ok": not error,
+        "status": error or "reused",
+        "mode": "delivery_continuation",
+        "worktree_path": path,
+        "branch_name": branch,
+        "base_branch": saved.get("base_branch") or repo["default_base_branch"],
+        "continuation": {
+            "previous_task_id": saved["task_id"],
+            "previous_attempt_id": saved["previous_attempt_id"],
+            "strategy": "resume_from_worktree",
+            "handoff": saved["handoff"],
+            "operator_question": saved["operator_question"],
+            "reason_code": "delivery_question_response",
+        },
+    }
+
+
 def source_reference(event):
     """Name local workspaces and branches; TAPD sources have no number and use their public reference."""
     if event.get("provider") != SourceProvider.TAPD:

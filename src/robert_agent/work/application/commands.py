@@ -952,7 +952,7 @@ def execute_command(
 
             if item["canceled_at"] is not None:
                 raise WorkItemConflictError("a canceled work item cannot be changed")
-            if item["completed_at"] is not None and command != WorkCommand.REOPEN:
+            if item["completed_at"] is not None and command not in {WorkCommand.REOPEN, WorkCommand.CANCEL}:
                 raise WorkItemConflictError("a completed work item must be reopened first")
 
             facts = control_queries.lifecycle_facts(conn, item)

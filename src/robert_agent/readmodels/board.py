@@ -194,7 +194,7 @@ def _valid_commands(column, attention, *, running=False, publishing=False):
     if column == "history":
         return []
     if column == "done":
-        return ["reopen"]
+        return ["reopen", "cancel"]
     if not publishing and any(a.get("metadata", {}).get("supervision_decision_id") for a in attention):
         return [WorkCommand.REPLY.value, WorkCommand.CANCEL.value]
     if publishing:
@@ -387,6 +387,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
     # operator; only a closed source ends the item regardless of that failure.
     failed_after_completion = bool(
         row["completed_at"]
+        and not row["canceled_at"]
         and task
         and task["lifecycle"] == TaskLifecycle.FAILED
         and not running
@@ -629,14 +630,14 @@ def _project_item(conn, row, *, controls=None, facts=None):
             card["valid_commands"] = [command for command in card["valid_commands"] if command != "approve"]
     if rerun_requested:
         # Reopening now would start a second run beside the requested one.
-        card["valid_commands"] = []
+        card["valid_commands"] = ["cancel"]
     elif failed_after_completion:
-        # Completed items accept only reopen on the work item; a rerun acts on
-        # the failed task itself.
+        # A rerun acts on the failed task; reopening and cancellation act on
+        # the work item, retaining its prior completion evidence.
         recovery = _failed_task_recovery(conn, task, attention) if row["origin_type"] != "web" else []
-        card["valid_commands"] = [command for command in recovery if command == "retrigger"] + ["reopen"]
+        card["valid_commands"] = [command for command in recovery if command == "retrigger"] + ["reopen", "cancel"]
     if column == "done" and facts["source_closed"]:
-        card["valid_commands"] = []
+        card["valid_commands"] = ["cancel"]
     card["status_summary"] = _status_summary(conn, card, row, task=task, facts=facts, attention=attention)
     return card
 

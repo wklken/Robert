@@ -10,6 +10,7 @@
   "robert_agent.adapters.git.workspace",
   "robert_agent.adapters.github.discovery",
   "robert_agent.adapters.processes.worker",
+  "robert_agent.adapters.services.supervision_model",
   "robert_agent.configuration.command",
   "robert_agent.context.curation",
   "robert_agent.context.prompts",

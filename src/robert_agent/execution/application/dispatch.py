@@ -289,24 +289,25 @@ def ensure_dispatch_worktree(db_path, repo, task_info, worktree_result):
         return worktree_result
     if not can_materialize_worktree(repo):
         return worktree_result
+    ownership = None
+    if db_path and task_info.get("attempt_id") and task_info.get("task_id"):
+        with closing(db_database.connect(db_path)) as conn:
+            ownership = db_records.first(
+                db_read_attempts.find_dispatch_workspace_ownership(conn, task_info["attempt_id"], task_info["task_id"])
+            )
+        if not ownership or ownership["worktree_path"] != worktree_path:
+            return {**worktree_result, "ok": False, "status": "blocked_changed_worktree"}
+        if ownership["is_continuation"] and not ownership["owns_continuation"]:
+            return {**worktree_result, "ok": False, "status": "blocked_changed_worktree"}
     if Path(worktree_path).exists():
-        allow_dirty = False
-        branch_name = worktree_result.get("branch_name")
-        if db_path and task_info.get("attempt_id") and task_info.get("task_id"):
-            with closing(db_database.connect(db_path)) as conn:
-                ownership = db_records.first(
-                    db_read_attempts.find_dispatch_workspace_ownership(
-                        conn, task_info["attempt_id"], task_info["task_id"]
-                    )
-                )
-            if not ownership or ownership[0] != worktree_path:
-                return {**worktree_result, "ok": False, "status": "blocked_changed_worktree"}
-            branch_name = ownership[1]
-            allow_dirty = bool(branch_name and ownership[2])
+        branch_name = ownership["branch_name"] if ownership else worktree_result.get("branch_name")
+        allow_dirty = bool(ownership and branch_name and (ownership["owns_resume"] or ownership["owns_continuation"]))
         error = git_workspace.check_worktree_reuse(
             repo["repo_root"], repo["worktree_root"], worktree_path, branch_name=branch_name, allow_dirty=allow_dirty
         )
         return {**worktree_result, "ok": False, "status": error} if error else worktree_result
+    if ownership and ownership["is_continuation"]:
+        return {**worktree_result, "ok": False, "status": "blocked_unavailable_worktree"}
 
     with closing(db_database.connect(db_path)) as conn:
         db_sqlite.configure(conn, foreign_keys=True)
