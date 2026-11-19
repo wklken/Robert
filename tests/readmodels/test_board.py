@@ -97,6 +97,32 @@ class BoardReadModelTests(BoardReadModelFixture):
         self.assertFalse(detail["status_summary"]["needs_action"])
         self.assertEqual(board.list_board(self.db_path)["counts"]["needs_action"], 1)
 
+    def test_exhausted_remediation_does_not_flag_a_new_snapshot_or_green_rerun(self):
+        from robert_agent.persistence import database
+        from robert_agent.readmodels import board
+        from robert_agent.workflows.pr_remediation import upsert_health_episodes
+
+        item = self._seed_six_columns()["review"]
+        stream = {"workstream_id": "github:example/repo!12", "repo_id": "repo-1", "number": 12}
+        repo = {"pr_automation": {"ci": {"enabled": True}, "conflict": {"enabled": False}}}
+        snapshot = {"state": "open", "head_sha": "head", "base_sha": "base", "mergeable": True}
+        now = "2026-07-20T00:00:00Z"
+
+        def observe(observed, ci):
+            with closing(database.connect(self.db_path)) as conn, conn:
+                upsert_health_episodes(conn, repo=repo, workstream=stream, snapshot=observed, ci_summary=ci, now=now)
+
+        observe(snapshot, {"status": "manual", "reason": "failure_evidence_unavailable"})
+        self.assertEqual(board.get_work_item_detail(self.db_path, item["work_item_id"])["column"], "waiting")
+
+        for observed, ci in (
+            ({**snapshot, "head_sha": "new-head"}, {"status": "waiting"}),
+            (snapshot, {"status": "green"}),
+        ):
+            with self.subTest(head=observed["head_sha"], status=ci["status"]):
+                observe(observed, ci)
+                self.assertEqual(board.get_work_item_detail(self.db_path, item["work_item_id"])["column"], "review")
+
     def test_projection_places_each_item_in_exactly_one_of_six_columns(self):
         from robert_agent.readmodels import board
 

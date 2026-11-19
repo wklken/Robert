@@ -151,6 +151,7 @@ def _find_for_derived_pr_statement():
             table2.c["html_url"],
             table2.c["state"],
             table1.c["workstream_id"],
+            table2.c["metadata_json"],
         )
         .select_from(
             table1.join(

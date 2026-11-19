@@ -166,6 +166,30 @@ def _derived_pr(conn, root_workstream_id):
     return db_records.first(db_read_workstreams.find_for_derived_pr(conn, root_workstream_id, root_workstream_id))
 
 
+def _exhausted_pr_remediation(conn, pr):
+    health = json_object(pr["metadata_json"]).get("pr_remediation_health")
+    if not isinstance(health, dict):
+        health = {}
+    head, base = health.get("head_sha"), health.get("base_sha")
+    latest = {}
+    for episode in task_history.remediation_for_workstreams(conn, [pr["workstream_id"]]):
+        if (
+            head
+            and base
+            and (
+                base != episode["observed_base_sha"]
+                or head not in (episode["observed_head_sha"], episode["result_head_sha"])
+            )
+        ):
+            continue
+        latest.setdefault(episode["episode_kind"], episode)
+    if health.get("mergeable") is True:
+        latest.pop("merge_conflict", None)
+    if health.get("ci_status") == "green":
+        latest.pop("ci", None)
+    return next((episode for episode in latest.values() if episode["status"] == RemediationStatus.EXHAUSTED), None)
+
+
 def _valid_commands(column, attention, *, running=False, publishing=False):
     if column == "history":
         return []
@@ -346,13 +370,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
     pr = _derived_pr(conn, workstream_id) if workstream_id else None
     exhausted_remediation = None
     if pr and (pr["state"] or "open").lower() == "open":
-        latest_episodes = {}
-        for episode in task_history.remediation_for_workstreams(conn, facts["streams"]):
-            latest_episodes.setdefault((episode["workstream_id"], episode["episode_kind"]), episode)
-        exhausted_remediation = next(
-            (episode for episode in latest_episodes.values() if episode["status"] == RemediationStatus.EXHAUSTED),
-            None,
-        )
+        exhausted_remediation = _exhausted_pr_remediation(conn, pr)
     running = bool(facts["running"])
     publication_in_progress = bool(facts["actions"])
     failures = facts["publish_failures"]
