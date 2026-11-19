@@ -10,7 +10,51 @@ from robert_agent.persistence.queries import publication_intents as db_read_publ
 from robert_agent.persistence.queries import task_events as db_read_task_events
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import workstreams as db_read_workstreams
+from robert_agent.persistence.queries import worker_results as db_read_worker_results
 import json
+
+
+def waiting_delivery_context(conn, task_id):
+    """Find an unfinished delivery through analysis-only continuation ancestry."""
+    seen = set()
+    workstream_id = None
+    while task_id and task_id not in seen:
+        seen.add(task_id)
+        row = db_records.first(db_read_tasks.find_record_by_task_id(conn, task_id))
+        if not row:
+            return None
+        task = dict(row)
+        if workstream_id is None:
+            workstream_id = task["workstream_id"]
+        if task["workstream_id"] != workstream_id or task["lifecycle"] not in {"waiting_for_user", "completed"}:
+            return None
+        if task["route_id"] in {"new-pr", "update-existing-pr"}:
+            attempt = db_records.first(db_read_attempts.find_for_latest_attempt(conn, task_id))
+            if not attempt or attempt[1] != "completed":
+                return None
+            results = db_read_worker_results.find_for_results_for_task(conn, task_id, 1)
+            result = dict(results[0]) if results else None
+            if (
+                not result
+                or result["attempt_id"] != attempt[0]
+                or result["output_type"] != "waiting_for_user"
+                or json.loads(result["metadata_json"]).get("audit", {}).get("status") != "accepted"
+            ):
+                return None
+            metadata = json.loads(task["metadata_json"])
+            return {
+                **task,
+                "base_branch": metadata.get("target_base_branch"),
+                "previous_attempt_id": attempt[0],
+                "branch_name": attempt[2],
+                "worktree_path": attempt[3],
+                "handoff": result["handoff"],
+                "operator_question": json.loads(result["metadata_json"]).get("operator_question"),
+            }
+        if task["route_id"] != "comment-analysis":
+            return None
+        task_id = task["parent_task_id"]
+    return None
 
 
 def load_active_workstreams(conn, repo_id):

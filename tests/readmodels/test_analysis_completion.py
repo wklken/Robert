@@ -100,6 +100,22 @@ class AnalysisCompletionTests(unittest.TestCase):
         self.change("DELETE FROM github_actions")
         self.assertIsNone(self.reconcile()["completed_at"])
 
+    def test_acceptance_analysis_does_not_complete_undelivered_implementation(self):
+        self.change(
+            "INSERT INTO tasks(task_id,workstream_id,lifecycle,route_id,expected_output,created_at,updated_at) "
+            "VALUES ('implementation','stream','completed','new-pr','new_pr','2026-10-27T02:00:00Z','2026-10-27T02:00:00Z')"
+        )
+        self.change("UPDATE tasks SET parent_task_id='implementation' WHERE task_id='task'")
+        self.change(
+            "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES ('implementation-attempt','implementation',1,'completed')"
+        )
+        self.change(
+            "INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json) "
+            "VALUES ('question','implementation','implementation-attempt','waiting_for_user',?,?)",
+            (self.now, json.dumps({"audit": {"status": "accepted"}})),
+        )
+        self.assertIsNone(self.reconcile()["completed_at"])
+
     def test_pending_request_is_not_hidden_by_completion(self):
         self.change(
             "INSERT INTO github_events(event_id,repo_id,source_id,event_fingerprint,event_type,event_at) VALUES ('event','repo-1','source','comment:next','comment',?)",

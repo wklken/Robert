@@ -771,6 +771,8 @@ def _complete_published_analysis_items(conn, repo_id, run_now):
         current = work_items._active_or_latest_task(conn, item["workstream_id"])
         if not current or current["task_id"] != item["analysis_task_id"]:
             continue
+        if work_queries.waiting_delivery_context(conn, current["task_id"]):
+            continue
         if facts["running"] or facts["actions"] or facts["cleanup_pending"] or facts["workflow_attention"]:
             continue
         if work_items._unresolved_event(

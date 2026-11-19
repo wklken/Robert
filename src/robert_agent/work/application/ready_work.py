@@ -386,6 +386,7 @@ def prepare_operator_tasks(
             provider = current["provider"]
             source_name = "TAPD" if provider == SourceProvider.TAPD else "GitHub"
             context_task = current["parent_task_id"]
+            delivery = work_queries.waiting_delivery_context(conn, context_task)
             events = []
             seen = set()
             while context_task and context_task not in seen and not events:
@@ -393,6 +394,8 @@ def prepare_operator_tasks(
                 events = work_queries.task_related_events(conn, context_task, include_consumed=True)
                 parent = db_records.first(db_read_tasks.find_parent_task_id_by_task_id(conn, context_task))
                 context_task = parent[0] if parent else None
+            if delivery:
+                events = work_queries.task_related_events(conn, delivery["task_id"], include_consumed=True)
             # Notification trust is derived from the current configuration,
             # never from a persisted boolean set by an earlier scanner.
             trusted = {login.casefold() for login in repo.get("trusted_actors", [])}
@@ -556,6 +559,8 @@ def prepare_operator_tasks(
             event = refreshed[0]
             parent_route = db_records.first(db_read_tasks.find_route_id_by_task_id(conn, current["parent_task_id"]))
             route_id = parent_route[0] if parent_route else None
+            if delivery:
+                route_id = delivery["route_id"]
             if operator_episode_reply:
                 route_id = None
             elif route_id in {None, "waiting-for-user"}:
@@ -563,7 +568,11 @@ def prepare_operator_tasks(
             route_result = workflow_routing.effective_route(config_result, repo, event, route_id=route_id)
             conn.commit()
             try:
-                worktree_result = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
+                worktree_result = (
+                    assigned_workspace.prepare_delivery_continuation(repo, delivery, dry_run)
+                    if delivery
+                    else assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
+                )
             except ControlDeadlineExceeded:
                 raise
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
