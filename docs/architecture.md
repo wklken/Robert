@@ -180,6 +180,11 @@ worktree 和文件 hash 校验不提供操作系统沙箱。Worker 按协议只�
 [控制子进程](../src/robert_agent/runtime/control.py)、[扫描与发布入口](../src/robert_agent/runtime/scan.py)、
 [服务生成](../src/robert_agent/adapters/services/native.py)。
 
+独立监督可显式配置
+[本地 Messages 网关适配器](../src/robert_agent/adapters/services/supervision_model.py)。
+该入口只负责无工具模型传输、思考块过滤和输出校验；决策调度、授权及业务动作
+仍由监督用例和既有消费者负责。
+
 ## 模块关系
 
 箭头表示主要调用关系，节点按责任分组，不表示全部 Python import。

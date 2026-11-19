@@ -36,6 +36,51 @@ the command; ordinary coding adapters are not this profile. An existing
 In `decide` mode the supervisor does not start separate advisory diagnosis calls
 or automatic maintenance proposals; the decision loop owns the next action.
 
+### Local Messages gateway wrapper
+
+The installed [supervision model wrapper](../../src/robert_agent/adapters/services/supervision_model.py)
+can call an existing local gateway implementing the Messages API. Configure the
+absolute installed interpreter path and the gateway's administrator-owned metadata
+file; its `url` must be an HTTP endpoint on `127.0.0.1` with an explicit port.
+The metadata must be a regular file owned by the service account and must not be
+writable by group or other users. Symlinks and redirects are rejected.
+
+```yaml
+supervision:
+  mode: decide
+  decision:
+    command:
+      - /opt/robert/venv/bin/python
+      - -m
+      - robert_agent.adapters.services.supervision_model
+      - --gateway-metadata
+      - /opt/robert/gateway/metadata.json
+      - --model
+      - your-model-id
+      - --timeout
+      - '90'
+      - --kind
+      - decision
+    timeout_seconds: 120
+    cooldown_seconds: 120
+    max_calls_per_hour: 12
+```
+
+The same command supports `--kind diagnosis` in a diagnosis profile. Model requests
+expose no tools and request disabled thinking. If the gateway still returns
+`thinking` or `redacted_thinking` blocks, the wrapper discards them and parses only
+the text blocks. This includes gateway thinking blocks containing only a signature.
+Tool blocks, unknown or malformed blocks, incomplete turns and
+missing text fail the call. The resulting JSON must still cite the supplied
+bundle/hash and known evidence IDs, select an offered action and satisfy the
+existing output limits. Thinking content never enters stdout or error details.
+
+Failures report fixed diagnostic descriptions such as
+`model output references unknown evidence`, without model text, evidence values
+or credentials. HTTP 429 retains the rate-limit outcome described below. This
+wrapper is an explicit configuration choice; existing external commands continue
+to run until their configuration is changed.
+
 The model can select a supplied CI repair, conflict resolution, eligible Worker
 retry, or known recovery candidate; wait with a recheck time; notify or ask the
 operator. `finish_supervision` is offered only when current domain facts already
