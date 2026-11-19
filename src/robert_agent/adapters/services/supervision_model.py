@@ -4,9 +4,9 @@
 import argparse
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
+from http.client import HTTPException
 import json
 import os
-from pathlib import Path
 import stat
 import sys
 from urllib.error import HTTPError, URLError
@@ -18,6 +18,7 @@ from robert_agent.foundation.contracts.supervision import AUTOMATIC_DECISION_ACT
 MAX_REQUEST_BYTES = 65536
 MAX_RESPONSE_BYTES = 1048576
 MAX_OUTPUT_BYTES = 8192
+MAX_METADATA_BYTES = 8192
 
 
 class ModelError(ValueError):
@@ -36,10 +37,15 @@ def load_json(value):
             raise ModelError("duplicate JSON field")
         return result
 
-    return json.loads(value, object_pairs_hook=unique)
+    try:
+        return json.loads(value, object_pairs_hook=unique)
+    except RecursionError:
+        raise ModelError("model JSON is nested too deeply") from None
 
 
 def checked_endpoint(value):
+    if not isinstance(value, str):
+        raise ModelError("model endpoint must be the local gateway")
     parsed = urlsplit(value)
     if (
         parsed.scheme != "http"
@@ -52,15 +58,23 @@ def checked_endpoint(value):
         or not parsed.port
     ):
         raise ModelError("model endpoint must be the local gateway")
-    return value.rstrip("/")
+    return f"http://127.0.0.1:{parsed.port}"
 
 
 def gateway_endpoint(metadata):
-    path = Path(metadata)
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022 or info.st_uid != os.geteuid() or info.st_size > 8192:
+    try:
+        fd = os.open(metadata, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        raise ModelError("untrusted gateway metadata") from None
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022 or info.st_uid != os.geteuid():
+            raise ModelError("untrusted gateway metadata")
+        raw = stream.read(MAX_METADATA_BYTES + 1)
+    if len(raw) > MAX_METADATA_BYTES:
         raise ModelError("untrusted gateway metadata")
-    return checked_endpoint(load_json(path.read_text())["url"])
+    value = load_json(raw)
+    return checked_endpoint(value.get("url") if isinstance(value, dict) else None)
 
 
 def validate_result(result, bundle, kind):
@@ -208,6 +222,8 @@ def call(bundle, kind, endpoint, model, timeout):
             }
         finally:
             error.close()
+    except HTTPException:
+        raise ModelError("local model gateway returned an invalid HTTP response") from None
     if len(raw) > MAX_RESPONSE_BYTES:
         raise ModelError("model response exceeds the transport limit")
     response = load_json(raw)

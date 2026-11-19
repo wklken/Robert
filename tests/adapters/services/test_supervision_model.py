@@ -1,6 +1,7 @@
 """No-tool supervision transport accepts reasoning without publishing it."""
 
 from copy import deepcopy
+from http.client import BadStatusLine
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
@@ -174,6 +175,11 @@ class SupervisionModelTests(unittest.TestCase):
             with self.assertRaisesRegex(model.ModelError, "^local model gateway returned HTTP 502$"):
                 model.call(self.bundle, "decision", "http://127.0.0.1:12345", "fixture-model", 5)
 
+    def test_malformed_http_response_has_a_fixed_error(self):
+        with patch.object(model, "send_request", side_effect=BadStatusLine("private gateway response")):
+            with self.assertRaisesRegex(model.ModelError, "^local model gateway returned an invalid HTTP response$"):
+                model.call(self.bundle, "decision", "http://127.0.0.1:12345", "fixture-model", 5)
+
     def test_rate_limit_retains_transport_outcome(self):
         for header, expected in ((None, None), ("120", 120), ("invalid", None)):
             with self.subTest(header=header):
@@ -204,6 +210,9 @@ class SupervisionModelTests(unittest.TestCase):
             link.symlink_to(metadata)
             with self.assertRaises(ValueError):
                 model.gateway_endpoint(link)
+            metadata.write_text(json.dumps({"url": 12345}))
+            with self.assertRaises(ValueError):
+                model.gateway_endpoint(metadata)
 
     def test_command_outputs_only_validated_text_and_safe_failure_details(self):
         response = self.response()
