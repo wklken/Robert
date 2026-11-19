@@ -6,6 +6,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import time
+from unittest.mock import patch
 
 from tests.support.repository_cycle import RepositoryCycleFixture, _verification_evidence
 from robert_agent.delivery.application import submission
@@ -183,6 +184,7 @@ class WaitingDeliveryContinuationTests(RepositoryCycleFixture):
                 "WHERE attempt_id=?",
                 (attempt,),
             )
+        (self.tree / "pending.txt").unlink()
         worktree = dispatch.ensure_dispatch_worktree(
             self.db,
             {"repo_root": str(self.repo_root), "worktree_root": str(self.worktree_root)},
@@ -190,7 +192,28 @@ class WaitingDeliveryContinuationTests(RepositoryCycleFixture):
             {"ok": True, "worktree_path": str(self.tree), "branch_name": self.branch},
         )
         self.assertFalse(worktree["ok"], worktree)
-        self.assertEqual(worktree["status"], "blocked_dirty_worktree")
+        self.assertEqual(worktree["status"], "blocked_changed_worktree")
+
+    def test_dispatch_does_not_replace_a_missing_continuation_worktree(self):
+        self.prepare_question()
+        self.reply()
+        with closing(sqlite3.connect(self.db)) as conn:
+            child, attempt = conn.execute(
+                "SELECT t.task_id,a.attempt_id FROM tasks t JOIN attempts a ON a.task_id=t.task_id "
+                "WHERE t.parent_task_id=?",
+                (self.parent,),
+            ).fetchone()
+        self.tree.rename(self.tree.with_name("moved-checkout"))
+        with patch.object(dispatch.assigned_workspace, "prepare_worktree", return_value={"ok": True}) as prepare:
+            worktree = dispatch.ensure_dispatch_worktree(
+                self.db,
+                {"repo_root": str(self.repo_root), "worktree_root": str(self.worktree_root)},
+                {"task_id": child, "attempt_id": attempt},
+                {"worktree_path": str(self.tree), "branch_name": self.branch},
+            )
+        self.assertEqual(worktree["status"], "blocked_unavailable_worktree")
+        self.assertFalse(worktree["ok"])
+        prepare.assert_not_called()
 
     def test_board_reply_continues_delivery_after_fresh_source_read(self):
         self.prepare_question()

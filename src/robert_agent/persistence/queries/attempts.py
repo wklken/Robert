@@ -1771,7 +1771,11 @@ def find_dispatch_workspace_ownership(conn, attempt_id, task_id):
     )
     return statements.read(
         conn,
-        select(current.c.worktree_path, current.c.branch_name, or_(owned_resume, owned_continuation)).where(
-            current.c.attempt_id == attempt_id, current.c.task_id == task_id
-        ),
+        select(
+            current.c.worktree_path,
+            current.c.branch_name,
+            owned_resume.label("owns_resume"),
+            owned_continuation.label("owns_continuation"),
+            func.json_type(metadata, "$.continuation").is_not(None).label("is_continuation"),
+        ).where(current.c.attempt_id == attempt_id, current.c.task_id == task_id),
     )
