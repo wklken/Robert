@@ -605,7 +605,9 @@ helper、原子文件、stdout JSON 保持各自结果格式和完成条件。�
 ## PR 自修复
 
 CI 和冲突修复默认关闭，按仓库 `pr_automation` 显式开启；CI 还要求非空
-`check_allowlist`。Episode 将系统请求限制在当前 PR 的版本、次数和预算内。
+`check_allowlist` 或 `workflow_path_allowlist`。默认等待所有配置的名称和路径；
+`check_mode: observed` 只等待当前 PR head 实际出现的已选 CI，支持组件路径过滤和动态名称。
+未观察到已选 CI 或 CI API 读取失败时继续等待。Episode 将系统请求限制在当前 PR 的版本、次数和预算内。
 仓库可用 `pr_automation.dispatch_mode: direct` 直接派发每个版本的首次
 合规修复。开启冲突修复时，CI 修复等待 GitHub 确认可合并。修复任务失败后的
 合规重试仍由 `decide` 模式下的 Supervisor 决定，其余模式记录需处理通知。

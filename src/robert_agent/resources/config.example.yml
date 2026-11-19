@@ -107,6 +107,13 @@ routes:
 # See docs/reference.md#configuration for a complete repository example.
 # PR remediation is opt-in per repository. Set pr_automation.dispatch_mode to
 # direct to dispatch the first eligible repair under supervision.mode: decide.
+# CI requires check_allowlist names or workflow_path_allowlist exact paths.
+# check_mode: all requires every selector (default); observed waits only for
+# selected CI present on the current PR head, supporting component path filters.
+# Example per-repository pr_automation.ci:
+#   enabled: true
+#   check_mode: observed
+#   workflow_path_allowlist: [.github/workflows/backend.yml, dynamic/github-code-scanning/codeql]
 repos: []
 
 # Optional operator chat; disabled unless explicitly configured.
