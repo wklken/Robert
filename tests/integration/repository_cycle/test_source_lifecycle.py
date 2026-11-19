@@ -166,7 +166,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
         detail = board.get_work_item_detail(db, item["work_item_id"])
         self.assertEqual(detail["column"], "done")
         self.assertEqual(detail["completed_at"], remote["closed_at"])
-        self.assertEqual(detail["valid_commands"], [])
+        self.assertEqual(detail["valid_commands"], ["cancel"])
 
     def test_active_issue_task_is_canceled_when_remote_issue_closes(self):
         from robert_agent.runtime import cycle as run_once

@@ -4,7 +4,7 @@ from robert_agent.foundation.contracts.work import PUBLICATION_RETRY_WAKEUP_KIND
 
 from robert_agent.persistence.expressions import sql_constant
 
-from sqlalchemy import update, delete, bindparam, and_, not_, null, func
+from sqlalchemy import update, delete, bindparam, and_, or_, not_, null, func
 from sqlalchemy.dialects.sqlite import insert
 
 
@@ -91,18 +91,21 @@ def insert_worker_result_wakeup(
     )
 
 
-def update_for_cancel_execution(conn, now, work_item_id):
+def update_for_cancel_execution(conn, now, work_item_id, *, task_ids):
     stmt = (
         update(tables["wakeups"])
         .values({"status": sql_constant(WakeupStatus.CANCELED.value), "updated_at": bindparam("p0")})
         .where(
             and_(
-                (tables["wakeups"].c["work_item_id"] == bindparam("p1")),
+                or_(
+                    tables["wakeups"].c["work_item_id"] == bindparam("p1"),
+                    tables["wakeups"].c["task_id"].in_(bindparam("task_ids", expanding=True)),
+                ),
                 (tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value)),
             )
         )
     )
-    return statements.write(conn, stmt, {"p0": now, "p1": work_item_id})
+    return statements.write(conn, stmt, {"p0": now, "p1": work_item_id, "task_ids": task_ids})
 
 
 def update_for_finalize_superseded_result(conn, now, result_id):

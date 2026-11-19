@@ -122,4 +122,6 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
         if entry := pre_pr_review.session(conn, task_id=task_id):
             pre_pr_review.update(conn, entry["round_id"], status="canceled", proof_json=None)
     db_write_github_actions.cancel_execution_filtered(conn, facts["streams"])
-    db_write_wakeups.update_for_cancel_execution(conn, now, item["work_item_id"])
+    db_write_wakeups.update_for_cancel_execution(
+        conn, now, item["work_item_id"], task_ids=[task_id for (task_id,) in task_ids]
+    )
