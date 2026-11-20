@@ -26,6 +26,19 @@ An incident notice without an actionable work-item event supports acknowledgemen
 only. Acknowledging it records who received it and their note; it does not dismiss
 the incident, retry execution, release a process or approve a repair.
 
+Canceled PR workstreams are excluded from automatic repair scans and pending
+repair-notification delivery. Cancellation is checked again after collecting
+remote health evidence and when preparing a message for transport. Historical
+records remain available for local inspection.
+
+CI repair notices group the same PR head, failure reason and CI run/attempt.
+Advancing the target branch updates the existing notice's latest repair episode
+and base commit without another message. Each repair episode still has its own
+snapshot and budget. Updates preserve the original notice time, delivery retries
+and acknowledgement. A new CI run, rerun, changed cause or failure after recovery
+can notify again. Recovery and a new PR head close outdated CI notices;
+acknowledgement alone does not close them. Conflict notices retain snapshot identity.
+
 Fallback health checks report queue delays only when a queued task is older
 than five minutes and has no occupied attempt, including a launch in progress,
 a running or stale Worker, or a recorded process awaiting exit confirmation.
