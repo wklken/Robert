@@ -134,6 +134,36 @@ class ReviewFilesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             review_files.read_result(outside, self.manifest)
 
+    def test_trusted_root_alias_accepts_alias_and_real_paths(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.path.parent, target_is_directory=True)
+        self.assertEqual(review_files.safe_path(alias / "result.json", alias), self.path)
+        self.assertEqual(review_files.safe_path(self.path, alias), self.path)
+
+    def test_trusted_root_ancestor_alias_accepts_regular_descendants(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.root / "runs", target_is_directory=True)
+        root = alias / "codex" / "attempt-1"
+        self.assertEqual(review_files.safe_path(root / "result.json", root), self.path)
+
+    def test_trusted_root_alias_still_rejects_internal_links_and_outside_paths(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.path.parent, target_is_directory=True)
+        (self.path.parent / "linked.json").symlink_to(self.path)
+        (self.path.parent / "linked-dir").symlink_to(self.path.parent, target_is_directory=True)
+        outside = self.root / "outside.json"
+        outside.write_text("{}")
+        (self.path.parent / "external.json").symlink_to(outside)
+        for path in (
+            alias / "linked.json",
+            alias / "linked-dir" / "result.json",
+            alias / "external.json",
+            outside,
+            alias / ".." / "outside.json",
+        ):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                review_files.safe_path(path, alias)
+
     def test_synthesis_hashes_and_every_finding_source_are_checked(self):
         record = self.record()
         inputs = review_files.write_synthesis_inputs(self.manifest, [record])

@@ -28,12 +28,15 @@ def sha256_file(path):
 
 def safe_path(path, root):
     """Reject links/escapes inside an already trusted artifact directory."""
-    root = Path(root).resolve()
+    configured_root = Path(os.path.abspath(root))
+    root = configured_root.resolve()
     path = Path(os.path.abspath(path))
     try:
-        relative = path.relative_to(root)
+        relative = path.relative_to(configured_root if path.is_relative_to(configured_root) else root)
     except ValueError as exc:
         raise ValueError("review artifact is outside its registered directory") from exc
+    # Resolve only the trusted root; links below it must remain visible to the checks.
+    path = root / relative
     current = root
     for part in relative.parts:
         current = current / part

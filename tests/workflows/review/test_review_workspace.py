@@ -8,6 +8,36 @@ from tests.support.review_workspace import ReviewWorkspaceFixture
 
 
 class ReviewWorkspaceTests(ReviewWorkspaceFixture):
+    def test_candidate_snapshot_through_root_alias_can_freeze_and_resume(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        arguments = (
+            alias / "repo",
+            alias / "worktrees",
+            alias / "artifacts",
+            "candidate-alias",
+            "example/backend",
+            "main",
+            self.base,
+            self.head,
+            {"event_fingerprint": "candidate-alias"},
+        )
+        manifest = review_workspace.prepare_candidate_snapshot(*arguments)
+        for field in ("worktree_path", "artifact_root", "context_dir"):
+            self.assertEqual(Path(manifest[field]), Path(manifest[field]).resolve())
+        frozen = self.freeze(manifest)
+        self.assertTrue(review_workspace.verify_snapshot(frozen))
+        self.assertEqual(review_workspace.prepare_candidate_snapshot(*arguments), frozen)
+
+    def test_existing_candidate_snapshot_with_root_alias_can_freeze(self):
+        manifest = self.prepare("existing-alias")
+        alias = self.root / "alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        manifest["worktree_path"] = str(alias / Path(manifest["worktree_path"]).relative_to(self.root))
+        frozen = self.freeze(manifest)
+        self.assertEqual(frozen["worktree_path"], manifest["worktree_path"])
+        self.assertTrue(review_workspace.verify_snapshot(frozen))
+
     def test_nested_runtime_scan_does_not_follow_a_link_replacing_deleted_source(self):
         external = self.root / "external-runtime"
         external.mkdir()
