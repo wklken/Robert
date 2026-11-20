@@ -94,6 +94,20 @@ class MessagePresentationTests(unittest.TestCase):
         self.assertTrue(send(payload, command=["local-notifier"], runner=runner))
         self.assertEqual(json.loads(runner.call_args.kwargs["input"]), payload)
 
+    def test_database_check_reasons_are_explained(self):
+        for reason in (
+            "database_busy",
+            "database_observation_deadline",
+            "database_corrupt",
+            "database_schema_incompatible",
+            "database_unavailable",
+        ):
+            with self.subTest(reason=reason):
+                text = render_message(self.payload(type="supervisor_unobservable", reason_code=reason))
+                self.assertIn("数据库检查受阻", text)
+                self.assertNotIn("原因暂未归类", text)
+                self.assertNotIn("无法读取数据库", text)
+
     def test_known_decision_failure_codes_explain_service_failure(self):
         for code in (
             "exited",
