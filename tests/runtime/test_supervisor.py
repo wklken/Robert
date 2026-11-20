@@ -142,7 +142,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("delivery_id", calls[0])
         self.assertFalse(Path(self.config["db_path"]).exists())
 
-    def test_brief_writer_collision_records_health_without_notice_and_resets_episode(self):
+    def test_isolated_writer_collisions_record_health_without_notice(self):
         calls = []
 
         def sent(argv, **kwargs):
@@ -159,5 +159,5 @@ class SupervisorTests(unittest.TestCase):
                     self.assertEqual(calls, [])
                 result = supervision_checks.check(self.config, record=True, now=f"2026-11-06T00:0{minute}:01+00:00")
                 self.assertTrue(result["ok"])
-                self.assertNotIn("first_failed_at", json.loads(supervision_health.health_path(self.config).read_text()))
+                self.assertTrue(json.loads(supervision_health.health_path(self.config).read_text())["ok"])
         self.assertEqual(calls, [])

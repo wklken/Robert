@@ -58,7 +58,7 @@ class MessagingHealthTests(unittest.TestCase):
             self.assertEqual(runner.call_count, 1)
             argv = runner.call_args.args[0]
             self.assertEqual(argv[:3], ["openclaw", "message", "send"])
-            self.assertIn("监督服务无法读取数据库", argv[argv.index("--message") + 1])
+            self.assertIn("监督服务数据库检查受阻", argv[argv.index("--message") + 1])
             self.assertFalse(Path(config["db_path"]).exists())
             state = json.loads(health.health_path(config).with_name("health-delivery.json").read_text())
             self.assertEqual(state["status"], "sent")

@@ -1,6 +1,6 @@
 """Shared queries operations for pr_remediation_episodes."""
 
-from robert_agent.foundation.contracts.work import RemediationStatus
+from robert_agent.foundation.contracts.work import RemediationStatus, WorkstreamLifecycle
 
 from robert_agent.persistence.expressions import sql_constant
 
@@ -187,6 +187,7 @@ def find_for_next_system_decisions(conn, repo_id):
             and_(
                 table2.c["repo_id"] == bindparam("p0"),
                 table2.c["active_task_id"].is_(null()),
+                table2.c["lifecycle"] != WorkstreamLifecycle.CANCELED.value,
                 table1.c["status"] == sql_constant(RemediationStatus.OPEN.value),
             )
         )

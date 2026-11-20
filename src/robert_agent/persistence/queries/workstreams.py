@@ -386,6 +386,7 @@ def find_for_collect_pr_remediation_decisions(conn, repo_id):
                 not_(table1.c["origin_workstream_id"].is_(null())),
                 table2.c["source_type"] == sql_constant("pull_request"),
                 table2.c["state"] == sql_constant("open"),
+                table1.c["lifecycle"] != WorkstreamLifecycle.CANCELED.value,
             )
         )
         .order_by(table1.c["created_at"].asc(), table1.c["workstream_id"].asc())

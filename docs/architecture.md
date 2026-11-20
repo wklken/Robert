@@ -618,6 +618,11 @@ CI 和冲突修复默认关闭，按仓库 `pr_automation` 显式开启；CI 还
 合规重试仍由 `decide` 模式下的 Supervisor 决定，其余模式记录需处理通知。
 默认 `follow_supervision` 沿用现有监督策略。
 
+已取消的 PR 工作流不参与自动修复扫描，待发送修复通知也会检查取消状态。
+CI 告警按 PR head、失败原因和 CI run/attempt 归并；仅目标分支推进时更新本地告警，
+保留发送与 ack 回执。Episode 的版本身份与预算保持独立。恢复、新 head 或远端终态
+关闭旧 CI 告警；新故障或恢复后复发可再次通知，详见[操作消息](features/operator-messaging.md)。
+
 ```mermaid
 flowchart TD
     Health["读取 PR head/base 与健康证据"] --> Enabled{"仓库开启对应自动化？"}
