@@ -2,6 +2,20 @@
 
 const translations = {
   en: {
+    agentSession: "Agent session", agentSessionWhy: "Messages and actions, newest first",
+    sessionExecution: "Execution", sessionOpenHint: "Open to load the conversation.",
+    sessionAgent: "Agent", sessionMain: "Task implementation / main session",
+    sessionSucceeded: "Succeeded",
+    sessionNoExecutions: "No executions yet.", sessionLoading: "Loading conversation…",
+    sessionOlder: "Load earlier records", sessionNewestFirst: "Newest first",
+    sessionLive: "Updates while running", sessionExpand: "Show full message",
+    sessionOutput: "Show output / changes", sessionTruncated: "Large content shows a bounded excerpt.",
+    sessionLimited: "Large records were omitted. Load earlier records to continue.",
+    sessionUnavailable: "This machine has no readable conversation for this execution.",
+    sessionEmpty: "Waiting for the Agent to record its first message.",
+    session_assistant: "Agent", session_user: "Task input", session_reasoning: "Reasoning summary",
+    session_command: "Command", session_file_change: "File changes", session_web_search: "Web search",
+    session_tool: "Tool call", session_tool_output: "Tool result",
     supervision: "Task supervision", noIncidents: "No recorded supervision incidents.",
     supervisionWhy: "What the background supervisor noticed and how it recovered",
     incidentsCount: "{count} incidents",
@@ -411,6 +425,20 @@ const translations = {
     reason_auto_stopped: "Automatic execution stopped.",
   },
   zh: {
+    agentSession: "Agent 会话", agentSessionWhy: "消息与操作记录，从新到旧",
+    sessionExecution: "选择执行", sessionOpenHint: "展开后加载会话记录。",
+    sessionAgent: "选择 Agent", sessionMain: "任务实现 / 主会话",
+    sessionSucceeded: "已完成",
+    sessionNoExecutions: "还没有执行记录。", sessionLoading: "正在加载会话…",
+    sessionOlder: "加载更早的记录", sessionNewestFirst: "从新到旧",
+    sessionLive: "执行中自动更新", sessionExpand: "展开完整消息",
+    sessionOutput: "展开输出 / 变更", sessionTruncated: "内容较大，仅展示有长度限制的片段。",
+    sessionLimited: "部分超大记录已省略，可加载更早的记录。",
+    sessionUnavailable: "当前机器没有本次执行的可读会话记录。",
+    sessionEmpty: "等待 Agent 写入第一条会话记录。",
+    session_assistant: "Agent", session_user: "任务输入", session_reasoning: "思考摘要",
+    session_command: "执行命令", session_file_change: "文件变更", session_web_search: "网页搜索",
+    session_tool: "工具调用", session_tool_output: "工具返回",
     supervision: "任务监督", noIncidents: "没有已记录的监督异常。",
     supervisionWhy: "后台监督发现的异常和自动恢复记录",
     incidentsCount: "{count} 条异常",
@@ -1885,6 +1913,7 @@ function renderDetail(detail, { preserve = false } = {}) {
     const nextSupervision = renderSupervision(detail);
     nextSupervision.open = previousSupervision?.open || false;
     previousSupervision?.replaceWith(nextSupervision);
+    $("#detail-agent-session")?.update?.(detail, { poll: true });
     updateComposerState(detail);
     return;
   }
@@ -1945,6 +1974,7 @@ function renderDetail(detail, { preserve = false } = {}) {
     now,
     layerLabel("layerProgress"),
     renderJourney(detail),
+    AgentSessionView.create(detail, { node, button, disclosure, t, formatTime, get: url => BoardClient.get(url) }),
     layerLabel("layerHistory"),
     renderExecutionHistory(detail),
     renderSupervision(detail),

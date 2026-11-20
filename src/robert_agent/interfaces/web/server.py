@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from robert_agent.configuration import command as validate_config
 from robert_agent.readmodels import board
+from robert_agent.readmodels import agent_session
 from robert_agent.work.application import commands as work_items
 from robert_agent.readmodels import workbench
 from robert_agent.foundation.commands import emit
@@ -38,6 +39,7 @@ WEB_ASSETS = {
     "/assets/operations.css": ("operations.css", "text/css; charset=utf-8"),
     "/assets/board.css": ("board.css", "text/css; charset=utf-8"),
     "/assets/board-client.js": ("board-client.js", "text/javascript; charset=utf-8"),
+    "/assets/agent-session.js": ("agent-session.js", "text/javascript; charset=utf-8"),
     "/assets/board.js": ("board.js", "text/javascript; charset=utf-8"),
     "/assets/workbench.css": ("workbench.css", "text/css; charset=utf-8"),
     "/assets/workbench.js": (
@@ -109,6 +111,31 @@ def build_http_response(path, db_path, control_context=None):
             "allowed_repo_ids": sorted(context.allowed_repo_ids) if context else [],
             "allowed_workers": sorted(context.allowed_workers) if context else [],
         }
+        return _json_response(payload)
+    if route == "/api/agent-session":
+        query = parse_qs(parsed.query)
+        try:
+            raw_limit = (query.get("limit") or ["30"])[0]
+            try:
+                limit = int(raw_limit)
+            except ValueError as exc:
+                raise agent_session.SessionQueryError("limit must be between 1 and 50") from exc
+            payload = agent_session.load_agent_session(
+                db_path,
+                (query.get("task_id") or [""])[0],
+                (query.get("attempt_id") or [""])[0],
+                limit=limit,
+                cursor=(query.get("cursor") or [None])[0],
+                run_id=(query.get("run_id") or [None])[0],
+            )
+        except agent_session.SessionQueryError as exc:
+            return _json_response({"ok": False, "status": "invalid_query", "safe_error": str(exc)}, 400)
+        except db_errors.OperationalError:
+            return _json_response(
+                {"ok": False, "status": "unavailable", "safe_error": "Session data is unavailable."}, 409
+            )
+        if payload is None:
+            return _json_response({"ok": False, "status": "not_found", "safe_error": "Execution not found."}, 404)
         return _json_response(payload)
     if route == "/api/board":
         query = parse_qs(parsed.query)
