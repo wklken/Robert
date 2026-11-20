@@ -18,7 +18,7 @@ class NewSkillSkeletonTests(unittest.TestCase):
     def test_package_version_is_public_beta(self):
         from robert_agent import __version__
 
-        self.assertEqual(__version__, "0.1.0b2")
+        self.assertEqual(__version__, "0.1.0b3")
 
     def test_required_reference_layout_exists(self):
         required_paths = [
