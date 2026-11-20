@@ -8,8 +8,10 @@ from robert_agent.persistence.stores import notifications as db_write_notificati
 from contextlib import closing
 import hashlib
 import json
+import re
 import subprocess
 import sys
+import time
 from robert_agent.security import redaction
 from robert_agent.adapters.notifications import messaging as message_transport
 from robert_agent.supervision import actions as supervision_actions
@@ -70,11 +72,14 @@ def notify_changes(conn, changes, now):
 def check(config, *, record=False, now=None):
     now = now or supervision_health.utc_now()
     settings = {**supervision_config.DEFAULTS, **config.get("supervision", {})}
+    started = time.monotonic()
+    phase = "schema"
     try:
         with closing(boundary_adapters_sqlite_supervision.connect(config["db_path"], readonly=True)) as conn:
             schema_ready(conn)
             state = supervision_store.get_checkpoint(conn, "service", "supervisor", "cursor") if record else None
         cursor = (state or {}).get("metadata", {}).get("cursor", "")
+        phase = "collect"
         sampled = supervision_observe.collect(
             config["db_path"], now=now, limit=settings["batch_size"], config=config, cursor=cursor
         )
@@ -82,7 +87,8 @@ def check(config, *, record=False, now=None):
         changes = []
         recovery = []
         if record:
-            with closing(boundary_adapters_sqlite_supervision.connect(config["db_path"])) as conn, conn:
+            phase = "record"
+            with closing(boundary_adapters_sqlite_supervision.connect(config["db_path"], timeout=1.0)) as conn, conn:
                 db_transactions.begin(conn, immediate=True)
                 observations = [item for item in observations if supervision_observe.is_current(conn, item)]
                 changes = supervision_store.apply_observations(conn, observations, now)
@@ -121,6 +127,10 @@ def check(config, *, record=False, now=None):
         else:
             reason = "database_unavailable"
         explanation, action = observation_failure_message(reason)
+        if reason == "database_busy" and phase == "record":
+            explanation = "监督服务已读取任务状态，但本轮检查记录写入因数据库锁竞争受阻。"
+        cause = exc.__cause__ or exc
+        errorname = getattr(cause, "sqlite_errorname", None)
         result = {
             "ok": False,
             "status": "unobservable",
@@ -129,6 +139,13 @@ def check(config, *, record=False, now=None):
             "reason_code": reason,
             "safe_error": explanation,
             "required_action": action,
+            "diagnostics": {
+                "phase": phase,
+                "sqlite_errorname": errorname
+                if isinstance(errorname, str) and re.fullmatch(r"SQLITE_[A-Z_0-9]+", errorname)
+                else None,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+            },
         }
     if record:
         try:
@@ -146,7 +163,7 @@ def observation_failure_message(reason):
             "检查监督查询的索引、数据库大小和磁盘负载；查看 Supervisor 健康状态。",
         ),
         "database_busy": (
-            "数据库持续被占用，监督服务暂时无法完成读写，当前无法确认任务进展。",
+            "本轮监督检查因数据库锁竞争受阻，尚不能确认任务进展。",
             "检查数据库锁和长事务，查看 Supervisor 健康状态。",
         ),
         "database_corrupt": (
@@ -214,7 +231,13 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
                         state["notification_id"],
                         "sent" if state.get("status") == "sent" else "resolved",
                         state["created_at"],
-                        json.dumps({"delivery": state, "reason_code": "observation_unavailable"}),
+                        json.dumps(
+                            {
+                                "delivery": state,
+                                "reason_code": state.get("reason_code", "observation_unavailable"),
+                                "diagnostics": state.get("diagnostics", {}),
+                            }
+                        ),
                     )
             except (OSError, db_errors.Error):
                 return
@@ -236,6 +259,7 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
         return
     reason = health.get("reason_code", "database_unavailable")
     explanation, action = observation_failure_message(reason)
+    explanation = health.get("safe_error") or explanation
     fields = {
         "reason_code": reason,
         "safe_error": explanation,
@@ -254,7 +278,12 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
         }
     if state.get("status") == "sent" or state["attempt_count"] >= 3:
         return
-    state.update(status="sending", attempt_count=state["attempt_count"] + 1)
+    state.update(
+        status="sending",
+        attempt_count=state["attempt_count"] + 1,
+        reason_code=reason,
+        diagnostics=health.get("diagnostics", {}),
+    )
     # Without a durable claim we must not repeatedly send on every failed tick.
     try:
         supervision_health.atomic_json(state_path, state)
@@ -265,6 +294,7 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
         "delivery_id": delivery_id,
         "occurred_at": health["first_failed_at"],
         "summary": explanation,
+        "diagnostics": health.get("diagnostics", {}),
         **fields,
     }
     sent = message_transport.send(payload, config=config, runner=runner)
