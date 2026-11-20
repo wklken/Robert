@@ -10,5 +10,10 @@ These rules apply to this directory and its descendants. Follow the
   ordering, pagination and redaction. Keep artifact previews limited to
   registered artifacts. Preserve size limits and symlink-safe access under the
   runtime data directory.
+- Agent conversation history may read local Codex/tcodex session roots through
+  `adapters/processes/session_history.py`. Bind task history to the initial
+  prompt identities; bind model runs to the owning task/attempt, recorded thread
+  ID and prompt hash. Keep reads bounded and refuse symlink paths. Expose only
+  public conversation records, never runtime configuration or raw reasoning.
 - Test projections from small persisted fixtures, including empty data, ordering,
   active ownership, sensitive fields and missing artifacts.
