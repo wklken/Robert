@@ -164,6 +164,23 @@ class ReviewFilesTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 review_files.safe_path(path, alias)
 
+    def test_review_rejects_a_link_in_place_of_the_runs_directory(self):
+        runs = self.root / "runs"
+        relocated = runs.rename(self.root / "relocated-runs")
+        runs.symlink_to(relocated, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "contains a symlink"):
+            review_files.read_result(self.path, self.manifest)
+
+    def test_evaluation_rejects_a_link_in_place_of_the_synthesis_directory(self):
+        record = self.record()
+        synthesis = self.root / "synthesis"
+        evaluation = synthesis / "evaluation.json"
+        review_files.atomic_json(evaluation, self.evaluation())
+        relocated = synthesis.rename(self.root / "relocated-synthesis")
+        synthesis.symlink_to(relocated, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "contains a symlink"):
+            review_files.read_evaluation(evaluation, self.manifest, [record])
+
     def test_synthesis_hashes_and_every_finding_source_are_checked(self):
         record = self.record()
         inputs = review_files.write_synthesis_inputs(self.manifest, [record])
