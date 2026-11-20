@@ -164,7 +164,14 @@ def prepare_candidate_snapshot(
         "base": {"ref": base_ref, "sha": base_sha, "repo": {"full_name": repo}},
         "kind": "new-pr-candidate",
     }
-    return _build_snapshot(Path(repo_root), Path(worktree_root), Path(artifact_root), round_id, info, [event])
+    return _build_snapshot(
+        Path(repo_root).resolve(),
+        Path(worktree_root).resolve(),
+        Path(artifact_root).resolve(),
+        round_id,
+        info,
+        [event],
+    )
 
 
 def _build_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, github_context):

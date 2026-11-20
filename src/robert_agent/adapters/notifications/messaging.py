@@ -7,6 +7,7 @@ import subprocess
 
 
 EVENT_LABELS = {
+    "pr_remediation_needs_evidence": "CI 自动修复缺少失败详情",
     "execution_delayed": "任务进度延迟",
     "worker_resume_prepared": "已准备恢复执行",
     "worker_stale": "执行进程心跳异常",
@@ -30,7 +31,7 @@ EVENT_LABELS = {
     "dispatch_attention": "请求处理需要检查",
     "dispatch_source_closed": "原始请求已关闭，未开始执行",
     "dispatch_completed": "请求已完成，结果已发布",
-    "supervisor_unobservable": "监督服务无法读取数据库",
+    "supervisor_unobservable": "监督服务数据库检查受阻",
     "supervision_question": "监督服务需要你回答",
     "supervision_notice": "监督服务通知",
     "supervision_incident": "监督服务发现异常",
@@ -66,6 +67,7 @@ ROUTE_LABELS = {
 }
 
 REASON_LABELS = {
+    "failure_evidence_unavailable": "已发现 CI 失败，但无法取得失败详情。",
     "queue_delayed": "任务排队超过 5 分钟，尚未记录正在执行的 Worker。",
     "publication_delayed": "已审核通过的操作超过 2 分钟仍未发布。",
     "exited": "模型命令以非零退出码结束，未取得有效决策；请查看监督状态中的错误详情。",
@@ -90,6 +92,11 @@ REASON_LABELS = {
     "retry_budget_exhausted": "已达到重试次数或时间上限，停止自动重试。",
     "recovery_budget_exhausted": "已达到自动恢复上限，需要人工检查。",
     "observation_unavailable": "监督服务无法读取数据库，当前无法确认任务进展。",
+    "database_busy": "本轮监督检查遇到数据库锁竞争，需要检查写入等待和事务占用。",
+    "database_observation_deadline": "监督读取超过观察时间预算，需要检查查询、索引和磁盘负载。",
+    "database_corrupt": "数据库格式或完整性检查失败。",
+    "database_schema_incompatible": "数据库结构与监督服务不兼容。",
+    "database_unavailable": "监督服务无法访问数据库，需要检查路径、权限和存储状态。",
     "control_paused": "调度服务已暂停，任务暂时无法继续。",
     "control_child_attention": "调度子进程状态无法确认，需要人工检查。",
     "control_plane_failed": "调度服务运行失败，需要查看调度日志。",

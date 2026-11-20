@@ -46,6 +46,19 @@ def set_metadata_json_by_notification_id(conn, value_1, notification_id):
     return statements.write(conn, stmt, {"p0": value_1, "p1": notification_id})
 
 
+def refresh_remediation_notice(conn, notification_id, metadata_json):
+    """Merge observation facts without overwriting concurrent delivery or ack receipts."""
+    notice = tables["notifications"]
+    stmt = (
+        update(notice)
+        .where(notice.c.notification_id == notification_id, notice.c.status != "resolved")
+        .values(
+            metadata_json=func.json_patch(notice.c.metadata_json, func.json(bindparam("metadata_json"))),
+        )
+    )
+    return statements.write(conn, stmt, {"metadata_json": metadata_json})
+
+
 def insert_workflow_attention_notification(conn, notification_id, value_2, now, value_4):
     stmt = insert(tables["notifications"]).values(
         {

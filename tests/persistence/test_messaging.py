@@ -12,6 +12,37 @@ from tests.support.work_items import WorkItemCommandFixture
 
 
 class MessagingPersistenceTests(WorkItemCommandFixture):
+    def test_canceled_repair_is_filtered_before_queue_limit_and_readiness(self):
+        item = self._create(start=True)["item"]
+        now = "2026-11-20T03:16:48Z"
+        with closing(database.connect(self.db_path)) as conn, conn:
+            notification_store.record_notification(
+                conn,
+                "repair",
+                None,
+                "pr_remediation_needs_evidence",
+                "local",
+                "recorded",
+                now,
+                json.dumps({"workstream_id": item["workstream_id"]}),
+            )
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE workstreams SET lifecycle='canceled'")
+        with closing(database.connect(self.db_path)) as conn, conn:
+            self.assertFalse(notifications.has_pending_local_delivery_filtered(conn, None, now))
+            notification_store.record_notification(
+                conn,
+                "other",
+                None,
+                "worker_stale",
+                "local",
+                "recorded",
+                "2026-11-20T03:16:49Z",
+                "{}",
+            )
+            self.assertEqual([r[0] for r in notifications.find_for_deliver_pending(conn, now, 1)], ["other"])
+            self.assertEqual([r[0] for r in notifications.find_inbox(conn, messaging_repo_ids=None)], ["other"])
+
     def test_delivery_window_preserves_microseconds_and_timezone_equivalence(self):
         boundary = "2026-11-09T00:00:00.000500Z"
         settings = {"enabled": True, "send_after": boundary}

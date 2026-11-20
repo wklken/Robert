@@ -112,7 +112,7 @@ def process_observation(root):
             timeout=5,
         )
         assert json.loads(duplicate.stdout)["status"] == "already_running", duplicate.stdout
-        # A real half-second writer collision is visible locally but sends no outage notice.
+        # A real half-second writer collision is waited out without an outage notice.
         stop(process)
         brief_locked = root / "brief-writer.locked"
         brief = subprocess.Popen(
@@ -126,7 +126,7 @@ def process_observation(root):
         )
         try:
             wait_for(brief_locked.exists, "brief writer acquired")
-            assert supervision_checks.check(config, record=True)["status"] == "unobservable"
+            assert supervision_checks.check(config, record=True)["ok"]
             subprocess.run(
                 [
                     sys.executable,

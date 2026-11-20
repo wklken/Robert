@@ -485,7 +485,7 @@ class StageCoordinator:
         if any(saved.get(key) != value for key, value in identity.items()) or set(saved.get("files", {})) != set(names):
             raise ValueError("review seal identity changed")
         for name, expected in saved["files"].items():
-            path = self.artifact_files.safe_path(sealed / name, sealed)
+            path = self.artifact_files.safe_path(sealed / name, self.manifest["artifact_root"])
             if store.digest(path) != expected:
                 raise ValueError("sealed review artifact changed")
         return sealed

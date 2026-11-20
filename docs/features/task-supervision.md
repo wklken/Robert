@@ -197,8 +197,26 @@ command creates a missing database or silently migrates an old one. Missing or
 busy state is reported as unobservable, not interpreted as a missing task.
 A failed recorded check updates local health immediately. An outage notice
 requires at least two consecutive failed observations spanning `poll_seconds`;
-a single stale failure cannot trigger a notice later. A successful check resets
-that episode. Notification identity and delivery state survive restarts.
+a single stale failure cannot trigger a notice later. The recorded check waits
+up to one second to acquire its writer lock, then revalidates observations in
+the same transaction. Reads retain their bounded observation budget. A failed
+record write does not imply that task state could not be read.
+
+A successful check reports healthy status immediately and resets the consecutive
+failure count. The outage identity and delivery budget remain until regularly
+sampled checks have succeeded for at least five minutes (or two polling intervals,
+whichever is longer). A gap exceeding two polling intervals plus ten seconds
+restarts that recovery interval. Brief recovery followed by another failure
+therefore does not send a new notice for the same outage. Stable recovery allows
+a subsequent outage to send its own notice. Identity and delivery state survive
+restarts, and transport attempts remain limited to three per outage.
+
+Health records include the failed phase (`schema`, `collect`, or `record`),
+SQLite error name when available, and elapsed time without raw SQL or input
+values. The most recent failure remains available during recovery; delivered
+notice records retain their original reason and diagnostics when SQLite becomes
+writable again. Database contention, observation deadlines, corruption, schema
+incompatibility and inaccessible files have distinct notification explanations.
 
 ```yaml
 supervision:
