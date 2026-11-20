@@ -1,5 +1,5 @@
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sqlite3
@@ -99,6 +99,16 @@ class DecisionTests(unittest.TestCase):
             self.assertTrue(decisions.permit(conn, self.config, **self.candidate_args))
             conn.execute("UPDATE tasks SET lifecycle='canceled' WHERE task_id='t'")
             self.assertFalse(decisions.permit(conn, self.config, **self.candidate_args))
+
+    def test_grant_expires_at_the_recorded_deadline(self):
+        for offset, allowed in ((-1, True), (0, False), (1, False)):
+            with self.subTest(offset_microseconds=offset), self.connect() as conn:
+                self.offer(conn)
+                request = self.request(conn)
+                self.assertTrue(decisions.approve(conn, self.config, request, self.output(request), self.now))
+                expires = datetime.fromisoformat(decisions.read(conn, "w")["expires_at"])
+                at = (expires + timedelta(microseconds=offset)).isoformat()
+                self.assertEqual(decisions.permit(conn, self.config, **{**self.candidate_args, "now": at}), allowed)
 
     def test_wait_never_grants_recovery_and_stale_decision_is_rejected(self):
         with self.connect() as conn:

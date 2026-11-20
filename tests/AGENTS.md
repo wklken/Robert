@@ -26,3 +26,9 @@ harnesses and `browser/` for frontend behavior.
 - After moving a test, compare discovered IDs with an explicit relocation
   map. Preserve each distinct assertion and check embedded subprocess
   imports, fixture paths and targeted test commands.
+
+The opt-in Compose suite lives in `simulations/compose/`. Keep its fixture
+protocol tests in `integration/`. The container image installs the Robert wheel
+and copies only the Compose harness. Drive business changes through the installed
+entry points and use read-only SQL for observations, except for explicit lock
+contention tests that acquire and release a writer transaction without changing rows.
