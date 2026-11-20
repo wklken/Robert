@@ -14,7 +14,7 @@ Read the registered context files directly. Inspect only the manifest identity a
 
 Check correctness, security, concurrency and lifecycle, performance, boundaries, maintainability, and useful test coverage. Look for unnecessary abstractions, speculative extension points, duplicated logic, hidden assumptions, and error-handling gaps. Apply adversarial review using counterexamples, boundary inputs, failure paths, and conflicting evidence.
 
-Check declared assumptions and decisions against the original request, source, and compatibility contracts. Look for material undisclosed decisions. A product tradeoff requiring human judgment is not a defect by itself. Record unresolved product decisions in `coverage.notes`, separate from concrete defects. Use `pr-info.json` `user.login` for the PR author identity. Include the decision-owner mention, snapshot, and evidence in `coverage.notes`. For an existing concrete finding, explain in `suggestion` whether it blocks. Do not invent a finding to carry a decision request.
+Check declared assumptions and decisions against the original request, source, and compatibility contracts. Look for material undisclosed decisions. A product tradeoff requiring human judgment is not a defect by itself. Record unresolved product decisions in `coverage.notes`, separate from concrete defects. Use the controller-confirmed decision owner for human decisions. Include its decision_mention, snapshot, and evidence in `coverage.notes`. For an existing concrete finding, explain in `suggestion` whether it blocks. Do not invent a finding to carry a decision request.
 
 ${review_policy}
 
