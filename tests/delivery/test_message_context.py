@@ -116,6 +116,20 @@ class MessageContextTests(WorkItemCommandFixture):
         self.assertEqual(result["sent"], 0)
         runner.assert_not_called()
 
+    def test_recovery_after_delivery_state_write_prevents_outdated_notice(self):
+        self.notice("repair", "2026-11-20T03:12:22Z", kind="pr_remediation_needs_evidence")
+        original = notification_store.set_delivery_state
+
+        def write_then_recover(conn, notification_id, delivery_json):
+            original(conn, notification_id, delivery_json)
+            notification_store.update_for_resolve_action_notification(conn, "{}", notification_id)
+
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+        with patch.object(notification_store, "set_delivery_state", side_effect=write_then_recover):
+            result = notifications.deliver_pending(self.db_path, command=["notify"], runner=runner)
+        self.assertEqual(result["sent"], 0)
+        runner.assert_not_called()
+
     def test_stored_url_userinfo_is_withheld_from_notification_envelope(self):
         cases = json.loads((TEST_ROOT / "fixtures" / "url_userinfo.json").read_text())
         for case in cases:

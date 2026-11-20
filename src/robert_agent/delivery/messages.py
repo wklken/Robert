@@ -39,7 +39,7 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
     )
     if not row:
         return None
-    if not include_closed and notifications.remediation_notice_is_canceled(conn, notification_id):
+    if not include_closed and not notifications.is_open_for_delivery(conn, notification_id):
         return None
     task_id, kind, status, raw = row
     metadata = json.loads(raw or "{}")

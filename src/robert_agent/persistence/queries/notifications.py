@@ -290,13 +290,14 @@ def find_open_remediation_notices(conn, workstream_id, *, notification_type=None
     return statements.read(conn, stmt)
 
 
-def remediation_notice_is_canceled(conn, notification_id):
+def is_open_for_delivery(conn, notification_id):
     notice = tables["notifications"]
     return statements.read(
         conn,
         select(1).where(
             notice.c.notification_id == notification_id,
-            ~_active_remediation_notice(),
+            notice.c.status != "resolved",
+            _active_remediation_notice(),
         ),
     )
 
