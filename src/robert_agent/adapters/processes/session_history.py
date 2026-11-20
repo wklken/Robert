@@ -17,13 +17,26 @@ MAX_LINE_BYTES = 524288
 
 
 @contextmanager
-def open_history(root, path):
+def open_history(root, path, *, trusted_root_alias=False):
     """Walk with directory descriptors so symlink replacement cannot redirect reads."""
     directory_fd = None
     file_fd = None
     try:
         root = Path(root).absolute()
-        relative = Path(path).absolute().relative_to(root)
+        path = Path(path).absolute()
+        if trusted_root_alias:
+            resolved = root.resolve()
+            if path.is_relative_to(root):
+                path = resolved / path.relative_to(root)
+            elif not path.is_relative_to(resolved):
+                # Older rows may use a different alias of the same data root.
+                # Match its ancestor before checking the remaining components.
+                for ancestor in reversed(path.parents):
+                    if ancestor.resolve() == resolved:
+                        path = resolved / path.relative_to(ancestor)
+                        break
+            root = resolved
+        relative = path.relative_to(root)
         if not relative.parts or ".." in relative.parts:
             raise ValueError("invalid history path")
         directory_fd = os.open(root.anchor, os.O_RDONLY | os.O_DIRECTORY)
@@ -76,7 +89,7 @@ def stdout_session_id(root, path):
     if not path:
         return None
     try:
-        with open_history(root, path) as fh:
+        with open_history(root, path, trusted_root_alias=True) as fh:
             for line in fh.read(65536).splitlines():
                 event = json_object(line)
                 if event.get("type") == "thread.started":
@@ -138,7 +151,7 @@ def find_native_history(agent, started_at, task_id, attempt_id, session_id=None,
 
 
 def _find_native_history(agent, started_at, task_id, attempt_id, session_id, prompt_sha256):
-    home = Path.home() / (".tcodex" if agent == "tcodex" else ".codex")
+    home = Path.home().resolve() / (".tcodex" if agent == "tcodex" else ".codex")
     root = home / "sessions"
     for day_offset in (0, 1, -1):
         day = started_at + timedelta(days=day_offset)

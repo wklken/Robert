@@ -111,6 +111,7 @@ class AgentSessionTests(SummaryFixture):
                     "raw_content": ["PRIVATE RAW"],
                 },
                 {"type": "Reasoning", "id": "empty-reason", "summary_text": [], "raw_content": ["PRIVATE RAW"]},
+                {"type": "reasoning", "id": "native-detail", "text": "PRIVATE RAW"},
             ]
         )
         page = self.page()
@@ -119,6 +120,34 @@ class AgentSessionTests(SummaryFixture):
         self.assertEqual(page["items"][2]["output"], "clean")
         self.assertNotIn("PRIVATE RAW", json.dumps(page))
         self.assertNotIn("session_meta", json.dumps(page))
+
+    def test_event_metadata_is_bounded_and_does_not_expose_raw_values(self):
+        self.write_session([{"type": "AgentMessage", "id": "private-event-identifier", "text": "Visible message"}])
+        rows = [json.loads(line) for line in self.session_file.read_text().splitlines()]
+        rows[-1]["timestamp"] = "private-timestamp-field"
+        self.session_file.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+        first = self.page(limit=1)["items"][0]
+        self.assertEqual(first["text"], "Visible message")
+        self.assertIsNone(first["timestamp"])
+        self.assertNotIn("private-event-identifier", json.dumps(first))
+        self.assertLess(len(first["id"]), 64)
+        self.assertEqual(self.page(limit=1)["items"][0]["id"], first["id"])
+
+    def test_trusted_home_and_data_root_aliases_preserve_session_reads(self):
+        from robert_agent.readmodels.agent_session import load_agent_session
+
+        alias = self.root / "trusted-root-alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        self.write_session([{"type": "AgentMessage", "text": "From native history"}])
+        with patch("pathlib.Path.home", return_value=alias):
+            self.assertEqual(self.page()["items"][0]["text"], "From native history")
+        self.session_file.unlink()
+        self.stdout.write_text(
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "From stdout"}}) + "\n"
+        )
+        page = load_agent_session(alias / self.db_path.name, "task-1", "attempt-1")
+        self.assertEqual([item["text"] for item in page["items"]], ["From stdout"])
 
     def test_wrong_attempt_and_foreign_session_are_not_exposed(self):
         self.write_session(

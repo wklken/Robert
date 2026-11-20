@@ -2,6 +2,7 @@
 
 import base64
 from contextlib import closing
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,7 +24,7 @@ def _safe(text):
     return result.get("text", "[Sensitive content omitted]"), result.get("truncated", False)
 
 
-def _record(item, timestamp, offset):
+def _record(item, timestamp, offset, source):
     kind = item.get("type")
     if not isinstance(kind, str):
         return None
@@ -52,7 +53,9 @@ def _record(item, timestamp, offset):
         text = item.get("text") or history.text_content(item.get("content"))
     elif normalized == "reasoning":
         # Only the provider's public summary. Never raw_content or encrypted_content.
-        text = item.get("text") if kind == "reasoning" else history.text_content(item.get("summary_text"))
+        text = history.text_content(item.get("summary_text"))
+        if source == "stdout" and kind == "reasoning":
+            text = item.get("text") or text
         if not text:
             return None
     elif normalized == "command":
@@ -87,10 +90,15 @@ def _record(item, timestamp, offset):
         output = json.dumps(output, ensure_ascii=False)
     text, text_truncated = _safe(text)
     output, output_truncated = _safe(output)
+    item_id = item.get("id")
+    identifier = f"record-{offset}"
+    if isinstance(item_id, str) and item_id:
+        identifier = "event-" + hashlib.sha256(item_id.encode("utf-8", "surrogatepass")).hexdigest()[:32]
+    observed_at = utc_timestamp(timestamp) if isinstance(timestamp, str) and len(timestamp) < 64 else None
     return {
-        "id": str(item.get("id") or f"record-{offset}"),
+        "id": identifier,
         "kind": normalized,
-        "timestamp": timestamp if isinstance(timestamp, str) and len(timestamp) < 64 else None,
+        "timestamp": observed_at.isoformat() if observed_at else None,
         "text": text,
         "output": output,
         "status": item.get("status")
@@ -125,7 +133,7 @@ def _event_record(event, source, modern, offset):
                 return None
         else:
             return None
-    return _record(item, event.get("timestamp"), offset) if isinstance(item, dict) else None
+    return _record(item, event.get("timestamp"), offset, source) if isinstance(item, dict) else None
 
 
 def _decode_cursor(cursor):
@@ -229,7 +237,7 @@ def load_agent_session(db_path, task_id, attempt_id, *, limit=30, cursor=None, r
             raise SessionQueryError("Session history changed; refresh the session.")
         return result
     try:
-        with history.open_history(native["root"] if native else root, path) as fh:
+        with history.open_history(native["root"] if native else root, path, trusted_root_alias=not native) as fh:
             info = os.fstat(fh.fileno())
             if position and (
                 position["dev"] != info.st_dev or position["ino"] != info.st_ino or position["offset"] > info.st_size
