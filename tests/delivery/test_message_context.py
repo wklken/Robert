@@ -16,6 +16,106 @@ from tests.support import TEST_ROOT
 
 
 class MessageContextTests(WorkItemCommandFixture):
+    def test_canceled_remediation_notice_is_not_sent_but_history_is_readable(self):
+        item = self._create(start=True)["item"]
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE workstreams SET lifecycle='canceled'")
+        self.notice(
+            "canceled-repair",
+            "2026-11-20T03:12:22Z",
+            kind="pr_remediation_needs_evidence",
+            metadata={"workstream_id": item["workstream_id"], "reason": "failure_evidence_unavailable"},
+        )
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+        result = notifications.deliver_pending(self.db_path, command=["notify"], runner=runner)
+        self.assertEqual(result["sent"], 0)
+        runner.assert_not_called()
+        with closing(database.connect(self.db_path)) as conn:
+            self.assertIsNone(messages.envelope(conn, "canceled-repair"))
+            history = messages.envelope(conn, "canceled-repair", include_closed=True)
+        self.assertEqual(history["workstream_status"], "canceled")
+
+    def test_cancel_after_queue_selection_prevents_transport(self):
+        item = self._create(start=True)["item"]
+        self.notice(
+            "repair",
+            "2026-11-20T03:12:22Z",
+            kind="pr_remediation_needs_evidence",
+            metadata={"workstream_id": item["workstream_id"]},
+        )
+        from robert_agent.persistence.queries import notifications as queries
+
+        original = queries.find_for_deliver_pending
+
+        def select_then_cancel(*args, **kwargs):
+            rows = original(*args, **kwargs)
+            with closing(sqlite3.connect(self.db_path)) as conn, conn:
+                conn.execute("UPDATE workstreams SET lifecycle='canceled'")
+            return rows
+
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+        with patch.object(queries, "find_for_deliver_pending", side_effect=select_then_cancel):
+            result = notifications.deliver_pending(self.db_path, command=["notify"], runner=runner)
+        self.assertEqual(result["sent"], 0)
+        runner.assert_not_called()
+
+    def test_ci_evidence_notice_explains_legacy_reason(self):
+        self.notice(
+            "evidence",
+            "2026-11-20T03:12:22Z",
+            kind="pr_remediation_needs_evidence",
+            metadata={"reason": "failure_evidence_unavailable"},
+        )
+        with closing(database.connect(self.db_path)) as conn:
+            payload = messages.envelope(conn, "evidence")
+        self.assertEqual(payload["reason_code"], "failure_evidence_unavailable")
+        text = render_message({**payload, "delivery_id": "evidence:receipt"})
+        self.assertIn("CI", text)
+        self.assertIn("失败详情", text)
+        self.assertNotIn("新通知，请查看任务详情", text)
+
+    def test_cancel_after_delivery_state_write_prevents_transport(self):
+        item = self._create(start=True)["item"]
+        self.notice(
+            "repair",
+            "2026-11-20T03:12:22Z",
+            kind="pr_remediation_needs_evidence",
+            metadata={"workstream_id": item["workstream_id"]},
+        )
+        original = notification_store.set_delivery_state
+
+        def write_then_cancel(conn, *args):
+            original(conn, *args)
+            from robert_agent.persistence.stores import workstreams
+
+            workstreams.record_remote_terminal_state_locked(
+                conn, "canceled", "2026-11-20T03:16:48Z", "{}", item["workstream_id"]
+            )
+
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+        with patch.object(notification_store, "set_delivery_state", side_effect=write_then_cancel):
+            result = notifications.deliver_pending(self.db_path, command=["notify"], runner=runner)
+        self.assertEqual(result["sent"], 0)
+        runner.assert_not_called()
+
+    def test_recovery_after_queue_selection_prevents_outdated_notice(self):
+        self.notice("repair", "2026-11-20T03:12:22Z", kind="pr_remediation_needs_evidence")
+        from robert_agent.persistence.queries import notifications as queries
+
+        original = queries.find_for_deliver_pending
+
+        def select_then_recover(*args, **kwargs):
+            rows = original(*args, **kwargs)
+            with closing(sqlite3.connect(self.db_path)) as conn, conn:
+                conn.execute("UPDATE notifications SET status='resolved'")
+            return rows
+
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+        with patch.object(queries, "find_for_deliver_pending", side_effect=select_then_recover):
+            result = notifications.deliver_pending(self.db_path, command=["notify"], runner=runner)
+        self.assertEqual(result["sent"], 0)
+        runner.assert_not_called()
+
     def test_stored_url_userinfo_is_withheld_from_notification_envelope(self):
         cases = json.loads((TEST_ROOT / "fixtures" / "url_userinfo.json").read_text())
         for case in cases:

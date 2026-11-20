@@ -7,6 +7,7 @@ import subprocess
 
 
 EVENT_LABELS = {
+    "pr_remediation_needs_evidence": "CI 自动修复缺少失败详情",
     "execution_delayed": "任务进度延迟",
     "worker_resume_prepared": "已准备恢复执行",
     "worker_stale": "执行进程心跳异常",
@@ -66,6 +67,7 @@ ROUTE_LABELS = {
 }
 
 REASON_LABELS = {
+    "failure_evidence_unavailable": "已发现 CI 失败，但无法取得失败详情。",
     "queue_delayed": "任务排队超过 5 分钟，尚未记录正在执行的 Worker。",
     "publication_delayed": "已审核通过的操作超过 2 分钟仍未发布。",
     "exited": "模型命令以非零退出码结束，未取得有效决策；请查看监督状态中的错误详情。",

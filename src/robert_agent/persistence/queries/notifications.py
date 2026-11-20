@@ -1,6 +1,8 @@
 """Shared queries operations for notifications."""
 
 from robert_agent.persistence.expressions import sql_constant
+from robert_agent.foundation.contracts.delivery import PR_REMEDIATION_NOTIFICATION_TYPES
+from robert_agent.foundation.contracts.work import WorkstreamLifecycle
 from robert_agent.persistence.dialects import sqlite
 
 from sqlalchemy import (
@@ -271,6 +273,52 @@ def find_for_notify_exhausted_episode(conn, notification_type, episode_id):
     return statements.read(conn, query1, {"p0": notification_type, "p1": episode_id})
 
 
+def find_open_remediation_notices(conn, workstream_id, *, notification_type=None):
+    notice = tables["notifications"]
+    stmt = (
+        select(notice.c.notification_id, notice.c.metadata_json)
+        .where(
+            notice.c.channel == "local",
+            notice.c.status != "resolved",
+            notice.c.notification_type.in_(sorted(PR_REMEDIATION_NOTIFICATION_TYPES)),
+            func.json_extract(notice.c.metadata_json, "$.workstream_id") == workstream_id,
+        )
+        .order_by(notice.c.created_at, notice.c.notification_id)
+    )
+    if notification_type is not None:
+        stmt = stmt.where(notice.c.notification_type == notification_type)
+    return statements.read(conn, stmt)
+
+
+def remediation_notice_is_canceled(conn, notification_id):
+    notice = tables["notifications"]
+    return statements.read(
+        conn,
+        select(1).where(
+            notice.c.notification_id == notification_id,
+            ~_active_remediation_notice(),
+        ),
+    )
+
+
+def _active_remediation_notice():
+    notice, stream, task = (tables[name] for name in ("notifications", "workstreams", "tasks"))
+    task_stream = (
+        select(task.c.workstream_id).where(task.c.task_id == notice.c.task_id).correlate(notice).scalar_subquery()
+    )
+    canceled = (
+        select(1)
+        .where(
+            stream.c.workstream_id
+            == func.coalesce(func.json_extract(notice.c.metadata_json, "$.workstream_id"), task_stream),
+            stream.c.lifecycle == WorkstreamLifecycle.CANCELED.value,
+        )
+        .correlate(notice)
+        .exists()
+    )
+    return or_(notice.c.notification_type.not_in(sorted(PR_REMEDIATION_NOTIFICATION_TYPES)), ~canceled)
+
+
 def find_for_deliver_pending(conn, now, limit, repo_ids=None, *, messaging_repo_ids=None, messaging_settings=None):
     sqlite.register_timestamp_after(conn)
     notification = tables["notifications"]
@@ -438,7 +486,7 @@ def _pending_attention(repo_ids):
         .correlate(notice)
         .exists()
     )
-    predicate = or_(attention_id.is_(None), open_attention)
+    predicate = and_(or_(attention_id.is_(None), open_attention), _active_remediation_notice())
     if repo_ids is None:
         return predicate
     task, stream = tables["tasks"], tables["workstreams"]

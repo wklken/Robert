@@ -39,6 +39,8 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
     )
     if not row:
         return None
+    if not include_closed and notifications.remediation_notice_is_canceled(conn, notification_id):
+        return None
     task_id, kind, status, raw = row
     metadata = json.loads(raw or "{}")
     dispatch = dispatch_requests.for_task(conn, task_id) if task_id and config is not None else None
@@ -111,6 +113,11 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
             payload[key] = metadata[key]
     if metadata.get("safe_error"):
         payload["safe_error"] = str(metadata["safe_error"])[:2000]
+    if kind.startswith("pr_remediation_"):
+        payload["reason_code"] = metadata.get("reason_code") or metadata.get("reason") or payload.get("reason_code")
+    if kind == "pr_remediation_needs_evidence":
+        payload["summary"] = "已发现 CI 失败，但无法取得失败详情，自动修复需要人工检查。"
+        payload["required_action"] = "请检查 GitHub Actions 的失败日志；ack 仅记录收悉，不会重试或批准修复。"
     if metadata.get("request_id"):
         payload["actions"] = []
     if metadata.get("attention_event_id"):

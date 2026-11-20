@@ -7,9 +7,11 @@ from robert_agent.foundation.contracts.work import (
     RemediationStatus,
     TERMINAL_REMEDIATION_STATUSES,
     TaskKind,
+    WorkstreamLifecycle,
 )
 
 from robert_agent.persistence import records as db_records
+from robert_agent.persistence import transactions
 from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import notifications as db_read_notifications
 from robert_agent.persistence.queries import pr_remediation_episodes as db_read_pr_remediation_episodes
@@ -210,12 +212,91 @@ def _remediation_notification_type(reason):
     return "pr_remediation_exhausted"
 
 
-def _notify_exhausted_episode(conn, episode, reason, now):
-    notification_type = _remediation_notification_type(reason)
-    existing = db_records.first(
-        db_read_notifications.find_for_notify_exhausted_episode(conn, notification_type, episode["episode_id"])
+def _ci_notice_key(episode, reason):
+    failures = episode["metadata"].get("failures") or episode["metadata"].get("observations", [])
+    signals = sorted(
+        {
+            (
+                str(failure.get("source_kind") or ""),
+                str(failure.get("external_id") or ""),
+                str(failure.get("attempt_no") or 1),
+                str(failure.get("check_name") or ""),
+                str(failure.get("conclusion") or ""),
+            )
+            for failure in failures
+            if isinstance(failure, dict)
+        }
     )
-    if existing:
+    evidence = signals or episode.get("failure_signature") or episode["metadata"].get("manual_conclusions")
+    evidence = evidence or episode.get("last_task_id") or episode["episode_id"]
+    value = [episode["workstream_id"], episode["observed_head_sha"], reason, evidence, episode.get("failure_signature")]
+    if reason not in {
+        "failure_evidence_unavailable",
+        "manual_conclusion",
+        "unsupported_conclusion",
+        "manual_ci_signal",
+    }:
+        value.extend([episode.get("last_task_id"), episode["attempt_count"], episode["metadata"].get("budget")])
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def _notify_exhausted_episode(conn, episode, reason, now):
+    lifecycle = db_records.first(db_read_workstreams.find_lifecycle_by_workstream_id(conn, episode["workstream_id"]))
+    if lifecycle and lifecycle[0] == WorkstreamLifecycle.CANCELED.value:
+        return
+    notification_type = _remediation_notification_type(reason)
+    key = _ci_notice_key(episode, reason) if episode["episode_kind"] == "ci" else None
+    metadata = {
+        "episode_id": episode["episode_id"],
+        "workstream_id": episode["workstream_id"],
+        "episode_kind": episode["episode_kind"],
+        "observed_head_sha": episode["observed_head_sha"],
+        "observed_base_sha": episode["observed_base_sha"],
+        "pr_number": episode["metadata"].get("pr_number"),
+        "attempt_count": episode["attempt_count"],
+        "budget": episode["metadata"].get("budget"),
+        "details_urls": sorted(
+            {
+                failure.get("details_url")
+                for failure in episode["metadata"].get("failures", [])
+                if isinstance(failure, dict) and failure.get("details_url")
+            }
+        ),
+        "reason": reason,
+        "last_seen_at": now,
+    }
+    if key:
+        metadata["notification_key"] = key
+        grouped_id = None
+        for row in db_read_notifications.find_open_remediation_notices(
+            conn,
+            episode["workstream_id"],
+            notification_type=notification_type,
+        ):
+            previous = _json_object(row[1])
+            previous_key = previous.get("notification_key")
+            if not previous_key:
+                old_episode = _load_episode(conn, previous.get("episode_id"))
+                if old_episode and old_episode["episode_kind"] == "ci":
+                    previous_key = _ci_notice_key(old_episode, previous.get("reason_code") or previous.get("reason"))
+            if previous_key == key:
+                if grouped_id is None:
+                    grouped_id = row[0]
+                    db_write_notifications.refresh_remediation_notice(
+                        conn, grouped_id, json.dumps(metadata, sort_keys=True)
+                    )
+                else:
+                    previous.update(resolved_at=now, superseded_by_notice_id=grouped_id)
+                    db_write_notifications.update_for_resolve_action_notification(conn, json.dumps(previous), row[0])
+        if grouped_id is not None:
+            return
+    elif db_records.first(
+        db_read_notifications.find_for_notify_exhausted_episode(
+            conn,
+            notification_type,
+            episode["episode_id"],
+        )
+    ):
         return
     db_write_notifications.insert_notification(
         conn,
@@ -223,29 +304,23 @@ def _notify_exhausted_episode(conn, episode, reason, now):
         episode.get("last_task_id"),
         notification_type,
         now,
-        json.dumps(
-            {
-                "episode_id": episode["episode_id"],
-                "workstream_id": episode["workstream_id"],
-                "episode_kind": episode["episode_kind"],
-                "observed_head_sha": episode["observed_head_sha"],
-                "observed_base_sha": episode["observed_base_sha"],
-                "pr_number": episode["metadata"].get("pr_number"),
-                "attempt_count": episode["attempt_count"],
-                "budget": episode["metadata"].get("budget"),
-                "details_urls": sorted(
-                    {
-                        failure.get("details_url")
-                        for failure in episode["metadata"].get("failures", [])
-                        if isinstance(failure, dict) and failure.get("details_url")
-                    }
-                ),
-                "reason": reason,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        ),
+        json.dumps(metadata, ensure_ascii=False, sort_keys=True),
     )
+
+
+def _resolve_ci_notices(conn, workstream_id, snapshot, ci_summary, now, *, canceled=False):
+    terminal = canceled or snapshot.get("state") == "closed" or snapshot.get("merged")
+    for row in db_read_notifications.find_open_remediation_notices(conn, workstream_id):
+        metadata = _json_object(row[1])
+        if metadata.get("episode_kind") != "ci":
+            continue
+        recovered = (ci_summary or {}).get("status") == "green"
+        evidence_available = (ci_summary or {}).get("status") == "failing" and metadata.get(
+            "reason"
+        ) == "failure_evidence_unavailable"
+        if terminal or recovered or evidence_available or metadata.get("observed_head_sha") != snapshot.get("head_sha"):
+            metadata["resolved_at"] = now
+            db_write_notifications.update_for_resolve_action_notification(conn, json.dumps(metadata), row[0])
 
 
 def _transition(conn, episode, new_status, reason, now):
@@ -374,6 +449,13 @@ def upsert_health_episodes(
     ci_summary,
     now,
 ):
+    if not conn.in_transaction:
+        transactions.begin_immediate(conn)
+    lifecycle = db_records.first(db_read_workstreams.find_lifecycle_by_workstream_id(conn, workstream["workstream_id"]))
+    canceled = bool(lifecycle and lifecycle[0] == WorkstreamLifecycle.CANCELED.value)
+    _resolve_ci_notices(conn, workstream["workstream_id"], snapshot, ci_summary, now, canceled=canceled)
+    if canceled:
+        return []
     transitions = []
     episodes = _episodes_for_workstream(conn, workstream["workstream_id"])
     if snapshot.get("state") == "closed" or snapshot.get("merged"):
@@ -579,6 +661,7 @@ def upsert_health_episodes(
                         "manual_conclusions",
                         [],
                     ),
+                    "observations": ci_summary.get("observations", []),
                     "failures": ci_summary.get("failures", []),
                 },
                 now=now,
@@ -598,6 +681,21 @@ def upsert_health_episodes(
                 )
                 if transition:
                     transitions.append(transition)
+            elif episode["status"] == RemediationStatus.EXHAUSTED:
+                _notify_exhausted_episode(
+                    conn,
+                    {
+                        **episode,
+                        "metadata": {
+                            **episode["metadata"],
+                            "failures": ci_summary.get("failures", []),
+                            "manual_conclusions": ci_summary.get("manual_conclusions", []),
+                            "observations": ci_summary.get("observations", []),
+                        },
+                    },
+                    ci_summary.get("reason") or "manual_ci_signal",
+                    now,
+                )
         elif ci_summary.get("status") == "green" and current_ci:
             if current_ci["status"] in ACTIVE_REMEDIATION_STATUSES:
                 transition = _transition(
