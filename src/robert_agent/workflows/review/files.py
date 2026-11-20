@@ -26,14 +26,19 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def safe_path(path, root):
+def safe_path(path, root, *, subdirectory=None):
     """Reject links/escapes inside an already trusted artifact directory."""
-    root = Path(root).resolve()
+    configured_root = Path(os.path.abspath(root))
+    root = configured_root.resolve()
     path = Path(os.path.abspath(path))
     try:
-        relative = path.relative_to(root)
+        relative = path.relative_to(configured_root if path.is_relative_to(configured_root) else root)
     except ValueError as exc:
         raise ValueError("review artifact is outside its registered directory") from exc
+    if subdirectory is not None and not relative.is_relative_to(subdirectory):
+        raise ValueError("review artifact is outside its registered directory")
+    # Resolve only the trusted root; links below it must remain visible to the checks.
+    path = root / relative
     current = root
     for part in relative.parts:
         current = current / part
@@ -118,7 +123,7 @@ def _finding(finding, dismissed=False):
 
 
 def read_result(path, manifest):
-    path = safe_path(path, Path(manifest["artifact_root"]) / "runs")
+    path = safe_path(path, manifest["artifact_root"], subdirectory="runs")
     if path.name != "result.json":
         raise ValueError("only the committed result.json is accepted")
     document = _read_json(path)
@@ -219,7 +224,7 @@ def _validated_records(manifest, records):
         for key in ("model", "run_id"):
             _text(record.get(key), key)
         for kind in ("result", "report"):
-            path = safe_path(record.get(f"{kind}_path", ""), Path(manifest["artifact_root"]) / "runs")
+            path = safe_path(record.get(f"{kind}_path", ""), manifest["artifact_root"], subdirectory="runs")
             if path.name != f"{kind}.json" and not (kind == "report" and path.name == "report.md"):
                 raise ValueError("unexpected selected artifact filename")
             try:
@@ -255,7 +260,7 @@ def write_synthesis_inputs(manifest, records):
 
 def read_evaluation(path, manifest, records):
     documents = _validated_records(manifest, records)
-    path = safe_path(path, Path(manifest["artifact_root"]) / "synthesis")
+    path = safe_path(path, manifest["artifact_root"], subdirectory="synthesis")
     if path.name != "evaluation.json":
         raise ValueError("only the committed evaluation.json is accepted")
     document = _read_json(path)

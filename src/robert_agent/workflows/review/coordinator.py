@@ -67,8 +67,8 @@ class ReviewStages(StageCoordinator):
             prompt = self.prompt("prepare-prompt.md", render_prompt(review_prepare_input(self.manifest)).text)
 
             def validate(output, model):
-                summary = review_files.safe_path(output / "context-summary.md", output)
-                index = review_files.safe_path(output / "source-index.json", output)
+                summary = review_files.safe_path(output / "context-summary.md", self.manifest["artifact_root"])
+                index = review_files.safe_path(output / "source-index.json", self.manifest["artifact_root"])
                 if not summary.read_text(encoding="utf-8").strip():
                     raise ValueError("primary context summary is empty")
                 source_index = json.loads(index.read_text(encoding="utf-8"))
@@ -110,7 +110,7 @@ class ReviewStages(StageCoordinator):
             def validate(output, model, worker=worker):
                 result_path = output / "result.json"
                 result = review_files.read_result(result_path, self.manifest)
-                report_path = review_files.safe_path(output / "report.md", output)
+                report_path = review_files.safe_path(output / "report.md", self.manifest["artifact_root"])
                 report = review_files.render_individual(result, worker["name"], model)
                 if report_path.exists() and report_path.read_text(encoding="utf-8") != report:
                     raise ValueError("derived review report changed")
