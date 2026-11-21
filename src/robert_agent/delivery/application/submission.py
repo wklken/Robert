@@ -463,7 +463,9 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
                 generation=metadata["submission_fingerprint"],
                 now=result_created_at,
                 config=recovery_config,
-                native_retry=True,
+                # This is the first DB ingestion of the already durable submission.
+                # Active recovery ownership still fences the original operation.
+                native_retry=False,
             )
             if gate["status"] == "blocked":
                 return {"ok": True, "status": "replay_blocked"}
