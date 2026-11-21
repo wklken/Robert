@@ -3,6 +3,8 @@
 from robert_agent.persistence import database as db_database
 from robert_agent.adapters.github import recording as github_recording
 from robert_agent.work.application import synchronization as synchronization
+from robert_agent.work.application import dependency_merge as dependency_replies
+from robert_agent.work import dependency_merge
 from robert_agent.work import scan_batches as scan_batches
 from contextlib import closing
 from robert_agent.execution.application import dispatch as dispatcher
@@ -267,12 +269,17 @@ def run_once(
             )
             conn.commit()
             if consume_observations and observation is not None:
-                scan_batches.finish_batch(
-                    db_path,
-                    observation["batch_id"],
-                    success=summary["status"] == "completed",
-                    failure_reason=summary["failure_status"] or "local_processing_failed",
-                )
+                if not dry_run and summary["status"] == "completed":
+                    # The repository writer and lease are released. The reply owns
+                    # its transaction and rechecks the registered merge authority.
+                    dependency_replies.resume_pending(db_path, repo_id)
+                if not dry_run or not dependency_merge.has_ready_reply(conn, repo_id):
+                    scan_batches.finish_batch(
+                        db_path,
+                        observation["batch_id"],
+                        success=summary["status"] == "completed",
+                        failure_reason=summary["failure_status"] or "local_processing_failed",
+                    )
             repo_summaries.append(summary)
             if consume_observations and dispatch_queue and dispatch_error is None:
                 # The repo transaction and lease are finished. Do not make its
