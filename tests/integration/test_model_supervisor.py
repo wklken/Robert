@@ -157,7 +157,7 @@ class ModelPrSupervisionTests(PrRemediationIntegrationFixture):
             self.assertEqual(old_episode[1], "exhausted")
             runner.responses[command] = "FAIL tests/test_api.py expected 1 got 2"
             after = remediation_requests.collect_pr_remediation_decisions(
-                *args, "2026-07-26T00:03:00+00:00", config=config
+                *args, "2026-07-26T03:03:00+00:00", config=config
             )
             self.assertEqual([event["task_kind"] for event in after], ["ci_remediation"])
             evidence = after[0]["metadata"]["remediation"]

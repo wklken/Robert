@@ -99,6 +99,11 @@ remediation policy dispatch the first eligible attempt for a snapshot.
 Retries after failed repair attempts still require a matching model
 choice. Unsupported CI conclusions, missing evidence and exhausted
 budgets remain visible in the durable episode and operator attention.
+CI episodes preserve their original observation time while their repair wall
+budget starts when usable failure evidence first becomes available. Repeated
+observations, temporary evidence loss and reopening preserve that start time
+and the existing attempt, token and cost counters. Legacy episodes that already
+had usable evidence or repair attempts retain their original wall budget.
 Normal result ingestion, initial execution, audit/publication validation,
 cancellation and required cleanup retain their existing lifecycle owners.
 
