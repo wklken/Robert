@@ -1241,7 +1241,7 @@ def run_daemon(
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--workflow")
+    parser.add_argument("--workflow", help="Compatibility path check. The Python runtime defines the workflow.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--once", action="store_true")
     parser.add_argument(

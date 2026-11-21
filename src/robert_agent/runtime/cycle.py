@@ -446,7 +446,7 @@ def run_once(
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--workflow")
+    parser.add_argument("--workflow", help="Compatibility path check. The Python runtime defines the workflow.")
     parser.add_argument("--fixture")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-external", action="store_true")
