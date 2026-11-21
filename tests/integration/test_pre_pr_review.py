@@ -461,17 +461,18 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
                 conn, run["run_id"], status="running", slot_reserved=1, dispatch_json=json.dumps({"pid": 1073741824})
             )
             old = dict(conn.execute("SELECT * FROM pre_pr_review_runs").fetchone())
+            versions = conn.execute("SELECT * FROM schema_migrations ORDER BY version").fetchall()
             ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name='pre_pr_review_runs'").fetchone()[0]
             conn.execute("ALTER TABLE pre_pr_review_runs RENAME TO legacy_runs")
             conn.execute(ddl.replace(",'verify_final'", ""))
             columns = ",".join(old)
             conn.execute(f"INSERT INTO pre_pr_review_runs ({columns}) SELECT {columns} FROM legacy_runs")
             conn.execute("DROP TABLE legacy_runs")
-            conn.execute("DELETE FROM schema_migrations WHERE name=?", (database.FINAL_VERIFIER_MIGRATION_NAME,))
         database.init_database(self.db)
         database.init_database(self.db)
         with fixture_database.connect(self.db) as conn:
             self.assertEqual(dict(conn.execute("SELECT * FROM pre_pr_review_runs").fetchone()), old)
+            self.assertEqual(conn.execute("SELECT * FROM schema_migrations ORDER BY version").fetchall(), versions)
             ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name='pre_pr_review_runs'").fetchone()[0]
             self.assertIn("verify_final", ddl)
             self.assertIn("UNIQUE (round_id, stage, worker_id, attempt_no)", ddl)
@@ -485,8 +486,6 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             store.new_run(conn, driver.round_id, "verify_final", "claude", driver.attempt_id, self.root, "new-prompt")
 
     def emulate_pre_upgrade_ready_result(self, driver):
-        from robert_agent.persistence.schema import database
-
         with fixture_database.connect(self.db) as conn:
             entry = store.session(conn, task_id=driver.task_id)
             proof = {key: value for key, value in entry["proof"].items() if key != "final_verification"}
@@ -497,7 +496,6 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             conn.execute(ddl.replace(",'verify_final'", ""))
             conn.execute("INSERT INTO pre_pr_review_runs SELECT * FROM legacy_runs")
             conn.execute("DROP TABLE legacy_runs")
-            conn.execute("DELETE FROM schema_migrations WHERE name=?", (database.FINAL_VERIFIER_MIGRATION_NAME,))
         return proof
 
     def test_upgrade_preserves_old_accepted_frozen_publication(self):
