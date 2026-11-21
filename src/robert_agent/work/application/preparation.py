@@ -358,11 +358,20 @@ def bind_pre_pr_review(
             "branch": (worktree_result or {}).get("branch_name"),
         }
         previous = previous_review["request"] if previous_review else {}
+        reply_continuation = bool(
+            previous_review
+            and previous_review["status"] == "waiting_for_user"
+            and previous.get("operator_reply", {}).get("decision") == previous_review["proof"].get("decision")
+            and previous_review["proof"].get("decision")
+        )
+        if reply_continuation and any(request[key] != previous.get(key) for key in ("repo", "branch")):
+            raise ValueError("operator reply cannot change the original review scope")
         if (
             previous_review
-            and not previous_review["final_result_id"]
+            and (not previous_review["final_result_id"] or reply_continuation)
             and previous_review["manifest"].get("candidate")
-            and all(request[key] == previous.get(key) for key in ("input_sha256", "repo", "branch"))
+            and all(request[key] == previous.get(key) for key in ("repo", "branch"))
+            and (request["input_sha256"] == previous.get("input_sha256") or reply_continuation)
         ):
             pre_pr_review.rebind_for_retry(conn, previous_review, task_id, attempt_id)
         else:
@@ -709,7 +718,9 @@ def create_task_attempt_and_prompt(
         attempt_id,
         prompt_path,
         worktree_result,
-        previous_review=pre_pr_review.session(conn, task_id=parent_task_id) if retrigger_wakeup_id else None,
+        previous_review=pre_pr_review.session(conn, task_id=parent_task_id)
+        if retrigger_wakeup_id or task_metadata.get("pre_pr_review_retry")
+        else None,
     )
     for artifact_type, path in [
         ("prompt", prompt_path),

@@ -255,7 +255,7 @@ def vote_synthesize_input(manifest, inputs_path, inputs_hash, records):
     return _vote_input("vote.synthesize", manifest, output, frozen=True, extra=(selected,))
 
 
-def address_findings_input(manifest, candidate_path, report_path, report_sha, decision_ids):
+def address_findings_input(manifest, candidate_path, report_path, report_sha, decision_ids, *, operator_reply=None):
     identity = {"candidate_sha": manifest["head_sha"], "report_sha256": report_sha}
     output = _files_output(
         "review_dispositions",
@@ -296,5 +296,70 @@ def address_findings_input(manifest, candidate_path, report_path, report_sha, de
                 manifest["head_sha"],
             ),
             _file_item("report", "Frozen report with the findings to address", "Robert", report_path, report_sha),
+            *(
+                (
+                    ContextItem(
+                        "operator_reply",
+                        "Authenticated clarification within the original frozen task scope; no additional authority",
+                        "versioned operator reply",
+                        requirement="required",
+                        content=operator_reply,
+                    ),
+                )
+                if operator_reply
+                else ()
+            ),
+        ),
+    )
+
+
+def final_review_input(inputs, input_path):
+    identity = {
+        key: inputs[key]
+        for key in (
+            "round_id",
+            "snapshot_id",
+            "candidate_sha",
+            "final_sha",
+            "report_sha256",
+            "dispositions_sha256",
+            "additional_diff_sha256",
+        )
+    }
+    return PromptInput(
+        "review.verify_final",
+        identity,
+        _files_output(
+            "final_review",
+            _REVIEW_DIR,
+            ("final-verification.json",),
+            "Pre-PR release gate",
+            {
+                "schema_version": 1,
+                **identity,
+                "recommendation": "approved",
+                "checked_findings": [
+                    {"id": item, "status": "resolved", "reason": "concrete final source evidence"}
+                    for item in inputs["finding_ids"]
+                ],
+                "blocking_findings": [],
+            },
+        ),
+        authority={"source_access": "read-only", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
+        context_items=(
+            _file_item(
+                "final-review-inputs",
+                "Pinned findings, dispositions, additional diff and their digests",
+                "Robert",
+                input_path,
+                inputs["final_sha"],
+            ),
+            _file_item(
+                "final-worktree",
+                "Actual final candidate source, callers and tests",
+                "Robert",
+                inputs["worktree_path"],
+                inputs["final_sha"],
+            ),
         ),
     )

@@ -79,6 +79,9 @@ def run(profile, payload, stop, on_started):
     """Return bounded output after the process group exits; persist identity at spawn."""
     proc, stopped, output, status = None, True, b"", ModelCommandStatus.STOPPED.value
     diagnostics = {"stderr": bytearray(), "stderr_truncated": False}
+    process_identity = None
+    phase = "prepare"
+    failure = {}
     try:
         with tempfile.TemporaryDirectory(prefix="robert-model-", ignore_cleanup_errors=True) as root:
             cwd = Path(root).resolve()
@@ -91,6 +94,7 @@ def run(profile, payload, stop, on_started):
                 return {"status": status, "output": output, "stopped": stopped}
             try:
                 with source.open("rb") as input_stream:
+                    phase = "spawn"
                     proc = subprocess.Popen(
                         launch.command,
                         cwd=launch.cwd,
@@ -100,10 +104,22 @@ def run(profile, payload, stop, on_started):
                         stderr=subprocess.PIPE,
                         start_new_session=True,
                     )
-                identity = stable_identity(proc, stop)
-                if identity:
-                    if identity["process_group_id"] != proc.pid or not on_started(identity):
+                phase = "identity_capture"
+                process_identity = stable_identity(proc, stop)
+                if process_identity:
+                    if process_identity["process_group_id"] != proc.pid:
                         raise ValueError("model process identity or claim changed")
+                    phase = "identity_checkpoint"
+                    try:
+                        accepted = on_started(process_identity)
+                    except Exception as exc:
+                        # The callback owns its persistence/error types. Retain
+                        # cleanup proof without exposing its text or SQL values.
+                        failure = {"failure_phase": phase, "error_class": type(exc).__name__}
+                        raise ValueError("model identity checkpoint failed") from None
+                    if not accepted:
+                        raise ValueError("model process identity or claim changed")
+                phase = "read_output"
                 status, output = read_output(
                     proc, time.monotonic() + launch.timeout_seconds, stop, diagnostics=diagnostics
                 )
@@ -117,11 +133,14 @@ def run(profile, payload, stop, on_started):
                         stopped = False
                     if not stopped:
                         stopped = worker_identity.cleanup_new_process(proc, wait_timeout=0.5)
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        failure = failure or {"failure_phase": phase, "error_class": type(exc).__name__}
         status = ModelCommandStatus.LAUNCH_FAILED.value if proc is None else ModelCommandStatus.PROCESS_ATTENTION.value
     if not stopped:
         status, output = ModelCommandStatus.PROCESS_ATTENTION.value, b""
     safe_error = ""
+    if failure:
+        safe_error = f"Model command failed during {failure['failure_phase']} ({failure['error_class']})."
     if diagnostics["stderr_truncated"]:
         safe_error = "Model stderr exceeded the diagnostic limit; details withheld."
     elif diagnostics["stderr"]:
@@ -139,4 +158,6 @@ def run(profile, payload, stop, on_started):
         "exit_code": proc.returncode if proc is not None else None,
         "safe_error": safe_error,
         "stderr_truncated": diagnostics["stderr_truncated"],
+        **failure,
+        **({"process_identity": process_identity} if process_identity else {}),
     }
