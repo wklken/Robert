@@ -29,6 +29,10 @@ use the existing admission checks; replay alone does not retry a failed task.
 Run summaries and business events remain separate from detailed controller steps.
 The pipeline step references its completed run's repository summaries
 instead of storing the same list twice. Existing full outputs remain readable.
+For a local drain with explicit no-action evidence, the start row becomes its
+completion row. This retains the run references, start time, and elapsed
+wall-clock time in one record. Running drains, work with recorded effects,
+failures and uncertain outcomes keep their normal diagnostic trail.
 
 Maintenance keeps full detail for the newest 200 runs, running/failed runs, runs
 referenced by wakeups or active leases, and each repository's latest successful
