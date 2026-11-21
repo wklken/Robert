@@ -24,6 +24,7 @@ from robert_agent.persistence.stores import audit_events as db_write_audit_event
 from robert_agent.persistence.stores import github_events as db_write_github_events
 from robert_agent.persistence.stores import github_sources as db_write_github_sources
 from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import wakeups as db_write_wakeups
 from robert_agent.persistence.stores import work_items as db_write_work_items
 from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from robert_agent.delivery.application import outcomes as publication_outcomes
@@ -240,6 +241,7 @@ def _record_remote_terminal_state_locked(
         json.dumps({"remote_reconciliation": remote_payload}, ensure_ascii=False, sort_keys=True),
         task_id,
     )
+    db_write_wakeups.cancel_terminal_task_requests(conn, task_id, run_now)
     for attempt_id, metadata in attempt_metadata.items():
         metadata["remote_reconciliation"] = remote_payload
         db_write_attempts.record_remote_terminal_state_locked(
