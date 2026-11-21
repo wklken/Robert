@@ -131,7 +131,7 @@ python3 -m robert_agent.runtime.scan --config ~/.config/robert/config.yml --retr
 
 Retry is limited to repositories in that configuration. It resets the retry budget, preserves the original events, and wakes the daemon. A mismatched context still waits for the next permitted remote scan. A batch returning HTTP 410 is retained for inspection rather than silently discarded or retried forever.
 
-Control children record a Linux boot ID/PID namespace or macOS boot-session UUID. A proven change of boot session on the execution host retires the old record without signaling a potentially reused PID. A namespace change alone, missing boot evidence, or ambiguous same-boot PID reuse does **not** prove that old descendants stopped; daemon startup remains blocked in those cases.
+Control children record a Linux boot ID/PID namespace or macOS boot-session UUID. A proven change of boot session on the execution host retires the old record without signaling a potentially reused PID. A namespace change alone, missing boot evidence, or ambiguous same-boot PID reuse cannot establish that old descendants stopped. With a known scan or publish lane, that lane stays paused while the others start. An unclassifiable child still blocks daemon startup.
 
 For that fallback, first stop the service and verify that its old scanner/publisher execution context and descendants have stopped. Then inspect the saved records and explicitly acknowledge only the relevant child:
 
