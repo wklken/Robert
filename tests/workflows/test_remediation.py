@@ -712,6 +712,79 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(usage_limited["total_tokens"], 110)
         self.assertEqual(usage_limited["total_cost_usd"], 2.5)
 
+    def test_ci_budget_starts_with_available_evidence_and_survives_evidence_changes(self):
+        from robert_agent.workflows import pr_remediation as remediation
+
+        self.repo["pr_automation"]["dispatch_mode"] = "direct"
+        snapshot = {**self.snapshot, "mergeable": True}
+        available = {"status": "failing", "failure_signature": "failure-1", "failures": []}
+        with closing(self.connect()) as conn, conn:
+
+            def observe(summary, now):
+                remediation.upsert_health_episodes(
+                    conn,
+                    repo=self.repo,
+                    workstream=self.workstream,
+                    snapshot=snapshot,
+                    ci_summary=summary,
+                    now=now,
+                )
+
+            observe(self.manual_ci(), "2026-07-26T00:00:00Z")
+            observe(available, "2026-07-26T03:00:00Z")
+            first = remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T03:00:00Z")
+            self.assertEqual(len(first), 1)
+            self.assertEqual(first[0]["first_seen_at"], "2026-07-26T00:00:00Z")
+            self.assertEqual(first[0]["budget"]["elapsed_minutes"], 0)
+            observe(available, "2026-07-26T03:10:00Z")
+            observe(self.manual_ci(), "2026-07-26T03:30:00Z")
+            observe(available, "2026-07-26T04:00:00Z")
+            repeated = remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T04:00:00Z")
+            self.assertEqual(repeated[0]["episode_id"], first[0]["episode_id"])
+            self.assertEqual(repeated[0]["budget"]["elapsed_minutes"], 60)
+            self.assertEqual(repeated[0]["attempt_count"], 0)
+            self.assertEqual(remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T05:01:00Z"), [])
+            final = remediation.load_episode(conn, first[0]["episode_id"])
+            self.assertEqual(final["metadata"]["last_transition_reason"], "max_wall_minutes")
+            snapshot = {**snapshot, "head_sha": "head-2"}
+            observe(available, "2026-07-26T06:00:00Z")
+            fresh = remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T06:00:00Z")
+            self.assertEqual(len(fresh), 1)
+            self.assertNotEqual(fresh[0]["episode_id"], first[0]["episode_id"])
+            self.assertEqual(fresh[0]["budget"]["elapsed_minutes"], 0)
+
+    def test_legacy_ci_budget_preserves_existing_eligibility_and_attempts(self):
+        from robert_agent.workflows import pr_remediation as remediation
+
+        with closing(self.connect()) as conn, conn:
+            self.observe_ci(conn, "base-1", {"status": "failing", "failure_signature": "failure-1"})
+            episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
+            for attempts, old_status in ((0, "failing"), (1, "manual")):
+                with self.subTest(attempts=attempts, old_status=old_status):
+                    conn.execute(
+                        "UPDATE pr_remediation_episodes SET attempt_count=?, metadata_json=?",
+                        (attempts, json.dumps({"ci_status": old_status})),
+                    )
+                    remediation.upsert_health_episodes(
+                        conn,
+                        repo=self.repo,
+                        workstream=self.workstream,
+                        snapshot={**self.snapshot, "mergeable": True},
+                        ci_summary={"status": "failing", "failure_signature": "failure-1"},
+                        now="2026-11-20T06:16:48Z",
+                    )
+                    episode = remediation.load_episode(conn, episode_id)
+                    self.assertEqual(episode["attempt_count"], attempts)
+                    self.assertEqual(
+                        remediation.budget_status(
+                            conn,
+                            episode=episode,
+                            policy=self.repo["pr_automation"]["ci"],
+                            now="2026-11-20T06:16:48Z",
+                        )["reason"],
+                        "max_wall_minutes",
+                    )
+
     def test_budget_status_stops_when_configured_usage_cannot_be_measured(self):
         from robert_agent.workflows import pr_remediation as remediation
 
