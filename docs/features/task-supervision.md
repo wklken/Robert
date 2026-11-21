@@ -99,6 +99,11 @@ remediation policy dispatch the first eligible attempt for a snapshot.
 Retries after failed repair attempts still require a matching model
 choice. Unsupported CI conclusions, missing evidence and exhausted
 budgets remain visible in the durable episode and operator attention.
+CI episodes preserve their original observation time while their repair wall
+budget starts when usable failure evidence first becomes available. Repeated
+observations, temporary evidence loss and reopening preserve that start time
+and the existing attempt, token and cost counters. Legacy episodes that already
+had usable evidence or repair attempts retain their original wall budget.
 Normal result ingestion, initial execution, audit/publication validation,
 cancellation and required cleanup retain their existing lifecycle owners.
 
@@ -154,14 +159,21 @@ alerts become resolved history, preserving their delivery and acknowledgement
 records. This establishes that the service can answer again; it does not prove
 that every previously failed workstream has retried or completed. An invalid
 response, process-start failure or unresolved process does not clear the alert.
-An unresolved process identity retains the claim and is
-visible as `decision_runner.claim` in status; service restart does not authorize
-duplicate launches. When the recorded owner is proven dead and no model identity
-was checkpointed, the claim moves to `decision_runner.attention_claims`, keyed by
-its root workstream. That workstream remains fenced until operator recovery;
-unrelated workstreams can continue decisions under the same shared cooldown and
-hourly call budget. A live or unknown owner, or a recorded model identity, keeps
-the existing installation-wide process reconciliation fence.
+Model startup failures retain their safe failure phase and error class. When
+identity checkpointing fails, the launcher still proves process-group cleanup
+before releasing its claim. If cleanup remains unproven, the recorded process
+identity stays available for reconciliation.
+
+An unresolved process identity retains the claim and is visible as
+`decision_runner.claim` in status. A claim without a model identity moves to
+`decision_runner.attention_claims`, keyed by its root workstream, once its owner
+is proven dead or its launcher thread has durably recorded that it finished.
+That proof establishes that the launcher cannot later spawn or checkpoint a
+child. The affected workstream remains fenced until operator recovery, while
+unrelated workstreams can continue decisions under the shared cooldown and
+hourly call budget. Older claims with a live or unknown owner and no launcher
+completion proof retain the installation-wide fence. Recorded model identities
+continue through process reconciliation.
 
 Stop the supervisor service and its model processes, then
 release that exact stranded claim through the local operator command:

@@ -1,6 +1,12 @@
 """Collect bounded supervision evidence without advancing Robert's workflows."""
 
-from robert_agent.foundation.contracts.delivery import AuditStatus, OutputType, PublicationStatus, PublishStatus
+from robert_agent.foundation.contracts.delivery import (
+    AuditStatus,
+    GitHubActionType,
+    OutputType,
+    PublicationStatus,
+    PublishStatus,
+)
 from robert_agent.foundation.contracts.execution import AttemptStatus
 from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
 
@@ -41,6 +47,8 @@ import subprocess
 import time
 
 from robert_agent.delivery.application import audit as audit_result
+from robert_agent.delivery.application import tapd_comments
+from robert_agent.foundation import tapd_identity
 from robert_agent.execution import capacity as execution_capacity
 from robert_agent.work import operator_queries as github_operator
 from robert_agent.execution import spool as result_spool
@@ -186,6 +194,57 @@ def _publication_facts(conn, facts, now):
             facts["publication_receipt"] = facts["delivery_positive"]
 
 
+def _delivery_plan_matches(facts, plan, actions, actual, publications):
+    remaining = Counter(map(supervision_rules._digest, plan))
+    if remaining == Counter(map(supervision_rules._digest, actual)):
+        return True
+    scope = _object(facts["audited_scope"])
+    confirmed_pr_urls = set()
+    for action, publish in zip(actions, publications):
+        receipt = publish.get("receipt")
+        url, number = action["target_url"], action["external_id"]
+        if (
+            action["action_type"] == GitHubActionType.OPEN_PR
+            and action["audit_status"] == AuditStatus.ACCEPTED
+            and action["publish_status"] == PublishStatus.PUBLISHED
+            and isinstance(receipt, dict)
+            and receipt.get("schema_version") == 1
+            and tapd_identity.numeric_id_is_valid(str(number))
+            and isinstance(url, str)
+            and url.casefold() == f"https://github.com/{scope.get('repo')}/pull/{number}".casefold()
+            and receipts.matches(facts, action, scope, receipt)
+        ):
+            confirmed_pr_urls.add(url)
+    for action, payload in zip(actions, actual):
+        digest = supervision_rules._digest(payload)
+        if remaining[digest]:
+            remaining[digest] -= 1
+            continue
+        body = payload.get("body")
+        if (
+            action["action_type"] != GitHubActionType.COMMENT
+            or not tapd_identity.parse_ticket_url(action["target_url"])
+            or payload.get("target_url") != action["target_url"]
+            or not isinstance(body, str)
+            or audit_result.action_scope_violation([payload], scope)
+        ):
+            return False
+        for url in confirmed_pr_urls:
+            suffix = tapd_comments.pull_request_suffix(url)
+            if not body.endswith(suffix):
+                continue
+            original_body = body[: -len(suffix)]
+            if url in original_body:
+                continue  # The publisher never appends an already-present URL.
+            digest = supervision_rules._digest({**payload, "body": original_body})
+            if remaining[digest]:
+                remaining[digest] -= 1
+                break
+        else:
+            return False
+    return not any(remaining.values())
+
+
 def _delivery_facts(facts, actions):
     def outcome(status, reason, positive=None):
         facts.update(delivery_status=status, delivery_reason=reason, delivery_positive=positive)
@@ -214,7 +273,7 @@ def _delivery_facts(facts, actions):
         if payload.get("type") != action["action_type"] or action["task_id"] != facts["task_id"]:
             return outcome("inconsistent", "delivery_action_binding_mismatch")
         actual.append(payload)
-    if Counter(map(supervision_rules._digest, plan)) != Counter(map(supervision_rules._digest, actual)):
+    if not _delivery_plan_matches(facts, plan, actions, actual, publications):
         return outcome("inconsistent", "planned_actions_do_not_match")
     if facts["audit_status"] != AuditStatus.ACCEPTED or any(a["audit_status"] != AuditStatus.ACCEPTED for a in actions):
         return outcome("inconsistent", "completed_delivery_not_audited")
