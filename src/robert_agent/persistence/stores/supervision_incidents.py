@@ -232,3 +232,23 @@ def update_for_confirmed(conn, value_1, value_2, value_3, value_4, value_5, valu
             "p6": value_7,
         },
     )
+
+
+def dismiss_terminal(conn, incident_id, now, evidence):
+    """Withdraw an obsolete incident without representing successful recovery."""
+    return statements.write(
+        conn,
+        update(tables["supervision_incidents"])
+        .where(
+            tables["supervision_incidents"].c.incident_id == incident_id,
+            tables["supervision_incidents"].c.status.in_(("open", "diagnosing", "needs_attention")),
+        )
+        .values(
+            status=IncidentStatus.DISMISSED.value,
+            resolved_by="terminal_owner",
+            resolved_at=now,
+            last_observed_at=now,
+            next_check_at=None,
+            resolution_evidence_json=evidence,
+        ),
+    )

@@ -131,7 +131,7 @@ def run_loop(
             stop_reason = "max_publish_actions"
             break
         with closing(run_journal.connect(db_path)) as conn, conn:
-            before = progress.snapshot_progress(conn)
+            before = progress.snapshot_progress(conn, repo_ids)
         observation_kwargs = {"consume_observations": True} if consume_observations else {}
         result = runner(
             config_path,
@@ -155,7 +155,7 @@ def run_loop(
             ),
         )
         with closing(run_journal.connect(db_path)) as conn, conn:
-            after = progress.snapshot_progress(conn)
+            after = progress.snapshot_progress(conn, repo_ids)
             diff = progress.diff_progress(before, after)
             runnable = has_runnable_local_work(
                 conn,
@@ -204,7 +204,7 @@ def run_loop(
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--workflow")
+    parser.add_argument("--workflow", help="Compatibility path check. The Python runtime defines the workflow.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-external", action="store_true")
     parser.add_argument("--skip-publish", action="store_true")

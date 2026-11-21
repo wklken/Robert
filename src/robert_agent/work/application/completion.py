@@ -3,6 +3,7 @@
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType, PublishStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
 
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import attempts as db_read_attempts
@@ -558,6 +559,10 @@ def finalize_accepted_result(
                     "kind": "clarification",
                     "summary": "What outcome and scope should Robert use for this request?",
                 }
+            review = pre_pr_review.session(conn, task_id=payload["task_id"])
+            review_decision = (
+                review["proof"].get("decision") if review and review["status"] == "waiting_for_user" else None
+            )
             work_items.record_system_event(
                 conn,
                 work_item_row[0],
@@ -566,6 +571,7 @@ def finalize_accepted_result(
                 body=question.get("summary", "Operator input is required."),
                 metadata={
                     **question,
+                    **({"pre_pr_review": review_decision} if review_decision else {}),
                     "task_id": payload["task_id"],
                     "result_id": payload["result_id"],
                 },

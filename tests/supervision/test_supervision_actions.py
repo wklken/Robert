@@ -244,6 +244,19 @@ class SupervisionActionTests(unittest.TestCase):
             self.assertEqual(self.begin(config=config)["reason_code"], "recovery_policy_unavailable")
             validate.assert_called_once()
 
+    def test_unclaimed_native_retry_waits_for_decision_in_readiness_and_consumer(self):
+        self.conn.commit()
+        config = {**self.config, "supervision": {"mode": "decide"}}
+        for kind in actions.STAGES:
+            with self.subTest(kind=kind):
+                arguments = dict(
+                    task_id="task", kind=kind, target_id="native-target", now=NOW, config=config, native_retry=True
+                )
+                self.assertTrue(actions.blocks_consumer(self.conn, **arguments))
+                self.assertEqual(actions.begin(self.conn, **arguments)["reason_code"], "waiting_for_model_decision")
+                self.assertFalse(self.conn.in_transaction)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM supervision_recovery_actions").fetchone()[0], 0)
+
     def test_cancellation_after_claim_prevents_later_application(self):
         self.plan()
         claim = self.begin()["claim"]

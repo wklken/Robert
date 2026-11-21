@@ -1,15 +1,53 @@
 """Decision command failures retain bounded diagnostics without blocking pipes."""
 
 import json
+import sqlite3
 import sys
 import threading
 import unittest
+from unittest.mock import patch
 
 from tests.support import TEST_ROOT
 from robert_agent.adapters.processes import model_command
 
 
 class ModelCommandTests(unittest.TestCase):
+    def test_identity_checkpoint_failure_retains_proven_cleanup(self):
+        def checkpoint(_identity):
+            raise sqlite3.OperationalError("database is locked")
+
+        result = model_command.run(
+            {"command": [sys.executable, "-c", "import time; time.sleep(30)"], "timeout_seconds": 3},
+            "{}",
+            threading.Event(),
+            checkpoint,
+        )
+        self.assertTrue(result["stopped"], result)
+        self.assertEqual(result["status"], "process_attention")
+        self.assertEqual(result["failure_phase"], "identity_checkpoint")
+        self.assertEqual(result["error_class"], "OperationalError")
+        self.assertNotIn("database is locked", str(result))
+
+    def test_identity_checkpoint_failure_keeps_identity_when_cleanup_is_unproven(self):
+        cleanup = model_command.worker_identity.cleanup_new_process
+
+        def cleanup_without_proof(proc, **kwargs):
+            self.assertTrue(cleanup(proc, **kwargs))
+            return False
+
+        def checkpoint(_identity):
+            raise sqlite3.OperationalError("fixture error")
+
+        with patch.object(model_command.worker_identity, "cleanup_new_process", side_effect=cleanup_without_proof):
+            result = model_command.run(
+                {"command": [sys.executable, "-c", "import time; time.sleep(30)"], "timeout_seconds": 3},
+                "{}",
+                threading.Event(),
+                checkpoint,
+            )
+        self.assertFalse(result["stopped"])
+        self.assertTrue(model_command.worker_identity.validate_identity(result["process_identity"]))
+
     def run_command(self, source):
         return model_command.run(
             {"command": [sys.executable, "-c", source], "timeout_seconds": 3, "environment_allowlist": []},

@@ -1,5 +1,6 @@
 """Run one repository cycle with its existing lease and rollback boundaries."""
 
+from robert_agent.persistence import errors as db_errors
 from robert_agent.persistence import transactions as transactions
 from robert_agent.foundation import errors as run_errors
 from robert_agent.execution import journal as run_journal
@@ -541,6 +542,11 @@ def run_repo_pipeline(
         summary.update(
             status="failed",
             failure_status="repository_pipeline_failed",
+            failure_scope=(
+                "controller"
+                if isinstance(exc, (TypeError, db_errors.Error)) and not isinstance(exc, db_errors.IntegrityError)
+                else "repository"
+            ),
             safe_error=f"Repository pipeline failed ({type(exc).__name__}).",
         )
         error = {
