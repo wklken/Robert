@@ -1,5 +1,5 @@
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sqlite3
@@ -457,6 +457,71 @@ recheck_seconds=300, message=''), sys.stdout)
                 with patch.object(identity, "inspect_recorded_identity", return_value=owner_status):
                     self.assertEqual(DecisionLoop().poll(self.config)["status"], "process_attention")
                 self.assertEqual(decision_control.runner_status(self.config)["claim"], claim)
+
+    def test_finished_launcher_isolates_unknown_child_even_when_owner_is_alive(self):
+        from robert_agent.adapters.processes import identity
+
+        claim = self.stranded_claim()
+        with self.connect() as conn:
+            request = self.request(conn)
+        request["bundle_id"] = claim["bundle_id"]
+        claim["cooldown_seconds"] = 1
+        from robert_agent.supervision import store
+
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            store.update_checkpoint(conn, *decisions.RUNNER_KEY, now=self.now, metadata={"claim": claim})
+            conn.commit()
+        loop = DecisionLoop()
+        loop.result = (request, {"status": "process_attention", "stopped": False}, None)
+        self.assertEqual(loop._finish(self.config, self.now)["status"], "process_attention")
+        recorded = decision_control.runner_status(self.config)["claim"]
+        self.assertEqual(recorded["launcher_finished_at"], self.now)
+        with patch.object(identity, "inspect_recorded_identity", return_value="alive_same"):
+            self.assertEqual(DecisionLoop().poll(self.config, now=self.now)["status"], "process_attention")
+        runner = decision_control.runner_status(self.config)
+        self.assertIsNone(runner["claim"])
+        self.assertEqual(runner["attention_claims"]["w"], recorded)
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO workstreams(workstream_id,repo_id,created_at,updated_at) VALUES ('z','r',?,?)",
+                [self.now] * 2,
+            )
+            conn.execute(
+                "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES ('tz','z','running',?,?)",
+                [self.now] * 2,
+            )
+            conn.commit()
+        resumed = DecisionLoop()
+
+        def complete(_config, _profile, request):
+            resumed.result = (request, {"status": "read", "stopped": True}, self.output(request, "wait"))
+
+        later = (datetime.fromisoformat(self.now) + timedelta(seconds=2)).isoformat()
+        with patch.object(resumed, "_run", side_effect=complete):
+            result = resumed.poll(self.config, now=later)
+            resumed.thread.join(timeout=3)
+        self.assertEqual(result, {"status": "launched", "workstream_id": "z"})
+        self.assertEqual(resumed.poll(self.config, now=later)["status"], "decided")
+        self.assertEqual(decision_control.runner_status(self.config)["attention_claims"]["w"], recorded)
+
+    def test_real_checkpoint_failure_releases_cleaned_model_claim(self):
+        self.config["supervision"]["decision"]["command"] = [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(30)",
+        ]
+        loop = DecisionLoop()
+        self.addCleanup(loop.shutdown, self.config)
+        with patch.object(loop, "_started", side_effect=sqlite3.OperationalError("fixture write lock")):
+            self.assertEqual(loop.poll(self.config)["status"], "launched")
+            loop.thread.join(timeout=8)
+            self.assertFalse(loop.thread.is_alive())
+        self.assertEqual(loop.poll(self.config)["status"], "process_attention")
+        runner = decision_control.runner_status(self.config)
+        self.assertIsNone(runner["claim"])
+        self.assertEqual(runner["last_failure"]["failure_phase"], "identity_checkpoint")
+        self.assertEqual(runner["last_failure"]["error_class"], "OperationalError")
 
     def test_attention_claim_retains_shared_cooldown_and_call_budget(self):
         from robert_agent.supervision import store

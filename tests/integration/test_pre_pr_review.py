@@ -364,6 +364,20 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             self.assertIn("未处理及原因", json.loads(body)["body"])
             self.assertEqual(queries.ready_actions(conn, 10), [])  # Pending normal audit.
 
+    def test_pre_pr_review_preserves_a_skipped_optional_check(self):
+        driver = self.start(["claude"])
+        skipped = _verification_evidence("optional-smoke", status="skipped", required=False)
+        self.verification = [*self.verification, skipped]
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.cycle([])
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(
+                [x["action_type"] for x in queries.ready_actions(conn, 10)], ["push_existing_pr", "open_pr"]
+            )
+            (metadata,) = conn.execute("SELECT metadata_json FROM worker_results").fetchone()
+            self.assertIn({**skipped, "attested": False}, json.loads(metadata)["normalized_payload"]["verification"])
+
     def test_failed_synthesis_reuses_both_reviewers(self):
         driver = self.start(["codex", "claude"])
         self.fail_synthesis = True

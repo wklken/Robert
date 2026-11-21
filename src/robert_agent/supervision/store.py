@@ -1,6 +1,8 @@
 """Caller-transaction storage for supervision observations and incidents."""
 
 from robert_agent.foundation.contracts.supervision import IncidentStatus
+from robert_agent.supervision import receipts as supervision_receipts
+from robert_agent.persistence.queries import supervision_retirement as db_read_supervision_retirement
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import supervision_checkpoints as db_read_supervision_checkpoints
@@ -165,3 +167,59 @@ def repair_task(conn, task_id):
     """Return automatic maintenance provenance, if any, for a dispatch target."""
     row = db_records.first(db_read_tasks.find_for_repair_task(conn, task_id))
     return json.loads(row[0]) if row and row[0] else None
+
+
+def dismiss_terminal_tasks(conn, task_ids, now):
+    """Recheck terminal ownership and known effects in the caller's writer."""
+    changes = []
+    for candidate in db_read_supervision_retirement.candidates(conn, task_ids, now):
+        evidence = dict(candidate)
+        occurred_at = timestamp(evidence["terminal_at"])
+        if occurred_at is None or occurred_at > timestamp(now):
+            continue
+        actions = db_read_supervision_retirement.publications(conn, evidence["task_id"])
+        if len(actions) > 100 or not all(_settled_publication(action, now) for action in actions):
+            continue
+        incident_id = evidence.pop("incident_id")
+        evidence.update(reason_code="terminal_task_no_remaining_work", action_ids=[a["action_id"] for a in actions])
+        db_write_supervision_incidents.dismiss_terminal(conn, incident_id, now, _json(evidence))
+        incident = _one(db_read_supervision_incidents.find_record_by_incident_id(conn, incident_id))
+        changes.append({"transition": "dismissed", "incident": incident})
+    return changes
+
+
+def _settled_publication(action, now):
+    try:
+        payload = json.loads(action["metadata_json"])
+        metadata = json.loads(action["result_metadata"] or "{}")
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(payload, dict) or action["intent_evidence_valid"] == 0:
+        return False
+    publish = payload.get("publish", {})
+    if not isinstance(publish, dict):
+        return False
+    if publish.get("reconcile_required"):
+        return False
+    if action["publish_status"] == "skipped":
+        return action["intent_status"] in (None, "confirmed_absent")
+    receipt = publish.get("receipt")
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("audit"), dict):
+        return False
+    audit = metadata["audit"]
+    scope = audit.get("action_scope")
+    confirmed = timestamp(receipt.get("confirmed_at")) if isinstance(receipt, dict) else None
+    return bool(
+        action["publish_status"] == "published"
+        and action["audit_status"] == "accepted"
+        and audit.get("status") == "accepted"
+        and action["result_task_id"] == action["task_id"]
+        and payload.get("type") == action["action_type"]
+        and isinstance(scope, dict)
+        and scope
+        and isinstance(receipt, dict)
+        and receipt.get("schema_version") == 1
+        and confirmed
+        and confirmed <= timestamp(now)
+        and supervision_receipts.matches({"result_id": action["result_id"]}, action, scope, receipt)
+    )

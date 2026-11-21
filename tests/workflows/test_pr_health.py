@@ -240,6 +240,42 @@ class PrHealthTests(unittest.TestCase):
             commands,
         )
 
+    def test_scanned_ci_evidence_preserves_redaction_failure_on_replay(self):
+        from robert_agent.adapters.github import recording
+        from robert_agent.workflows import pr_health
+
+        log = "password = audit-fixture-placeholder"
+        repo = "example/backend"
+        runner = FixtureRunner(
+            {
+                ("gh", "api", f"repos/{repo}/actions/runs/1/jobs?per_page=100"): {
+                    "jobs": [
+                        {
+                            "id": 7,
+                            "conclusion": "failure",
+                            "steps": [{"number": 3, "conclusion": "failure", "name": "run tests"}],
+                        }
+                    ]
+                },
+                ("gh", "run", "view", "--repo", repo, "--job", "7", "--log-failed"): log,
+            }
+        )
+        recorder = recording.RecordingRunner(runner, max_job_log_chars=100)
+        workflow = {"id": 1, "name": "unit", "status": "completed", "conclusion": "failure"}
+        direct = pr_health._workflow_observation(repo, workflow, max_summary_chars=100, runner=recorder)
+        replay = pr_health._workflow_observation(
+            repo, workflow, max_summary_chars=100, runner=recording.ReplayRunner(recorder.responses)
+        )
+
+        self.assertEqual(direct["evidence_status"], "blocked_secret")
+        self.assertEqual(replay["evidence_status"], "blocked_secret")
+        self.assertEqual(replay["failure_summary"], "")
+        self.assertEqual(replay["failed_jobs"], [{"job_id": 7, "failed_step_numbers": [3]}])
+        self.assertNotIn(log, json.dumps(recorder.responses))
+        summary = pr_health.summarize_ci([replay], ["unit"])
+        self.assertEqual(summary["status"], "manual")
+        self.assertEqual(summary["reason"], "failure_evidence_unavailable")
+
     def test_collect_ci_observations_marks_workflow_unavailable_when_any_failed_job_log_is_unreadable(
         self,
     ):
