@@ -24,6 +24,7 @@ from robert_agent.execution.stages import (
 )
 from robert_agent.execution.rounds import SLOT_STORES
 from robert_agent.delivery.application import submission as worker_result
+from robert_agent.work import decision_owner
 
 
 class Coordinator(StageCoordinator):
@@ -59,6 +60,12 @@ class Coordinator(StageCoordinator):
                 self.request["workers"],
                 self.read_source(),
             )
+            if not self.manifest.get("frozen"):
+                with vote_store.connect(self.db_path) as conn:
+                    self.manifest["decision_owner"] = decision_owner.for_workstream(
+                        conn, self.session["workstream_id"], self.request["repo"]["github_account"]
+                    )
+                vote_files.atomic_json(Path(self.manifest["context_dir"]) / "manifest.json", self.manifest)
             self.save_manifest()
         vote_workspace.verify_snapshot(self.manifest)
         self.check_sources()

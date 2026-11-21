@@ -410,6 +410,45 @@ class ReviewAuditTests(WorkerProtocolFixture):
         self.assertEqual(audit["status"], "failed")
         self.assertIn("pr_author_login", audit["safe_error"])
 
+    def test_single_review_audit_checks_confirmed_owner_and_complete_mention(self):
+        from robert_agent.delivery.application import audit as audit_result
+
+        for login, body, accepted in (
+            ("Alice", "@Alice Please decide.", True),
+            ("Bob", "@Bob Please decide.", False),
+            ("Alice", "@Alice-other Please decide.", False),
+        ):
+            with self.subTest(login=login, body=body):
+                payload = internal_result(
+                    task_id="task-1",
+                    attempt_id="attempt-1",
+                    output_type="pr_review_comment",
+                    planned_github_actions=[
+                        {
+                            "type": "comment",
+                            "target_url": "https://github.com/x/y/pull/1",
+                            "pr_author_login": "robert-bot",
+                            "decision_owner_login": login,
+                            "body": self._dd_comment_body(body),
+                        }
+                    ],
+                    consumed_event_fingerprints=["review_request:1"],
+                    verification=[],
+                    handoff="reviewed",
+                    used_skills=["fast-review-github-pr"],
+                )
+                checked = audit_result.audit_result(
+                    payload,
+                    allowed_github_actions=["comment"],
+                    expected_output="pr_review_comment",
+                    action_scope={
+                        "repo": "x/y",
+                        "sources": [{"source_type": "pull_request", "number": 1}],
+                        "decision_owner": {"login": "Alice"},
+                    },
+                )
+                self.assertEqual(checked["ok"], accepted, checked)
+
     def test_pr_review_comment_requires_mentioning_pr_author(self):
         from robert_agent.delivery.application import audit as audit_result
 

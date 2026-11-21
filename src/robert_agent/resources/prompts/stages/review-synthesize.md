@@ -14,7 +14,7 @@ ${review_policy}
 
 Apply the judgment policy only to verifying supplied claims and their merge implications. Reviewer confidence and prior verdicts are not evidence. Separate nonblocking improvements from blockers in `reason`, `suggestion`, and `merge_reason`.
 
-Use `pr-info.json` `user.login` for the PR author identity. Preserve unresolved decision requests from selected reviewers' `coverage.notes` in `merge_reason` even when items is empty. Verify their evidence without inventing findings. Use one short bullet per unresolved decision with the decision-owner mention, exact question, options, and recommendation. Refer to the report's pinned revision and relevant item for evidence instead of restating them; include brief evidence in the bullet when no item exists. Do not recommend ready to merge while a material risk awaits a decision.
+Use the controller-confirmed decision owner for human decisions. Preserve unresolved decision requests from selected reviewers' `coverage.notes` in `merge_reason` even when items is empty, correcting their mentions to the confirmed decision_mention when necessary. Verify their evidence without inventing findings. Use one short bullet per unresolved decision with the decision-owner mention, exact question, options, and recommendation. Refer to the report's pinned revision and relevant item for evidence instead of restating them; include brief evidence in the bullet when no item exists. Do not recommend ready to merge while a material risk awaits a decision.
 
 ## Verification
 

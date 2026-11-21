@@ -35,15 +35,32 @@ from tests.support.review_coordinator import ReviewCoordinatorFixture
 
 
 class ReviewCoordinatorTests(ReviewCoordinatorFixture):
+    def test_later_review_request_keeps_original_owner_in_native_prompts(self):
+        self.cycle([self.event()])
+        first = self.coordinator()
+        first.run()
+        self.finish_task(first.task_id)
+        config = yaml.safe_load(self.config_path.read_text())
+        config["repos"][0]["trusted_actors"].append("another-maintainer")
+        self.config_path.write_text(yaml.safe_dump(config))
+        self.cycle([self.event("second", actor="another-maintainer")])
+        second = self.coordinator()
+        second.run()
+        self.assertEqual(second.manifest["decision_owner"]["login"], "maintainer")
+        self.assertEqual(second.request["event"]["actor_login"], "another-maintainer")
+        self.assertIn(b'"decision_mention": "@maintainer"', self.calls[-1][2])
+
     def test_file_handoff_same_prompt_and_two_independent_rounds(self):
         self.cycle([self.event()])
         first = self.coordinator()
         report1 = first.run()
         self.assertTrue(report1.is_file())
         self.assertEqual(first.manifest["github_account"], "robert-bot")
+        self.assertEqual(first.manifest["decision_owner"]["login"], "maintainer")
         reviewer_calls = [call for call in self.calls if call[0] == "review"]
         self.assertEqual(reviewer_calls[0][2:4], reviewer_calls[1][2:4])
         self.assertIn(b'Configured Robert GitHub account: "robert-bot"', reviewer_calls[0][2])
+        self.assertIn(b'"decision_mention": "@maintainer"', reviewer_calls[0][2])
         self.assertNotEqual(reviewer_calls[0][4], reviewer_calls[1][4])
         self.assertIn("Code Review 汇总报告", report1.read_text())
         phases = {"prepare": "review.prepare", "review": "review.evaluate", "synthesis": "review.synthesize"}

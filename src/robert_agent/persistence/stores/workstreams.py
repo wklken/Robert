@@ -12,6 +12,18 @@ from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
 
 
+def set_decision_owner_origin(conn, workstream_id, origin_workstream_id):
+    table = tables["workstreams"]
+    statement = (
+        update(table)
+        .where(table.c.workstream_id == bindparam("owner_stream_id"), table.c.origin_workstream_id.is_(None))
+        .values(origin_workstream_id=bindparam("origin_workstream_id"))
+    )
+    return statements.write(
+        conn, statement, {"owner_stream_id": workstream_id, "origin_workstream_id": origin_workstream_id}
+    )
+
+
 def insert_fixture(conn, now, now_2):
     stmt = insert(tables["workstreams"]).values(
         {
