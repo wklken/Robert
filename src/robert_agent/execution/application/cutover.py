@@ -55,10 +55,10 @@ def inspect(conn, db_path):
             continue  # Concurrent ingestion already removed this pending record.
         except (ValueError, OSError, TypeError, KeyError):
             blockers.append({"kind": "legacy_or_invalid_spool", "path": str(path)})
-    # Rejected old formats are preserved under this extension by the replay reader.
-    blockers.extend(
-        {"kind": "unreconciled_invalid_spool", "path": str(path)} for path in sorted(root.glob("*.invalid"))
-    )
+    # Replay never executes archived .invalid files. Retain their evidence for
+    # inspection while pending JSON, active workers and unpublished results keep
+    # their own protocol and ownership guards.
+    quarantined = [{"kind": "archived_invalid_spool", "path": str(path)} for path in sorted(root.glob("*.invalid"))]
     # Quarantined tasks cannot run, consume results or publish. Their evidence
     # remains intact, but it must not prevent unrelated tasks from proceeding.
     return {
@@ -66,6 +66,7 @@ def inspect(conn, db_path):
         "status": "ready" if not blockers else "blocked_result_contract_cutover",
         "result_contract": result_contract.CONTRACT_ID,
         "blockers": blockers,
+        "quarantined_spools": quarantined,
         **({"required_action": RECOVERY} if blockers else {}),
     }
 

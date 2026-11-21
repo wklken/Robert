@@ -1,7 +1,7 @@
 """Durable scheduling observations for readiness and native round admission."""
 
 from robert_agent.foundation.contracts.execution import BindingStatus, RoundStatus
-from robert_agent.foundation.contracts.work import LIVE_TASK_LIFECYCLES, TaskLifecycle
+from robert_agent.foundation.contracts.work import LIVE_TASK_LIFECYCLES, PUBLICATION_RETRY_WAKEUP_KIND, TaskLifecycle
 
 from functools import lru_cache
 
@@ -132,6 +132,13 @@ def _pending_wakeup_statement(include_publication):
         .select_from(tasks)
         .where(
             tasks.c.task_id == wakeup.task_id,
+            or_(
+                tasks.c.lifecycle.in_(_ACTIVE_TASK_STATES),
+                and_(
+                    kind == sql_constant(PUBLICATION_RETRY_WAKEUP_KIND),
+                    tasks.c.lifecycle.in_((TaskLifecycle.COMPLETED.value, TaskLifecycle.FAILED.value)),
+                ),
+            ),
             runnable_task(tasks),
         )
         .correlate(wakeups)

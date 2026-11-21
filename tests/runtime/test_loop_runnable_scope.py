@@ -1,6 +1,7 @@
 from contextlib import closing
 import sqlite3
 from tests.support.temp_workspace import TemporaryWorkspace
+from tests.support.compact_result import CompactResultFixture
 
 
 class LoopRunnableScopeTests(TemporaryWorkspace):
@@ -29,3 +30,89 @@ class LoopRunnableScopeTests(TemporaryWorkspace):
             )
             self.assertTrue(loop_engine.has_runnable_local_work(conn, repo_ids=["repo:a"]))
             self.assertFalse(loop_engine.has_runnable_local_work(conn, repo_ids=["repo:b"]))
+
+
+class TaskWakeupReadinessTests(CompactResultFixture):
+    def test_terminal_task_ordinary_wakeup_does_not_make_local_work_runnable(self):
+        from robert_agent.execution.application import readiness
+        from robert_agent.work import wakeup
+
+        db, task_id, attempt_id, _, _ = self.prepare("comment")
+        now = "2026-11-21T00:00:00+00:00"
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute("UPDATE wakeups SET status='expired'")
+            conn.execute("UPDATE attempts SET status='failed' WHERE attempt_id=?", (attempt_id,))
+            repo_id = conn.execute("SELECT repo_id FROM workstreams").fetchone()[0]
+            wakeup.request_wakeup(
+                conn,
+                repo_id=repo_id,
+                task_id=task_id,
+                reason="manual_operator_request",
+                dedupe_key="old-operator-request",
+                now=now,
+            )
+            for lifecycle in ("canceled", "ignored", "completed", "failed"):
+                with self.subTest(lifecycle=lifecycle):
+                    conn.execute("UPDATE tasks SET lifecycle=? WHERE task_id=?", (lifecycle, task_id))
+                    self.assertFalse(
+                        readiness.has_local_work(
+                            conn,
+                            [repo_id],
+                            config_result={},
+                            now=now,
+                            include_publication=False,
+                        )
+                    )
+
+    def test_terminal_retrigger_and_publication_retry_keep_their_own_consumers(self):
+        from robert_agent.persistence.queries import scheduling
+        from robert_agent.work import wakeup
+
+        db, task_id, _, _, _ = self.prepare("comment")
+        now = "2026-11-21T00:00:00+00:00"
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute("UPDATE wakeups SET status='expired'")
+            repo_id = conn.execute("SELECT repo_id FROM workstreams").fetchone()[0]
+            for lifecycle, kind in (
+                ("failed", "github_retrigger"),
+                ("canceled", "github_retrigger"),
+                ("completed", "publication_retry"),
+            ):
+                with self.subTest(lifecycle=lifecycle, kind=kind):
+                    conn.execute("UPDATE wakeups SET status='expired'")
+                    conn.execute("UPDATE tasks SET lifecycle=? WHERE task_id=?", (lifecycle, task_id))
+                    wakeup.request_wakeup(
+                        conn,
+                        repo_id=repo_id,
+                        task_id=task_id,
+                        reason="manual_operator_request",
+                        dedupe_key=f"{lifecycle}-{kind}",
+                        metadata={"kind": kind},
+                        now=now,
+                    )
+                    self.assertTrue(scheduling.has_pending_local_wakeup(conn, [repo_id], [], now))
+
+    def test_live_task_wakeup_keeps_existing_scope_and_attention_guards(self):
+        from robert_agent.persistence.queries import scheduling
+        from robert_agent.work import wakeup
+
+        db, task_id, _, _, _ = self.prepare("comment")
+        now = "2026-11-21T00:00:00+00:00"
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute("UPDATE wakeups SET status='expired'")
+            repo_id = conn.execute("SELECT repo_id FROM workstreams").fetchone()[0]
+            wakeup.request_wakeup(
+                conn,
+                repo_id=repo_id,
+                task_id=task_id,
+                reason="manual_operator_request",
+                dedupe_key="live-request",
+                now=now,
+            )
+            self.assertTrue(scheduling.has_pending_local_wakeup(conn, [repo_id], [], now))
+            self.assertFalse(scheduling.has_pending_local_wakeup(conn, ["other-repo"], [], now))
+            conn.execute(
+                "UPDATE tasks SET metadata_json=json_set(metadata_json,'$.execution_attention',json('{}')) WHERE task_id=?",
+                (task_id,),
+            )
+            self.assertFalse(scheduling.has_pending_local_wakeup(conn, [repo_id], [], now))
