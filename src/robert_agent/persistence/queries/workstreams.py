@@ -171,7 +171,11 @@ def _find_for_derived_pr_statement():
                 (table2.c["source_type"] == sql_constant("pull_request")),
             )
         )
-        .order_by(table1.c["updated_at"].desc(), table2.c["number"].desc())
+        .order_by(
+            case((table2.c["state"] == sql_constant("open"), 0), else_=1),
+            table1.c["updated_at"].desc(),
+            table2.c["number"].desc(),
+        )
         .limit(sql_constant(1))
         .correlate_except(table1, table2)
         .set_label_style(LABEL_STYLE_NONE)
@@ -182,6 +186,14 @@ def _find_for_derived_pr_statement():
 def find_for_derived_pr(conn, root_workstream_id, root_workstream_id_2):
     return statements.read(
         conn, _find_for_derived_pr_statement(), {"p0": root_workstream_id, "p1": root_workstream_id_2}
+    )
+
+
+def find_related_pull_requests(conn, root_workstream_id):
+    return statements.read(
+        conn,
+        _find_for_derived_pr_statement().limit(None),
+        {"p0": root_workstream_id, "p1": root_workstream_id},
     )
 
 
@@ -637,6 +649,19 @@ def find_for_remote_source_rows(conn, repo_id):
         .correlate_except(table4)
         .set_label_style(LABEL_STYLE_NONE)
     )
+    related_unfinished_item = (
+        select(sql_constant(1))
+        .select_from(table4)
+        .where(
+            or_(
+                table4.c["workstream_id"] == table1.c["workstream_id"],
+                table4.c["workstream_id"] == table1.c["origin_workstream_id"],
+            ),
+            table4.c["completed_at"].is_(null()),
+            table4.c["canceled_at"].is_(null()),
+        )
+        .correlate_except(table4)
+    )
     query3 = (
         select(
             table1.c["workstream_id"],
@@ -671,10 +696,15 @@ def find_for_remote_source_rows(conn, repo_id):
                         ),
                         and_(
                             table2.c["source_type"] == sql_constant("pull_request"),
-                            table2.c["state"] == sql_constant("open"),
+                            or_(
+                                table2.c["state"] == sql_constant("open"),
+                                related_unfinished_item.exists(),
+                            ),
                         ),
                         and_(
-                            table2.c["source_type"] == sql_constant("issue"),
+                            table2.c["source_type"].in_(
+                                [sql_constant("issue"), sql_constant("tapd_story"), sql_constant("tapd_bug")]
+                            ),
                             query5.exists(),
                         ),
                     )

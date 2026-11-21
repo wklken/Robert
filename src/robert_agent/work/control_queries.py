@@ -120,7 +120,23 @@ def lifecycle_facts(conn, item, *, controls=None, parked_publication_task_id=Non
     source = db_records.first(db_read_github_sources.find_state_by_source_id(conn, item["origin_source_id"]))
     pending = db_records.first(db_read_wakeups.find_for_lifecycle_facts(conn, item["work_item_id"]))
     approval_task = db_records.first(db_read_workstreams.find_for_lifecycle_facts(conn, item["workstream_id"]))
+    pull_requests = [dict(row) for row in db_read_workstreams.find_related_pull_requests(conn, item["workstream_id"])]
+    open_pull_requests = [pr for pr in pull_requests if (pr["state"] or "open").lower() == "open"]
+    unmerged_pull_requests = []
+    for pr in pull_requests:
+        if pr in open_pull_requests:
+            continue
+        try:
+            remote = json.loads(pr["metadata_json"] or "{}").get("remote_state") or {}
+            merged = isinstance(remote, dict) and bool(remote.get("merged") or remote.get("merged_at"))
+        except (ValueError, AttributeError):
+            merged = False
+        if not merged:
+            unmerged_pull_requests.append(pr)
     return {
+        "pull_requests": pull_requests,
+        "open_pull_requests": open_pull_requests,
+        "unmerged_pull_requests": unmerged_pull_requests,
         "streams": streams,
         "running": attempts,
         "actions": actions,
