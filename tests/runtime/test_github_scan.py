@@ -161,7 +161,7 @@ class ObservationTests(unittest.TestCase):
             "terminate_recorded_identity",
             side_effect=AssertionError("must not stop healthy/unrelated child"),
         ):
-            self.assertTrue(control_lane.recover(self.db, scope_key="current-scope", current_owner="new"))
+            self.assertTrue(control_lane.recover(self.db, scope_key="current-scope", current_owner="new")["ok"])
 
     def test_real_local_routing_and_finalization_while_scanner_is_running(self):
         import sqlite3

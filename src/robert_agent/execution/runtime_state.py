@@ -6,6 +6,7 @@ from robert_agent.persistence.dialects import sqlite as db_sqlite
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import daemon_events as db_read_daemon_events
 from robert_agent.persistence.queries import daemon_runs as db_read_daemon_runs
+from robert_agent.persistence.queries.diagnostics import PUBLISH_ACTION_COUNTERS, REPO_ACTION_COUNTERS
 from robert_agent.persistence.queries import leases as db_read_leases
 from robert_agent.persistence.stores import daemon_events as db_write_daemon_events
 from robert_agent.persistence.stores import daemon_runs as db_write_daemon_runs
@@ -94,6 +95,71 @@ def record_event(conn, daemon_run_id, event_type, status, metadata=None, now=Non
         "created_at": now,
         "metadata": metadata or {},
     }
+
+
+def _explicit_zeroes(values, keys):
+    return all(type(values.get(key)) in {int, float} and values[key] == 0 for key in keys)
+
+
+def local_drain_is_idle(result):
+    """Idle journal compaction requires explicit completed no-effect evidence."""
+    if result.get("ok") is not True or result.get("status") != "completed":
+        return False
+    cycles = result.get("cycle_results")
+    if result.get("stop_reason") == "no_runnable_work":
+        return result.get("cycles") == 0 and cycles == []
+    if result.get("stop_reason") != "no_progress" or result.get("cycles") != 1 or not isinstance(cycles, list):
+        return False
+    if len(cycles) != 1 or not isinstance(cycles[0], dict):
+        return False
+    cycle = cycles[0]
+    progress = cycle.get("progress")
+    if cycle.get("ok") is not True or not isinstance(progress, dict) or progress.get("changed") is not False:
+        return False
+    if cycle.get("status") == "no_runnable_work":
+        return (
+            not cycle.get("run_id")
+            and _explicit_zeroes(cycle, ("dispatch_count",))
+            and cycle.get("repo_summaries") == []
+        )
+    if cycle.get("status") != "completed" or not cycle.get("run_id") or cycle.get("prompt_paths") != []:
+        return False
+    published, repos = cycle.get("publish_result"), cycle.get("repo_summaries")
+    return (
+        _explicit_zeroes(cycle, ("dispatch_count",))
+        and isinstance(published, dict)
+        and published.get("ok") is True
+        and _explicit_zeroes(published, PUBLISH_ACTION_COUNTERS)
+        and isinstance(repos, list)
+        and bool(repos)
+        and all(
+            isinstance(repo, dict)
+            and repo.get("status") == "completed"
+            and "failure_status" in repo
+            and repo["failure_status"] is None
+            and _explicit_zeroes(repo, (*REPO_ACTION_COUNTERS, "raw_event_count", "decision_count"))
+            for repo in repos
+        )
+    )
+
+
+def complete_idle_drain(conn, started, metadata, *, duration_seconds, now):
+    return db_write_daemon_events.complete_idle_drain(
+        conn,
+        started["daemon_run_id"],
+        started["daemon_event_id"],
+        now,
+        json.dumps(
+            {
+                **metadata,
+                "started_at": started["created_at"],
+                "duration_seconds": duration_seconds,
+                "command": started["metadata"]["command"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+    )
 
 
 def _row_payload(row):

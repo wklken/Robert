@@ -91,6 +91,12 @@ class DecisionLoop:
             claim = runner.get("claim") or {}
             if claim.get("bundle_id") != request["bundle_id"]:
                 return {"status": DecisionRunStatus.CLAIM_CHANGED.value}
+            if not outcome["stopped"]:
+                # _finish runs only after the owned launcher thread returns.
+                # Persist that it can no longer spawn or checkpoint a child.
+                claim = {**claim, "launcher_finished_at": now}
+                if outcome.get("process_identity"):
+                    claim["process_identity"] = outcome["process_identity"]
             state = decisions.read(conn, request["root_id"])
             status = outcome["status"]
             if not outcome["stopped"]:
@@ -111,6 +117,7 @@ class DecisionLoop:
                         "safe_error": safe_text(outcome.get("safe_error"), 2000),
                         "exit_code": outcome.get("exit_code"),
                         "stderr_truncated": bool(outcome.get("stderr_truncated")),
+                        **{key: outcome[key] for key in ("failure_phase", "error_class") if key in outcome},
                     }
                     state = {**state, "last_failure": failure}
                     runner["last_failure"] = failure
@@ -177,9 +184,11 @@ class DecisionLoop:
         recorded = claim.get("process_identity")
         if not recorded:
             owner = claim.get("owner_identity")
-            if claim.get("root_id") and owner and identity.inspect_recorded_identity(owner) == "dead":
-                # The owner cannot checkpoint a late spawn any more. Retain
-                # unknown children and fence this root, rather than every root.
+            launcher_finished = bool(claim.get("launcher_finished_at"))
+            owner_dead = owner and identity.inspect_recorded_identity(owner) == "dead"
+            if claim.get("root_id") and (launcher_finished or owner_dead):
+                # The launcher cannot produce a late spawn or checkpoint.
+                # Unknown children continue fencing their own root.
                 with closing(_connect(config)) as conn, conn:
                     transactions.begin(conn, immediate=True)
                     runner = _read_runner(conn)

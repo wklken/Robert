@@ -95,6 +95,7 @@ def check(config, *, record=False, now=None):
                 supervision_store.update_checkpoint(
                     conn, "service", "supervisor", "cursor", now=now, metadata={"cursor": sampled.get("cursor", "")}
                 )
+                changes.extend(supervision_store.dismiss_terminal_tasks(conn, sampled.get("task_ids", ()), now))
                 supervision_actions.verify(conn, observations=observations, now=now)
                 recovery = supervision_actions.plan(conn, observations=observations, now=now, config=config)
                 queued_incidents = {item.get("incident_id") for item in recovery}

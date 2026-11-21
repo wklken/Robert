@@ -1,4 +1,6 @@
+import json
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from tests.support import PACKAGE_ROOT
 
@@ -314,3 +316,106 @@ class DaemonChildRunnerTests(unittest.TestCase):
             ),
             30,
         )
+
+
+class LocalDrainDiagnosticTests(unittest.TestCase):
+    def test_repeating_no_action_drains_keep_one_linked_event_per_drain(self):
+        from robert_agent.runtime import daemon
+        from tests.support.retention import RetentionFixture
+
+        fixture = RetentionFixture()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        started = "2026-11-21T01:00:00+00:00"
+        finished = "2026-11-21T01:00:01+00:00"
+        for index in range(12):
+            run_id = f"run-{index}"
+
+            def child(*_args, **_kwargs):
+                with fixture.connect() as conn:
+                    running = conn.execute(
+                        "SELECT count(*) FROM daemon_events WHERE event_type='local_drain_started' AND status='running'"
+                    ).fetchone()[0]
+                self.assertGreaterEqual(running, 1)
+                return self._no_action(run_id)
+
+            with patch.object(daemon.daemon_state, "utc_now", return_value=finished):
+                self.assertTrue(daemon._run_local_drain(fixture.context, child_runner=child, now=started)["ok"])
+
+        with fixture.connect() as conn:
+            events = conn.execute("SELECT event_type, status, created_at, metadata_json FROM daemon_events").fetchall()
+        self.assertEqual(len(events), 12)
+        self.assertEqual({tuple(row[:3]) for row in events}, {("local_drain_completed", "ok", finished)})
+        details = [json.loads(row["metadata_json"]) for row in events]
+        self.assertEqual({item["run_ids"][0] for item in details}, {f"run-{value}" for value in range(12)})
+        self.assertTrue(all(item["started_at"] == started for item in details))
+        self.assertTrue(all(item["duration_seconds"] >= 0 for item in details))
+
+    def test_effect_or_missing_evidence_and_failed_drain_keep_both_records(self):
+        from robert_agent.runtime import daemon
+        from tests.support.retention import RetentionFixture
+
+        fixture = RetentionFixture()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        has_effect = self._no_action("effect")
+        has_effect["cycle_results"][0]["repo_summaries"][0]["published_count"] = 1
+        missing = self._no_action("incomplete")
+        del missing["cycle_results"][0]["repo_summaries"][0]["audited_result_count"]
+        for result in (has_effect, missing, {"ok": False, "status": "child_timeout"}):
+            daemon._run_local_drain(fixture.context, child_runner=lambda *_args, **_kwargs: result)
+        with fixture.connect() as conn:
+            observed = dict(conn.execute("SELECT event_type, count(*) FROM daemon_events GROUP BY event_type"))
+        self.assertEqual(observed, {"local_drain_started": 3, "local_drain_completed": 2, "child_timeout": 1})
+
+    @staticmethod
+    def _no_action(run_id):
+        repo = dict.fromkeys(
+            (
+                "supervised_count",
+                "failed_timeout_recovered_count",
+                "prompt_count",
+                "dispatch_queue_count",
+                "audited_result_count",
+                "publish_pending_count",
+                "published_count",
+                "publish_skipped_count",
+                "publish_failed_count",
+                "finalized_task_count",
+                "reconciled_source_count",
+                "current_state_closed_skip_count",
+                "raw_event_count",
+                "decision_count",
+            ),
+            0,
+        )
+        return {
+            "ok": True,
+            "status": "completed",
+            "cycles": 1,
+            "stop_reason": "no_progress",
+            "cycle_results": [
+                {
+                    "ok": True,
+                    "status": "completed",
+                    "run_id": run_id,
+                    "dispatch_count": 0,
+                    "prompt_paths": [],
+                    "progress": {"changed": False},
+                    "repo_summaries": [{"status": "completed", "failure_status": None, **repo}],
+                    "publish_result": {
+                        "ok": True,
+                        **dict.fromkeys(
+                            (
+                                "pending_count",
+                                "published_count",
+                                "skipped_count",
+                                "failed_count",
+                                "finalized_task_count",
+                            ),
+                            0,
+                        ),
+                    },
+                }
+            ],
+        }

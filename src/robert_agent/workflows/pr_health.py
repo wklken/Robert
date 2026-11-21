@@ -1,6 +1,7 @@
 """Read-only GitHub PR health and CI evidence normalization."""
 
 from robert_agent.adapters.github import client as github_client
+from robert_agent.adapters.github.recording import JobLogBlocked
 
 import hashlib
 import json
@@ -73,7 +74,7 @@ def fetch_pr_snapshot(repo_full_name, number, runner=subprocess.run):
     }
 
 
-def _try_run_text(args, runner):
+def _read_job_log(args, runner):
     try:
         completed = run_command(
             args,
@@ -82,9 +83,12 @@ def _try_run_text(args, runner):
             capture_output=True,
             check=True,
         )
-    except (FileNotFoundError, OSError, subprocess.CalledProcessError):
-        return None
-    return completed.stdout
+    except JobLogBlocked:
+        return "", "blocked_secret"
+    except (OSError, subprocess.CalledProcessError):
+        return "", "unavailable"
+    log = completed.stdout or ""
+    return (log, "available") if strip_ansi(log).strip() else ("", "unavailable")
 
 
 def _items(payload, key):
@@ -174,6 +178,7 @@ def _workflow_observation(
     check_name = str(workflow.get("name") or "")
     conclusion = workflow.get("conclusion")
     evidence = {}
+    failed_job_locations = []
     if conclusion == "failure":
         jobs_payload = github_client.try_read_json(
             [
@@ -185,23 +190,33 @@ def _workflow_observation(
         )
         failed_jobs = [job for job in _items(jobs_payload, "jobs") if job.get("conclusion") == "failure"]
         excerpts = []
-        evidence_status = "available"
+        incomplete_logs = set()
         for job in failed_jobs:
             job_id = job.get("id")
-            log = (
-                _try_run_text(
-                    ["gh", "run", "view", "--repo", repo_full_name, "--job", str(job_id), "--log-failed"],
-                    runner,
-                )
-                if job_id
-                else None
-            )
-            if not log or not strip_ansi(log).strip():
-                evidence_status = "unavailable"
+            if type(job_id) is not int or job_id <= 0:
+                incomplete_logs.add("unavailable")
                 continue
-            excerpts.append(f"[job: {job.get('name') or job.get('id')}]\n{log}")
+            failed_step_numbers = [
+                step["number"]
+                for step in _items(job, "steps")
+                if isinstance(step, dict)
+                and step.get("conclusion") == "failure"
+                and type(step.get("number")) is int
+                and step["number"] > 0
+            ]
+            failed_job_locations.append({"job_id": job_id, "failed_step_numbers": failed_step_numbers})
+            log, status = _read_job_log(
+                ["gh", "run", "view", "--repo", repo_full_name, "--job", str(job_id), "--log-failed"],
+                runner,
+            )
+            if status != "available":
+                incomplete_logs.add(status)
+            else:
+                excerpts.append(f"[job: {job.get('name') or job_id}]\n{log}")
         evidence = _evidence("\n".join(excerpts), max_summary_chars)
-        if evidence_status == "unavailable":
+        if "blocked_secret" in incomplete_logs:
+            evidence.update(evidence_status="blocked_secret", failure_summary="", failure_signature="")
+        elif incomplete_logs and evidence["evidence_status"] != "blocked_secret":
             evidence["evidence_status"] = "unavailable"
     observation = {
         "source_kind": "workflow_run",
@@ -223,6 +238,7 @@ def _workflow_observation(
         "freshness_at": workflow.get("updated_at"),
     }
     if evidence:
+        observation["failed_jobs"] = failed_job_locations
         evidence["failure_signature"] = (
             failure_signature(
                 [
