@@ -310,7 +310,6 @@ def matches_submission(entry, attempt_id, fingerprint, *, head=None, result_id=N
     proof = entry["proof"]
     return bool(
         entry["status"] == "ready"
-        and _matches_final_verification(entry, result_id)
         and entry["snapshot_id"] == proof.get("snapshot_id")
         and entry["report_sha256"] == proof.get("report_sha256")
         and proof.get("attempt_id") == attempt_id
@@ -318,6 +317,7 @@ def matches_submission(entry, attempt_id, fingerprint, *, head=None, result_id=N
         and proof.get("fingerprint") == fingerprint
         and (head is None or proof.get("head_sha") == head)
         and (result_id is None or entry["final_result_id"] == result_id)
+        and (entry["status"] != "ready" or _matches_final_verification(entry, result_id))
     )
 
 

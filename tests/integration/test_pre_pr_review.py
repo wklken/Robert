@@ -71,8 +71,8 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
         self.fail_synthesis = False
         self.fail_disposition = False
         self.with_finding = False
-        self.final_review_mode = "approved"
         self.launches = Counter()
+        self.final_review_mode = "approved"
         return driver
 
     def launch_pr_stage(self, **kwargs):

@@ -293,9 +293,7 @@ class Coordinator(ReviewStages):
             raise ValueError("handoff failed the new PR result contract")
         return normalized
 
-    def finalize(self, report, report_sha, disposition, verification=None):
-        self.stage = "finalize"
-        self.phase(self.stage)
+    def finalize(self, report, report_sha, disposition):
         head, final = self.manifest["head_sha"], disposition["head"]
         if (
             store.digest(report) != report_sha
@@ -305,6 +303,10 @@ class Coordinator(ReviewStages):
         body = report.read_text(encoding="utf-8")
         draft = self.candidate_submission()
         response = json.loads(Path(disposition["dispositions_path"]).read_text(encoding="utf-8"))
+        finding_ids = [item["id"] for item in response["dispositions"]]
+        verification = final_verification.verify(self, report, report_sha, finding_ids, disposition)
+        self.stage = "finalize"
+        self.phase(self.stage)
         draft["verification"] = response["verification"]
         action = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
         fixed = [f"- {item['id']}：{item['reason']}" for item in response["dispositions"] if item["status"] == "fixed"]
@@ -400,8 +402,7 @@ class Coordinator(ReviewStages):
                 records = self.review()
                 report, sha, ids = self.report(records)
                 disposition = self.address(report, sha, ids)
-                verification = final_verification.verify(self, report, sha, ids, disposition)
-                return self.finalize(report, sha, disposition, verification)
+                return self.finalize(report, sha, disposition)
             except (OSError, subprocess.SubprocessError, ValueError, RuntimeError) as exc:
                 error = redact_and_truncate(str(exc), 500).get("text", "[redacted]")
                 with store.connect(self.db_path) as conn:
