@@ -1,10 +1,10 @@
 """Shared stores operations for wakeups."""
 
-from robert_agent.foundation.contracts.work import PUBLICATION_RETRY_WAKEUP_KIND, WakeupStatus
+from robert_agent.foundation.contracts.work import PUBLICATION_RETRY_WAKEUP_KIND, TaskLifecycle, WakeupStatus
 
 from robert_agent.persistence.expressions import sql_constant
 
-from sqlalchemy import update, delete, bindparam, and_, or_, not_, null, func
+from sqlalchemy import update, delete, bindparam, and_, or_, not_, null, func, select
 from sqlalchemy.dialects.sqlite import insert
 
 
@@ -106,6 +106,24 @@ def update_for_cancel_execution(conn, now, work_item_id, *, task_ids):
         )
     )
     return statements.write(conn, stmt, {"p0": now, "p1": work_item_id, "task_ids": task_ids})
+
+
+def cancel_terminal_task_requests(conn, task_id, now):
+    """Retire obsolete request hints with the source-owned task cancellation."""
+    wakeups, tasks = tables["wakeups"], tables["tasks"]
+    canceled = select(1).where(tasks.c.task_id == task_id, tasks.c.lifecycle == TaskLifecycle.CANCELED.value)
+    stmt = (
+        update(wakeups)
+        .values(status=WakeupStatus.CANCELED.value, updated_at=now)
+        .where(
+            wakeups.c.task_id == task_id,
+            wakeups.c.status == WakeupStatus.PENDING.value,
+            wakeups.c.reason == "manual_operator_request",
+            func.coalesce(func.json_extract(wakeups.c.metadata_json, "$.kind"), "") != "github_retrigger",
+            canceled.exists(),
+        )
+    )
+    return statements.write(conn, stmt)
 
 
 def update_for_finalize_superseded_result(conn, now, result_id):
