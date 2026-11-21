@@ -384,6 +384,17 @@ def _create_episode(
         episode_kind,
         subject_key,
     )
+    if episode_kind == "ci":
+        previous = _load_episode(conn, episode_id)
+        previous_metadata = previous["metadata"] if previous else {}
+        budget_started_at = previous_metadata.get("repair_budget_started_at")
+        if not budget_started_at and metadata.get("ci_status") == "failing":
+            previously_eligible = previous and (
+                previous["attempt_count"] or previous["last_task_id"] or previous_metadata.get("ci_status") == "failing"
+            )
+            budget_started_at = previous["first_seen_at"] if previously_eligible else now
+        if budget_started_at:
+            metadata = {**metadata, "repair_budget_started_at": budget_started_at}
     db_write_pr_remediation_episodes.insert_for_create_episode(
         conn,
         episode_id,
@@ -739,10 +750,13 @@ def budget_status(conn, *, episode, policy, now):
     }
     if episode["attempt_count"] >= policy["max_attempts"]:
         return {**result, "ok": False, "reason": "max_attempts"}
-    first_seen = _parse_time(episode.get("first_seen_at"))
+    budget_started_at = episode.get("metadata", {}).get("repair_budget_started_at")
+    budget_start = _parse_time(budget_started_at) or _parse_time(episode.get("first_seen_at"))
     current = _parse_time(now)
-    if first_seen and current:
-        elapsed_minutes = (current.astimezone(timezone.utc) - first_seen.astimezone(timezone.utc)).total_seconds() / 60
+    if budget_start and current:
+        elapsed_minutes = (
+            current.astimezone(timezone.utc) - budget_start.astimezone(timezone.utc)
+        ).total_seconds() / 60
         result["elapsed_minutes"] = elapsed_minutes
         if elapsed_minutes >= policy["max_wall_minutes"]:
             return {

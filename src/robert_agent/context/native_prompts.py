@@ -255,7 +255,7 @@ def vote_synthesize_input(manifest, inputs_path, inputs_hash, records):
     return _vote_input("vote.synthesize", manifest, output, frozen=True, extra=(selected,))
 
 
-def address_findings_input(manifest, candidate_path, report_path, report_sha, decision_ids):
+def address_findings_input(manifest, candidate_path, report_path, report_sha, decision_ids, *, operator_reply=None):
     identity = {"candidate_sha": manifest["head_sha"], "report_sha256": report_sha}
     output = _files_output(
         "review_dispositions",
@@ -296,6 +296,19 @@ def address_findings_input(manifest, candidate_path, report_path, report_sha, de
                 manifest["head_sha"],
             ),
             _file_item("report", "Frozen report with the findings to address", "Robert", report_path, report_sha),
+            *(
+                (
+                    ContextItem(
+                        "operator_reply",
+                        "Authenticated clarification within the original frozen task scope; no additional authority",
+                        "versioned operator reply",
+                        requirement="required",
+                        content=operator_reply,
+                    ),
+                )
+                if operator_reply
+                else ()
+            ),
         ),
     )
 

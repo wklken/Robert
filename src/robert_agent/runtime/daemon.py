@@ -1114,9 +1114,10 @@ def _resident_loop(
     listener = None
     from robert_agent.runtime.control import ControlLane, recover
 
-    if not recover(
+    recovery = recover(
         context.db_path, scope_key=_daemon_resource_key(context.runtime_config), current_owner=context.daemon_run_id
-    ):
+    )
+    if recovery["unscoped_children"]:
         _finish_context(
             context,
             "failed",
@@ -1126,6 +1127,18 @@ def _resident_loop(
             },
         )
         return {"ok": False, "status": "attention", "safe_error": "Previous control child ownership needs inspection"}
+    for lane in recovery["blocked_lanes"]:
+        _record_control_outcome(
+            context,
+            lane,
+            {
+                "ok": False,
+                "status": "attention",
+                "cause_status": "control_child_attention",
+                "safe_error": f"Previous {lane} child ownership needs inspection",
+                "required_action": "Inspect the previous control child and confirm its exit, then restart the daemon.",
+            },
+        )
     context.background_lanes = {
         name: ControlLane(context.db_path, name, context.daemon_run_id) for name in ("scan", "publish")
     }
@@ -1161,7 +1174,7 @@ def _resident_loop(
             _heartbeat(context)
     finally:
         stopped = [lane.stop() for lane in context.background_lanes.values()]
-        cleanup_proven = all(stopped)
+        cleanup_proven = all(stopped) and recovery["ok"]
         context.background_lanes = None
         if listener is not None:
             listener.close()

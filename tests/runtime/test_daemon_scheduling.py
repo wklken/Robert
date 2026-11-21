@@ -7,6 +7,63 @@ from tests.support.daemon import DaemonFixture
 
 
 class DaemonSchedulingTests(DaemonFixture):
+    def test_resident_loop_starts_with_only_the_unresolved_lane_paused(self):
+        from robert_agent.runtime import control, daemon
+
+        config_path = self._write_config()
+        self._init_db()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            self._insert_repo(conn)
+        context, error = daemon._load_context(config_path, now="2026-07-03T00:00:00+00:00")
+        self.assertIsNone(error)
+        recovery = {"ok": False, "blocked_lanes": ["scan"], "unscoped_children": []}
+
+        def step(current):
+            self.assertIn("scan", current.control_attention)
+            self.assertNotIn("publish", current.control_attention)
+            self.assertNotIn("local", current.control_attention)
+            self.assertEqual(set(current.background_lanes), {"scan", "publish"})
+            outcome = daemon._background_decision(current, now="2026-07-03T00:00:00+00:00")
+            self.assertEqual(outcome["decision"], "local_drain")
+            daemon._STOP_REQUESTED = True
+            return {"ok": True, "decision": "idle"}
+
+        with (
+            mock.patch.object(daemon.signal, "signal"),
+            mock.patch.object(control, "recover", return_value=recovery),
+            mock.patch.object(daemon, "run_once_decision", side_effect=step) as advance,
+            mock.patch.object(daemon.loop_engine, "has_runnable_local_work", return_value=True),
+            mock.patch.object(daemon.delivery_queries, "ready_actions", return_value=[{}]),
+            mock.patch.object(daemon, "_run_local_drain", return_value={"ok": True}) as local,
+            mock.patch.object(control.ControlLane, "start", autospec=True, return_value=True) as start,
+        ):
+            outcome = daemon._resident_loop(context, listener_factory=lambda _: mock.Mock())
+        advance.assert_called_once()
+        local.assert_called_once()
+        self.assertEqual([call.args[0].lane for call in start.call_args_list], ["publish"])
+        self.assertEqual(outcome["status"], "attention")
+        self.assertFalse(outcome["ok"])
+
+    def test_resident_loop_refuses_an_unclassified_previous_child(self):
+        from robert_agent.runtime import control, daemon
+
+        config_path = self._write_config()
+        self._init_db()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            self._insert_repo(conn)
+        context, error = daemon._load_context(config_path, now="2026-07-03T00:00:00+00:00")
+        self.assertIsNone(error)
+        recovery = {"ok": False, "blocked_lanes": [], "unscoped_children": ["unknown"]}
+        with (
+            mock.patch.object(daemon.signal, "signal"),
+            mock.patch.object(control, "recover", return_value=recovery),
+            mock.patch.object(daemon, "run_once_decision", side_effect=AssertionError("unsafe startup")) as advance,
+        ):
+            outcome = daemon._resident_loop(context, listener_factory=lambda _: mock.Mock())
+        advance.assert_not_called()
+        self.assertEqual(outcome["status"], "attention")
+        self.assertFalse(outcome["ok"])
+
     def test_resident_loop_waits_on_listener_and_closes_it(self):
         from robert_agent.runtime import daemon
 

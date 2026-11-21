@@ -65,9 +65,12 @@ class SubmissionRemediationTests(unittest.TestCase):
             different = self.envelope(task, attempt)
             different["submission"]["handoff"] = "another result"
             self.assertEqual(result.record_result(db, different)["status"], "result_conflict")
-        self.assertEqual(result.replay_pending_results(db)["recorded"], 1)
+        config = {"supervision": {"mode": "decide"}}
+        self.assertEqual(result.replay_pending_results(db, config=config)["recorded"], 1)
+        self.assertEqual(result.replay_pending_results(db, config=config)["recorded"], 0)
         with closing(sqlite3.connect(db)) as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM worker_results").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT count(*) FROM supervision_recovery_actions").fetchone()[0], 0)
 
     def test_database_error_before_save_is_not_acknowledged(self):
         db, task, attempt, _, _ = self.prepare("comment")

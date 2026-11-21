@@ -8,8 +8,9 @@ import yaml
 
 from robert_agent.adapters.git.review_revision import git
 from robert_agent.delivery import queries
-from robert_agent.delivery.application import publish, submission
+from robert_agent.delivery.application import publish, submission, validation
 from robert_agent.execution import capacity, rounds
+from robert_agent.execution.stages import StageStopped
 from robert_agent.persistence.rounds import pool
 from robert_agent.work.application import commands
 from robert_agent.persistence.rounds import pre_pr_review as store
@@ -20,28 +21,47 @@ from tests.support.review_coordinator import ReviewCoordinatorFixture
 
 
 class PrePublicationReviewTests(ReviewCoordinatorFixture):
-    def start(self, workers):
+    def start(self, workers, *, local=False):
         config = yaml.safe_load(self.config_path.read_text())
         config["repos"][0]["routes"] = {"new-pr": {"pre_pr_review": {"workers": workers}}}
         self.config_path.write_text(yaml.safe_dump(config))
-        self.cycle(
-            [
-                {
-                    "id": "implement",
-                    "number": 42,
-                    "source_type": "issue",
-                    "event_type": "assigned",
-                    "actor_login": "maintainer",
-                    "assigned_to": "robert-bot",
-                    "assignment_actor_login": "maintainer",
-                    "body": "Update the example",
-                    "intent": "small_change",
-                    "title": "Update example",
-                    "state": "open",
-                    "html_url": "https://github.com/example/backend/issues/42",
-                }
-            ]
-        )
+        if local:
+            self.cycle([])
+            context = commands.CommandContext(
+                "operator", "owner", frozenset({"repo:example/backend"}), frozenset({"codex", "claude"})
+            )
+            commands.create_work_item(
+                self.db,
+                context=context,
+                repo_id="repo:example/backend",
+                title="Fix example bug",
+                description="Please fix this bug in the source file.",
+                priority="P1",
+                routing_mode="manual",
+                requested_worker="codex",
+                start=True,
+                idempotency_key="local-question-source",
+            )
+            self.cycle([])
+        else:
+            self.cycle(
+                [
+                    {
+                        "id": "implement",
+                        "number": 42,
+                        "source_type": "issue",
+                        "event_type": "assigned",
+                        "actor_login": "maintainer",
+                        "assigned_to": "robert-bot",
+                        "assignment_actor_login": "maintainer",
+                        "body": "Update the example",
+                        "intent": "small_change",
+                        "title": "Update example",
+                        "state": "open",
+                        "html_url": "https://github.com/example/backend/issues/42",
+                    }
+                ]
+            )
         task, attempt = self.current()
         with fixture_database.connect(self.db) as conn:
             saved = store.session(conn, task_id=task)
@@ -51,9 +71,14 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             "planned_github_actions": _new_pr_actions(),
             "verification": self.verification,
             "used_skills": [],
-            "consumed_event_fingerprints": [saved["request"]["event"]["event_fingerprint"]],
+            "consumed_event_fingerprints": [saved["request"]["event"]["event_fingerprint"]] if not local else [],
             "handoff": "Update example and verify the result.",
         }
+        if local:
+            with fixture_database.connect(self.db) as conn:
+                self.submission["consumed_work_item_event_ids"] = [
+                    row[0] for row in conn.execute("SELECT event_id FROM work_item_events")
+                ]
         driver = Coordinator(self.db, task, attempt, launcher=self.launch_pr_stage, poll_seconds=0.01)
         if not Path(driver.assigned_path).exists():
             Path(driver.assigned_path).parent.mkdir(parents=True, exist_ok=True)
@@ -71,6 +96,7 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
         self.fail_synthesis = False
         self.fail_disposition = False
         self.with_finding = False
+        self.needs_decision = False
         self.launches = Counter()
         self.final_review_mode = "approved"
         return driver
@@ -123,7 +149,7 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
         elif prompt.name.startswith("address-"):
             self.launches["address"] += 1
             if not self.fail_disposition:
-                report_sha = prompt.stem.removeprefix("address-")
+                report_sha = prompt.stem.removeprefix("address-").split("-")[0]
                 candidate_sha = git(tree, "rev-parse", "HEAD")
                 decisions = []
                 if self.with_finding:
@@ -131,6 +157,14 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
                     git(tree, "commit", "-am", "address finding")
                     decisions = [
                         {"id": "F1", "status": "fixed", "reason": "Updated the value and verified its consumer."}
+                    ]
+                if self.needs_decision:
+                    decisions = [
+                        {
+                            "id": "F1",
+                            "status": "needs_decision",
+                            "reason": "Confirm expected value within the original scope.",
+                        }
                     ]
                 (output / "dispositions.json").write_text(
                     json.dumps(
@@ -175,6 +209,183 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             return launched
         return {"ok": True, "process_exited": True, "returncode": 0, "pid": 1073741824}
 
+    def test_review_decision_records_only_a_bound_question(self):
+        driver = self.start(["claude"])
+        self.with_finding = self.needs_decision = True
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        with fixture_database.connect(self.db) as conn:
+            saved = store.session(conn, task_id=driver.task_id)
+            question = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])[
+                "operator_question"
+            ]
+            self.assertEqual(question["kind"], "scope_decision")
+            self.assertEqual(saved["proof"]["decision"]["round_id"], driver.round_id)
+            self.assertEqual(saved["proof"]["decision"]["candidate_sha"], saved["manifest"]["head_sha"])
+            self.assertEqual(saved["proof"]["decision"]["report_sha256"], saved["report_sha256"])
+            self.assertEqual(saved["status"], "waiting_for_user")
+            self.assertFalse(any(run["slot_reserved"] for run in store.runs(conn, driver.round_id)))
+            actions = conn.execute("SELECT action_type FROM github_actions").fetchall()
+            self.assertEqual([row[0] for row in actions], ["comment"])
+        self.assertEqual(self.launches["address"], 1)
+
+    def test_web_review_decision_has_no_publication_and_resumes(self):
+        driver = self.start(["claude"], local=True)
+        self.with_finding = self.needs_decision = True
+        recorded = driver.run()
+        self.assertTrue(recorded["ok"], recorded)
+        self.cycle([])
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
+            self.assertEqual(capacity.running_attempt_count(conn, "repo:example/backend"), 0)
+            item = conn.execute("SELECT work_item_id,version FROM work_items").fetchone()
+            question = conn.execute(
+                "SELECT event_id FROM work_item_events WHERE event_type='operator_question'"
+            ).fetchone()
+        context = commands.CommandContext(
+            "operator", "owner", frozenset({"repo:example/backend"}), frozenset({"codex", "claude"})
+        )
+        commands.execute_command(
+            self.db,
+            item[0],
+            context=context,
+            command="reply",
+            expected_version=item[1],
+            expected_event_id=question[0],
+            idempotency_key="web-review-reply",
+            body="Use the expected value within the original scope.",
+        )
+        self.needs_decision = False
+        self.cycle([])
+        task, attempt = self.current()
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(store.session(conn, task_id=task)["round_id"], driver.round_id)
+        self.assertTrue(
+            Coordinator(self.db, task, attempt, launcher=self.launch_pr_stage, poll_seconds=0.01).run()["ok"]
+        )
+        self.assertEqual(self.launches["implement"], 1)
+        self.assertEqual(self.launches["reviewer-prompt.md"], 1)
+        self.assertEqual(self.launches["address"], 2)
+
+    def finish_review_question(self):
+        driver = self.start(["claude"])
+        self.with_finding = self.needs_decision = True
+        recorded = driver.run()
+        with fixture_database.connect(self.db) as conn:
+            conn.execute(
+                "UPDATE github_actions SET publish_status='published' WHERE result_id=?", (recorded["result_id"],)
+            )
+        self.cycle([])
+        with fixture_database.connect(self.db) as conn:
+            item = conn.execute("SELECT work_item_id,version FROM work_items").fetchone()
+            question = conn.execute(
+                "SELECT event_id,metadata_json FROM work_item_events WHERE event_type='operator_question'"
+            ).fetchone()
+            lifecycle = conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (driver.task_id,)).fetchone()[0]
+        self.assertEqual(lifecycle, "waiting_for_user")
+        self.assertEqual(json.loads(question[1])["pre_pr_review"]["round_id"], driver.round_id)
+        context = commands.CommandContext(
+            "operator", "owner", frozenset({"repo:example/backend"}), frozenset({"codex", "claude"})
+        )
+        return driver, item, question, context
+
+    def test_authenticated_reply_reuses_review_and_resumes_only_address(self):
+        driver, item, question, context = self.finish_review_question()
+        args = dict(
+            context=context,
+            command="reply",
+            expected_version=item[1],
+            expected_event_id=question[0],
+            idempotency_key="review-reply",
+            body="Use the expected value within the original scope.",
+        )
+        accepted = commands.execute_command(self.db, item[0], **args)
+        replayed = commands.execute_command(self.db, item[0], **args)
+        self.assertEqual(accepted, replayed)
+        self.needs_decision = False
+        with patch(
+            "robert_agent.work.operator_queries.source_read",
+            return_value=(True, {"state": "open", "title": "Update example", "body": "Update the example"}),
+        ):
+            self.cycle([])
+        task, attempt = self.current()
+        self.assertNotEqual(task, driver.task_id)
+        with fixture_database.connect(self.db) as conn:
+            resumed = store.session(conn, task_id=task)
+        self.assertIsNotNone(resumed)
+        self.assertEqual(resumed["round_id"], driver.round_id)
+        checkpoint = Path(resumed["request"]["operator_reply"]["decision"]["dispositions_path"])
+        original = checkpoint.read_bytes()
+        checkpoint.write_text("changed after the reply")
+        with self.assertRaisesRegex(StageStopped, "checkpoint changed"):
+            Coordinator(self.db, task, attempt, launcher=self.launch_pr_stage, poll_seconds=0.01)
+        checkpoint.write_bytes(original)
+        original_context = validation.context
+
+        def changed_scope(*args, **kwargs):
+            settings, rejected = original_context(*args, **kwargs)
+            return {**settings, "action_scope": {**settings["action_scope"], "base_branch": "other-base"}}, rejected
+
+        with patch("robert_agent.workflows.pre_pr_review.coordinator.validation.context", side_effect=changed_scope):
+            with self.assertRaisesRegex(StageStopped, "original review scope"):
+                Coordinator(self.db, task, attempt, launcher=self.launch_pr_stage, poll_seconds=0.01)
+        restarted = Coordinator(self.db, task, attempt, launcher=self.launch_pr_stage, poll_seconds=0.01)
+        result = restarted.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.launches["implement"], 1)
+        self.assertEqual(self.launches["reviewer-prompt.md"], 1)
+        self.assertEqual(self.launches["address"], 2)
+
+    def test_review_reply_rejects_changed_checkpoint_and_worker_override(self):
+        driver, item, question, context = self.finish_review_question()
+        args = dict(
+            context=context,
+            command="reply",
+            expected_version=item[1],
+            expected_event_id=question[0],
+            body="Continue in scope.",
+        )
+        with self.assertRaises(commands.WorkItemConflictError):
+            commands.execute_command(
+                self.db, item[0], **{**args, "expected_event_id": "stale-question"}, idempotency_key="stale-question"
+            )
+        with self.assertRaises(commands.WorkItemValidationError):
+            commands.execute_command(
+                self.db, item[0], **args, idempotency_key="override", routing_mode="manual", requested_worker="codex"
+            )
+        with fixture_database.connect(self.db) as conn:
+            saved = store.session(conn, task_id=driver.task_id)
+            Path(saved["report_path"]).write_text("changed report")
+        with self.assertRaisesRegex(commands.WorkItemConflictError, "checkpoint changed"):
+            commands.execute_command(self.db, item[0], **args, idempotency_key="stale-checkpoint")
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
+
+    def test_canceled_review_question_cannot_resume(self):
+        driver, item, question, context = self.finish_review_question()
+        canceled = commands.execute_command(
+            self.db,
+            item[0],
+            context=context,
+            command="cancel",
+            expected_version=item[1],
+            idempotency_key="cancel-review",
+        )
+        with self.assertRaises(commands.WorkItemConflictError):
+            commands.execute_command(
+                self.db,
+                item[0],
+                context=context,
+                command="reply",
+                expected_version=canceled["item"]["version"],
+                expected_event_id=question[0],
+                idempotency_key="reply-after-cancel",
+                body="Continue in scope.",
+            )
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
+            self.assertNotIn("operator_reply", store.session(conn, task_id=driver.task_id)["request"])
+
     def test_single_reviewer_and_processing_gate_result(self):
         driver = self.start(["claude"])
         early = submission.record_result(self.db, driver.envelope(self.submission))
@@ -189,6 +400,20 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             (body,) = conn.execute("SELECT metadata_json FROM github_actions WHERE action_type='open_pr'").fetchone()
             self.assertIn("未处理及原因", json.loads(body)["body"])
             self.assertEqual(queries.ready_actions(conn, 10), [])  # Pending normal audit.
+
+    def test_pre_pr_review_preserves_a_skipped_optional_check(self):
+        driver = self.start(["claude"])
+        skipped = _verification_evidence("optional-smoke", status="skipped", required=False)
+        self.verification = [*self.verification, skipped]
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.cycle([])
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(
+                [x["action_type"] for x in queries.ready_actions(conn, 10)], ["push_existing_pr", "open_pr"]
+            )
+            (metadata,) = conn.execute("SELECT metadata_json FROM worker_results").fetchone()
+            self.assertIn({**skipped, "attested": False}, json.loads(metadata)["normalized_payload"]["verification"])
 
     def test_failed_synthesis_reuses_both_reviewers(self):
         driver = self.start(["codex", "claude"])

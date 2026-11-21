@@ -14,7 +14,7 @@ repos:
           workers: [codex_reviewer, claude_reviewer]
 ```
 
-一个 reviewer 直接产出报告。多个 reviewer 使用同一冻结上下文独立审查，结果全数校验通过后，由列表中的第一个 reviewer 汇总。第一个 reviewer 也负责准备上下文。实现 Worker 在另一个本地 worktree 逐项处理报告，并验证最终提交。已启动的任务保留其审查计划和选定的 Worker。修改配置后，新任务使用更新后的计划。
+一个 reviewer 直接产出报告。多个 reviewer 使用同一冻结上下文独立审查，结果全数校验通过后，由列表中的第一个 reviewer 汇总。第一个 reviewer 也负责准备上下文。实现 Worker 在另一个本地 worktree 逐项处理报告，并验证最终提交。 必需验证必须通过。可选验证可以记录跳过原因，已执行且失败的验证会阻止发布。已启动的任务保留其审查计划和选定的 Worker。修改配置后，新任务使用更新后的计划。
 
 如果意见处理产生了新提交，Robert 会让配置列表中的第一个 reviewer 对最终 SHA
 执行一次独立定向复核：核实原报告中每一项的处理证据，并检查候选提交之后实际新增的
