@@ -42,7 +42,7 @@ class DurableResultTests(DurableResultFixture):
         with closing(sqlite3.connect(self.db)) as c, c:
             c.execute("UPDATE attempts SET status='canceled'")
             c.execute("UPDATE tasks SET lifecycle='canceled'")
-        replay = result.replay_pending_results(self.db)
+        replay = result.replay_pending_results(self.db, config={"supervision": {"mode": "decide"}})
         self.assertEqual(replay["rejected"], 1)
         with closing(sqlite3.connect(self.db)) as c:
             self.assertEqual(c.execute("SELECT count(*) FROM worker_results").fetchone()[0], 0)
