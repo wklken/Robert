@@ -720,6 +720,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
 
     observations = [supervision_rules.evaluate_controller(facts, now=now, poll_seconds=poll) for facts in controllers]
     visited = {"task": 0, "receipt": 0}
+    task_ids = []
     stall = settings.get("stall_seconds", 300)
     for kind, facts in candidates:
         if any(visited.values()) and time.monotonic() >= deadline:
@@ -733,6 +734,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
             )
             continue
         positions[kind] = facts["task_id"]
+        task_ids.append(facts["task_id"])
         dispatch = facts.pop("dispatch", {})
         if dispatch and not facts.get("process_stopped_at"):
             facts["process_status"] = _observe_process(dispatch, ps_runner, live_groups)
@@ -756,6 +758,7 @@ def collect(db_path, *, now, limit=100, config=None, cursor=""):
     complete = len(positions["done"]) == len(pages)
     return {
         "observations": observations,
+        "task_ids": task_ids,
         "coverage_complete": complete,
         "cursor": "" if complete else json.dumps(positions, separators=(",", ":")),
     }
