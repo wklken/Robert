@@ -72,7 +72,8 @@ class ReviewRemediationTests(unittest.TestCase):
     def test_repeated_repo_failure_has_one_notice_and_success_resolves_it(self):
         with mock.patch.object(monitor, "supervise_running_attempts", side_effect=ValueError("bad repo")):
             for _ in range(3):
-                run_once.run_once(self.fixture.config_path, dry_run=True, skip_external=True)
+                result = run_once.run_once(self.fixture.config_path, dry_run=True, skip_external=True)
+                self.assertEqual(result["failure_scope"], "repository")
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(
                 conn.execute(
