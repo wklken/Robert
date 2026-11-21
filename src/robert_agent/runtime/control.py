@@ -253,9 +253,18 @@ class ControlLane:
 
 
 def recover(db_path, *, scope_key, current_owner):
+    """Reconcile previous children and report the scopes whose exit is unproven."""
     with closing(db_database.connect(db_path, timeout=5)) as conn:
         rows = control_children.previous_owner_children(conn, scope_key=scope_key, current_owner=current_owner)
-    safe = True
+    blocked_lanes = set()
+    unscoped_children = []
+
+    def block(identifier, lane):
+        if lane in {"scan", "publish"}:
+            blocked_lanes.add(lane)
+        else:
+            unscoped_children.append(identifier)
+
     current_context = _boot_context() if rows else None
     for identifier, encoded, status, owner, lane in rows:
         if status == "starting":
@@ -263,8 +272,16 @@ def recover(db_path, *, scope_key, current_owner):
                 canceled = control_children.cancel_starting(conn, identifier)
             if canceled:
                 continue
-            return False  # The wrapper claimed concurrently; reobserve later.
-        recorded = json.loads(encoded)
+            # The wrapper claimed concurrently. Keep its lane fenced.
+            block(identifier, lane)
+            continue
+        try:
+            recorded = json.loads(encoded)
+            if not isinstance(recorded, dict):
+                raise ValueError("invalid control child identity")
+        except (ValueError, TypeError):
+            unscoped_children.append(identifier)
+            continue
         if _different_boot(recorded, current_context):
             with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
                 transactions.begin_immediate(conn)
@@ -276,17 +293,21 @@ def recover(db_path, *, scope_key, current_owner):
                         current_context=current_context,
                     )
                 except ValueError:
-                    safe = False
+                    block(identifier, lane)
             continue
         result = worker_identity.terminate_recorded_identity(recorded)
         from robert_agent.adapters.processes.attempt import group_stopped
 
         if result["status"] == "attention" or not group_stopped(recorded.get("pid", 0)):
-            safe = False
+            block(identifier, lane)
             continue
         with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
             control_children.mark_stopped(conn, identifier)
-    return safe
+    return {
+        "ok": not blocked_lanes and not unscoped_children,
+        "blocked_lanes": sorted(blocked_lanes),
+        "unscoped_children": unscoped_children,
+    }
 
 
 def main(argv=None):
