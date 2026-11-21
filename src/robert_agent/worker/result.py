@@ -10,7 +10,9 @@ from robert_agent.foundation.commands import emit
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Submit a worker result. Read the JSON status to determine whether it was accepted."
+    )
     parser.add_argument("--db", required=True)
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--attempt-id", required=True)
