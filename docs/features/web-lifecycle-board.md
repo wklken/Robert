@@ -81,6 +81,21 @@ Web 任务的 Worker 输入保留按顺序记录的原始事件，包括早期�
 源 Issue / PR 的状态来自最近一次后台同步。关闭源不会授权 Web 自动重新打开 GitHub 对象。
 缺少进程标识、权限不足或后台长时间占用时，页面会显示失败原因，不会伪报取消成功。
 
+## 在依赖 PR 合并后回复
+
+已认证的 Web 操作员可以为当前问题登记一条待提交的回复。在现有
+`POST /api/work-items/{work_item_id}/commands` 请求中使用 `command: reply`、
+当前 `expected_version`、原问题的 `expected_event_id` 和回复 `body`。
+再提供 `dependency.pr_url`、`dependency.task_id` 与
+`dependency.task_updated_at`。任务 ID 和 `updated_at` 来自同一详情页的任务记录。
+沿用命令入口的幂等键，重发已受理的请求会返回同一结果。
+
+返回 `waiting_for_dependency` 表示只登记了回复。后台扫描看到同仓库 PR
+确实合并后，只保存观察并请求 local drain；local lane 恢复执行后才会对原问题提交一次回复。
+扫描阶段和 dry-run 都不会提交回复或创建后继任务。普通回复、取消、任务版本变化会使旧登记
+失效。仅关闭的 PR 会继续等待。登记不会扩大原任务的仓库、基础分支或操作范围，
+也不会把依赖 PR 的代码导入当前任务。
+
 ## 恢复边界
 
 daemon 与本地调度共用 SQLite 执行状态。Worker 身份、发布意图、恢复额度和取消

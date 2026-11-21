@@ -31,6 +31,7 @@ from robert_agent.work import repositories as work_repositories
 from robert_agent.work import scan_batches as scan_batches
 from robert_agent.work import tapd_policy, wakeup
 from robert_agent.work.application import tapd_scan
+from robert_agent.work import dependency_merge
 
 from robert_agent.work import source_policy as source_policy
 
@@ -83,6 +84,10 @@ def scan_repo(config, repo, session, hints):
                 if row[6] == "github"
             )
         )
+        dependency_numbers = {
+            int(json.loads(registration["metadata_json"])["dependency"]["pr_url"].rsplit("/", 1)[1])
+            for registration in dependency_merge.pending(conn, repo_id)
+        }
         pending_rows = db_read_github_scan_batches.find_for_scan_repo(conn, repo_id)
         pending = [(row[2],) for row in pending_rows]
         # A successful batch is not proof that every driving event created a
@@ -147,6 +152,13 @@ def scan_repo(config, repo, session, hints):
                         max_summary_chars=ci["max_failure_summary_chars"],
                         runner=recorded,
                     )
+        for number in sorted(dependency_numbers):
+            if ("pull_request", number) not in remote_states:
+                # Dependency reads do not import remote work. A verified merge
+                # can enqueue an observation for the normal local consumer.
+                remote_states[("pull_request", number)] = github_sources.read_source_state(
+                    repo["full_name"], "pull_request", number, recorded
+                )
         # A newly closed PR's final review read must follow its state observation.
         for number in review_targets:
             try:
@@ -209,7 +221,14 @@ def scan_repo(config, repo, session, hints):
         )
         # Empty polling is not local work. Tracked or pending sources still
         # need a batch for closure, remediation and current-authority checks.
-        if events or sources or pending_rows or review_targets:
+        dependency_ready = any(
+            dependency_merge.merge_proven(
+                remote_states.get(("pull_request", number)),
+                f"https://github.com/{repo['full_name']}/pull/{number}",
+            )
+            for number in dependency_numbers
+        )
+        if events or sources or pending_rows or review_targets or dependency_ready:
             identifier = scan_batches.save_batch(
                 db_path, repo_id, context, events, recorded.responses, complete_sources=covered
             )

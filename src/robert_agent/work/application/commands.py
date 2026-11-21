@@ -45,7 +45,8 @@ from robert_agent.work.inputs import (
     validate_routing,
     validate_text,
 )
-from robert_agent.work import control_queries, messaging
+from robert_agent.work import control_queries, messaging, dependency_merge
+from robert_agent.persistence.queries import dependency_merge as db_read_dependency_merge
 
 from robert_agent.work.errors import WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError
 from contextlib import closing, ExitStack
@@ -907,8 +908,16 @@ def execute_command(
     priority=None,
     notifier=None,
     abandon_review_run_ids=None,
+    dependency=None,
+    dependency_resume=None,
 ):
     validate_idempotency_key(idempotency_key)
+    if (dependency is not None or dependency_resume is not None) and (
+        command != "reply" or routing_mode is not None or requested_worker is not None
+    ):
+        raise WorkItemValidationError("Dependency replies cannot change routing.")
+    if dependency is not None and dependency_resume is not None:
+        raise WorkItemValidationError("Choose registration or resume.")
     if command not in COMMANDS:
         raise WorkItemValidationError("unknown work item command")
     if not isinstance(expected_version, int) or isinstance(expected_version, bool):
@@ -941,6 +950,8 @@ def execute_command(
                 raise WorkItemNotFoundError("work item not found")
             replay = _stored_command_result(conn, work_item_id, idempotency_key)
             if replay:
+                if dependency_resume is not None:
+                    replay = {**replay, "dependency_replayed": True}
                 return _commit_result(conn, db_path, replay, notifier)
             if item["version"] != expected_version:
                 raise WorkItemConflictError("work item version is stale")
@@ -1160,6 +1171,71 @@ def execute_command(
                         "The attention item changed. Review the latest question or failure before continuing."
                     )
                 question_metadata = _decode_json(unresolved["metadata_json"], {}) if unresolved else {}
+                if dependency is not None or dependency_resume is not None:
+                    question_task_id = question_metadata.get("task_id")
+                    parent = db_records.first(db_read_tasks.find_record_by_task_id(conn, question_task_id))
+                    if parent and parent["workstream_id"] not in facts["streams"]:
+                        raise WorkItemConflictError("The waiting task scope changed.")
+                    repo_name = db_records.first(db_read_dependency_merge.repo_name(conn, item["repo_id"]))[0]
+                    if not body.strip() or facts["running"] or facts["cleanup_pending"] or facts["workflow_attention"]:
+                        raise WorkItemConflictError("The waiting task is not safely idle.")
+                    if dependency_resume is not None:
+                        registration = db_records.first(
+                            db_read_dependency_merge.registration(conn, work_item_id, dependency_resume)
+                        )
+                        if (
+                            not registration
+                            or registration["actor_kind"] != "operator"
+                            or registration["actor_identity"] != context.actor_identity
+                            or registration["body"] != body
+                        ):
+                            raise WorkItemConflictError("Dependency authority changed.")
+                        registered = _decode_json(registration["metadata_json"], {})
+                        dependency = registered.get("dependency")
+                        if (
+                            registered.get("expected_version") != expected_version
+                            or registered.get("question_id") != expected_event_id
+                        ):
+                            raise WorkItemConflictError("Dependency generation changed.")
+                    dependency = dependency_merge.validate(
+                        dependency,
+                        repo=repo_name,
+                        task=parent,
+                        question=unresolved,
+                        expected_event_id=expected_event_id,
+                        context=context,
+                    )
+                    if dependency_resume is None:
+                        if dependency_merge.pending(conn, item["repo_id"], work_item_id=work_item_id):
+                            raise WorkItemConflictError("A dependency reply is already registered for this question.")
+                        result = {
+                            "ok": True,
+                            "command": "reply",
+                            "status": "waiting_for_dependency",
+                            "item": _item_from_row(item),
+                            "task_id": None,
+                            "resolved_event_id": None,
+                        }
+                        _insert_event(
+                            conn,
+                            work_item_id,
+                            event_type="dependency_merge_requested",
+                            actor_kind=context.actor_kind,
+                            actor_identity=context.actor_identity,
+                            idempotency_key=idempotency_key,
+                            body=body,
+                            metadata={
+                                "dependency": dependency,
+                                "expected_version": expected_version,
+                                "question_id": expected_event_id,
+                                "command_result": result,
+                            },
+                            now=now,
+                        )
+                        return _commit_result(conn, db_path, result, notifier)
+                    if not dependency_merge.merged(conn, item["repo_id"], dependency["pr_url"]):
+                        raise WorkItemConflictError("Dependency merge is not verified.")
+
                 if command == WorkCommand.REPLY and question_metadata.get("kind") == "supervisor_question":
                     from robert_agent.supervision import decisions as supervisor_decisions
 
