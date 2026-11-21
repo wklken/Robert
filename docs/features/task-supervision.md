@@ -277,6 +277,12 @@ monitoring is a separate deployment responsibility.
 The published supervision boundaries are described in the
 [architecture guide](../architecture.md#worker-监督与失败恢复).
 
+A canceled or ignored task's incident can be dismissed once its workstream is
+terminal and the same lineage has no remaining work. Observation alone leaves
+the incident intact. The supervisor checks attempts, stored process exits,
+leases, recovery actions, and publication receipts again before dismissing it.
+Unknown effects or process ownership keep the incident open.
+
 ## Optional semantic diagnosis
 
 Configure a dedicated administrator-owned wrapper that accepts one JSON evidence
