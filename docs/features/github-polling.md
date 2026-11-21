@@ -17,6 +17,9 @@ and before entering each repository pipeline. Idle repositories create no step
 or lease records. A pending operator notification schedules the publisher
 independently; it does not start repository pipelines. Empty event lists still
 reach local processing when tracked sources need closure or PR health checks.
+The drain compares durable work states within its configured repositories.
+Task or attempt phase changes can continue a drain even when counts are steady.
+Heartbeat updates and repeated diagnostics do not keep a drain running.
 
 Replayed comments that already triggered a completed, failed or canceled task,
 or were consumed by an earlier task, are skipped before applying execution facts.
