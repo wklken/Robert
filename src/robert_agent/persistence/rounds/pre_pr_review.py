@@ -101,6 +101,7 @@ def rebind_for_retry(conn, previous, task_id, attempt_id):
         task_id=task_id,
         request_json=json.dumps(request, sort_keys=True),
         proof_json=None,
+        final_result_id=None,
         deadline_at=None,
         status="queued",
         error=None,
@@ -232,15 +233,45 @@ def bind_result(conn, round_id, result_id):
 def matches_submission(entry, attempt_id, fingerprint, *, head=None, result_id=None):
     proof = entry["proof"]
     return bool(
-        entry["status"] == "ready"
+        entry["status"] in {"ready", "waiting_for_user"}
         and entry["snapshot_id"] == proof.get("snapshot_id")
         and entry["report_sha256"] == proof.get("report_sha256")
         and proof.get("attempt_id") == attempt_id
         and fingerprint
         and proof.get("fingerprint") == fingerprint
-        and (head is None or proof.get("head_sha") == head)
+        and (
+            head is None
+            or proof.get("head_sha") == head
+            or (entry["status"] == "waiting_for_user" and head == proof.get("decision", {}).get("candidate_sha"))
+        )
         and (result_id is None or entry["final_result_id"] == result_id)
     )
+
+
+def validate_reply_checkpoint(entry, binding):
+    """Recheck the saved candidate and artifacts before accepting or using a reply."""
+    manifest = entry["manifest"]
+    if (
+        entry["round_id"] != binding["round_id"]
+        or manifest.get("head_sha") != binding["candidate_sha"]
+        or entry["snapshot_id"] != binding["snapshot_id"]
+        or entry["report_sha256"] != binding["report_sha256"]
+        or digest(entry["report_path"]) != binding["report_sha256"]
+        or digest(manifest["candidate"]["candidate_path"]) != manifest["candidate"]["candidate_sha256"]
+        or digest(binding["dispositions_path"]) != binding["dispositions_sha256"]
+    ):
+        raise ValueError("The review checkpoint changed. Refresh before replying.")
+
+
+def accept_reply(conn, entry, binding, body):
+    """Bind authenticated operator context to the exact sealed waiting checkpoint."""
+    proof = entry["proof"]
+    expected = proof.get("decision")
+    if entry["status"] != "waiting_for_user" or not expected or binding != expected:
+        raise ValueError("The review question changed. Refresh before replying.")
+    validate_reply_checkpoint(entry, binding)
+    request = {**entry["request"], "operator_reply": {"body": body, "decision": expected, "scope": proof["scope"]}}
+    update(conn, entry["round_id"], request_json=json.dumps(request, sort_keys=True))
 
 
 def task_status(conn, task_id):

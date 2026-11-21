@@ -1259,6 +1259,9 @@ def execute_command(
                     db_write_work_items.update_for_execute_command_5(conn, now, now, work_item_id)
                     task_id = None
                 else:
+                    review_question = unresolved_metadata.get("pre_pr_review") if command == WorkCommand.REPLY else None
+                    if review_question and (routing_mode is not None or requested_worker is not None):
+                        raise WorkItemValidationError("A review reply cannot override routing or worker authority.")
                     selected_mode = item["routing_mode"]
                     selected_worker = item["requested_worker"]
                     if routing_mode is not None:
@@ -1283,7 +1286,21 @@ def execute_command(
                         ):
                             raise WorkItemConflictError("The question owner changed. Refresh before replying.")
                         parent = question_task
-                    reviewed_retry = (
+                    if review_question:
+                        from robert_agent.persistence.rounds import pre_pr_review
+
+                        if parent is None or not _check_reviewed_retry(conn, locks, db_path, parent["task_id"]):
+                            raise WorkItemConflictError("The review question owner is unavailable.")
+                        try:
+                            pre_pr_review.accept_reply(
+                                conn,
+                                pre_pr_review.session(conn, task_id=parent["task_id"]),
+                                review_question,
+                                body,
+                            )
+                        except (OSError, ValueError) as exc:
+                            raise WorkItemConflictError(str(exc)) from exc
+                    reviewed_retry = bool(review_question) or (
                         command == WorkCommand.RETRY
                         and item["origin_type"] == "web"
                         and parent is not None
