@@ -24,6 +24,7 @@ from robert_agent.persistence.rounds import pre_pr_review as store
 from robert_agent.security.redaction import redact_and_truncate, redact_text
 from robert_agent.workflows.review import files, workspace
 from robert_agent.workflows.review.coordinator import ReviewStages
+from robert_agent.workflows.pre_pr_review import final_verification
 
 
 class ReviewDecisionRequired(StageStopped):
@@ -43,10 +44,11 @@ class Coordinator(ReviewStages):
     workspace = CandidateWorkspace()
     handoff_files = {
         **ReviewStages.handoff_files,
+        "verify_final": ("final-verification.json",),
         "implement": ("candidate.json",),
         "address_findings": ("dispositions.json",),
     }
-    artifact_kinds = (*ReviewStages.artifact_kinds, "candidate", "dispositions")
+    artifact_kinds = (*ReviewStages.artifact_kinds, "candidate", "dispositions", "final_verification")
     stage = "implement"
 
     def __init__(self, db_path, task_id, attempt_id, *, observe_base=remote_branch_sha, **kwargs):
@@ -105,9 +107,13 @@ class Coordinator(ReviewStages):
         environment = super().stage_environment(run)
         if run["stage"] == "implement":
             environment["ROBERT_PRE_PR_CANDIDATE_DIR"] = run["output_dir"]
+        if run["stage"] == "verify_final":
+            environment["ROBERT_PRE_PR_FINAL_REVIEW_INPUT"] = self.final_review["input_path"]
         return environment
 
     def stage_worktree(self, run):
+        if run["stage"] == "verify_final":
+            return self.final_review["worktree_path"]
         if run["stage"] == "address_findings":
             path = self.address_workspace(run["run_id"])
             if not path.exists():
@@ -364,8 +370,6 @@ class Coordinator(ReviewStages):
         return normalized
 
     def finalize(self, report, report_sha, disposition):
-        self.stage = "finalize"
-        self.phase(self.stage)
         head, final = self.manifest["head_sha"], disposition["head"]
         if (
             store.digest(report) != report_sha
@@ -375,6 +379,10 @@ class Coordinator(ReviewStages):
         body = report.read_text(encoding="utf-8")
         draft = self.candidate_submission()
         response = json.loads(Path(disposition["dispositions_path"]).read_text(encoding="utf-8"))
+        finding_ids = [item["id"] for item in response["dispositions"]]
+        verification = final_verification.verify(self, report, report_sha, finding_ids, disposition)
+        self.stage = "finalize"
+        self.phase(self.stage)
         draft["verification"] = response["verification"]
         action = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
         fixed = [f"- {item['id']}：{item['reason']}" for item in response["dispositions"] if item["status"] == "fixed"]
@@ -417,6 +425,7 @@ class Coordinator(ReviewStages):
             if clean_head(self.assigned_path, self.branch) != final:
                 raise StageSuperseded("assigned branch changed before final review handoff")
             proof = {
+                "final_verification": verification,
                 "attempt_id": self.attempt_id,
                 "snapshot_id": self.manifest["snapshot_id"],
                 "candidate_sha": head,

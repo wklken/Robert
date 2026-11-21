@@ -45,6 +45,39 @@ def session(conn, *, round_id=None, task_id=None):
         else None
     )
     entry["manifest"] = json.loads(row[0]) if row else {}
+    verification = entry["proof"].get("final_verification")
+    entry["final_verification_run"] = None
+    if isinstance(verification, dict) and verification.get("run_id"):
+        run = records.first(
+            statements.read(
+                conn,
+                select(RUN).where(
+                    RUN.c.run_id == verification["run_id"],
+                    RUN.c.round_id == entry["round_id"],
+                ),
+            )
+        )
+        entry["final_verification_run"] = review.decode(dict(run)) if run else None
+    legacy = entry["request"].get("legacy_review_binding")
+    entry["legacy_result_binding"] = None
+    if isinstance(legacy, dict):
+        result = tables["worker_results"]
+        row = records.first(
+            statements.read(
+                conn,
+                select(result).where(
+                    result.c.result_id == legacy.get("result_id"),
+                    result.c.task_id == entry["task_id"],
+                    result.c.attempt_id == legacy.get("attempt_id"),
+                ),
+            )
+        )
+        if row:
+            metadata = json.loads(row["metadata_json"] or "{}")
+            if metadata.get("submission_fingerprint") == legacy.get("fingerprint") and metadata.get(
+                "submission_head_sha"
+            ) == legacy.get("head_sha"):
+                entry["legacy_result_binding"] = legacy
     return entry
 
 
@@ -95,6 +128,7 @@ def bind_implementer(conn, round_id, worker):
 
 def rebind_for_retry(conn, previous, task_id, attempt_id):
     request = {**previous["request"], "retried_from_task": previous["task_id"], "retry_attempt_id": attempt_id}
+    request.pop("legacy_review_binding", None)
     update(
         conn,
         previous["round_id"],
@@ -230,6 +264,49 @@ def bind_result(conn, round_id, result_id):
     return update(conn, round_id, final_result_id=result_id)
 
 
+def _matches_final_verification(entry, result_id=None):
+    proof = entry["proof"]
+    if proof.get("candidate_sha") == proof.get("head_sha"):
+        return not entry.get("legacy_result_binding")
+    verification = proof.get("final_verification")
+    run = entry.get("final_verification_run")
+    if not isinstance(verification, dict) or not run:
+        legacy = entry.get("legacy_result_binding")
+        return bool(
+            isinstance(legacy, dict)
+            and result_id
+            and result_id == legacy.get("result_id")
+            and entry["final_result_id"] == result_id
+            and entry["task_id"] == legacy.get("task_id")
+            and proof.get("attempt_id") == legacy.get("attempt_id")
+            and proof.get("fingerprint") == legacy.get("fingerprint")
+            and proof.get("head_sha") == legacy.get("head_sha")
+            and hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest() == legacy.get("proof_sha256")
+        )
+    return bool(
+        run["stage"] == "verify_final"
+        and run["status"] == ModelRunStatus.SUCCEEDED
+        and all(
+            verification.get(key) == expected
+            for key, expected in {
+                "round_id": entry["round_id"],
+                "snapshot_id": entry["snapshot_id"],
+                "candidate_sha": proof.get("candidate_sha"),
+                "final_sha": proof.get("head_sha"),
+                "report_sha256": proof.get("report_sha256"),
+                "dispositions_sha256": proof.get("dispositions_sha256"),
+            }.items()
+        )
+        and all(
+            run["artifact"].get(key) == value
+            for key, value in verification.items()
+            if key not in {"run_id", "worker_id"}
+        )
+        and verification.get("final_verification_sha256")
+        and verification.get("input_sha256")
+    )
+
+
 def matches_submission(entry, attempt_id, fingerprint, *, head=None, result_id=None):
     proof = entry["proof"]
     return bool(
@@ -245,6 +322,7 @@ def matches_submission(entry, attempt_id, fingerprint, *, head=None, result_id=N
             or (entry["status"] == "waiting_for_user" and head == proof.get("decision", {}).get("candidate_sha"))
         )
         and (result_id is None or entry["final_result_id"] == result_id)
+        and (entry["status"] != "ready" or _matches_final_verification(entry, result_id))
     )
 
 
