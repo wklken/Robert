@@ -282,6 +282,8 @@ def _record_remote_terminal_state_locked(
         )
         if (
             not unfinished
+            and not facts["open_pull_requests"]
+            and not facts["unmerged_pull_requests"]
             and not facts["running"]
             and not facts["actions"]
             and not facts["cleanup_pending"]
@@ -325,7 +327,16 @@ def _record_remote_terminal_state_locked(
                     item["workstream_id"],
                 )
             )
-            if item["origin_type"] != SourceProvider.TAPD or not unfinished:
+            facts = control_queries.lifecycle_facts(conn, item)
+            if (
+                not unfinished
+                and not facts["open_pull_requests"]
+                and not facts["unmerged_pull_requests"]
+                and not facts["running"]
+                and not facts["actions"]
+                and not facts["cleanup_pending"]
+                and not facts["workflow_attention"]
+            ):
                 db_write_work_items.update_for_finalize_accepted_result(
                     conn, remote_state.get("merged_at") or run_now, run_now, item["work_item_id"]
                 )

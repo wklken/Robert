@@ -28,7 +28,6 @@ from robert_agent.persistence.queries import (
 )
 from robert_agent.persistence.queries import wakeups as db_read_wakeups
 from robert_agent.persistence.queries import work_items as db_read_work_items
-from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.persistence.queries.readviews import task_history
 from robert_agent.persistence.queries.readviews import work_items as work_item_queries
 from robert_agent.persistence.rounds import review as review_store
@@ -160,10 +159,6 @@ def _unresolved_attention(conn, work_item_id):
 
 def _latest_attempt(conn, task_id):
     return db_records.first(db_read_attempts.find_for_latest_attempt(conn, task_id))
-
-
-def _derived_pr(conn, root_workstream_id):
-    return db_records.first(db_read_workstreams.find_for_derived_pr(conn, root_workstream_id, root_workstream_id))
 
 
 def _exhausted_pr_remediation(conn, pr):
@@ -357,7 +352,6 @@ def _status_summary(conn, card, row, *, task, facts, attention):
 
 def _project_item(conn, row, *, controls=None, facts=None):
     work_item_id = row["work_item_id"]
-    workstream_id = row["workstream_id"]
     attention = _unresolved_attention(conn, work_item_id)
     source = db_records.first(
         db_read_github_sources.find_source_type_and_number_and_html_url_by_source_id(conn, row["origin_source_id"])
@@ -367,7 +361,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
     task = control_queries.current_task(conn, facts["streams"])
     attempt = _latest_attempt(conn, task["task_id"]) if task else None
     execution = execution_summary(conn, task["task_id"]) if task else None
-    pr = _derived_pr(conn, workstream_id) if workstream_id else None
+    pr = next(iter(facts["pull_requests"]), None)
     exhausted_remediation = None
     if pr and (pr["state"] or "open").lower() == "open":
         exhausted_remediation = _exhausted_pr_remediation(conn, pr)
@@ -509,11 +503,11 @@ def _project_item(conn, row, *, controls=None, facts=None):
             "execution_failed",
             (execution or {}).get("failure") or "Execution failed; inspect the attempt and retry.",
         )
-    elif facts["source_closed"]:
+    elif facts["source_closed"] and not facts["open_pull_requests"]:
         column, reason_code, reason_summary = (
             "waiting",
             "source_closed",
-            "Source closed; cancel this item to finish its lifecycle.",
+            "Source closed; inspect outstanding delivery or cleanup before finishing this item.",
         )
     elif task and task["lifecycle"] in ACTIVE_TASK_LIFECYCLES:
         column, reason_code, reason_summary = "todo", task["lifecycle"], "Runnable work is queued"

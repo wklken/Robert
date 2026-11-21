@@ -962,7 +962,7 @@ def execute_command(
                 )
             if facts["source_closed"] and command != WorkCommand.CANCEL:
                 raise WorkItemConflictError(
-                    "The GitHub source is closed. Cancel this item; reopen the source on GitHub before starting new work."
+                    "The source is closed. Reopen it before requesting new source work; review existing pull requests on GitHub."
                 )
             audit_task = control_queries.current_task(conn, facts["streams"])
             audit_result_id = (
