@@ -3,6 +3,7 @@ from contextlib import closing
 import json
 import sqlite3
 import subprocess
+from unittest.mock import patch
 from tests.support import PACKAGE_ROOT
 from robert_agent.execution import journal as run_journal
 from tests.support.repository_cycle import (
@@ -143,6 +144,40 @@ class RepositoryIsolationTests(RepositoryCycleFixture):
         self.assertEqual(tasks, [("Example/other", 1), ("example/backend", 1)])
         self.assertEqual(repo_steps, 2)
         self.assertEqual(len(run_summary["repo_summaries"]), 2)
+
+    def test_partial_failure_preserves_repository_scope_unless_shared_storage_fails(self):
+        from robert_agent.delivery.application import result_audit
+        from robert_agent.runtime import cycle as run_once
+
+        self.config_path.write_text(
+            self.config_path.read_text(encoding="utf-8")
+            + f"""  - full_name: Example/other
+    github_account: robot-other
+    trusted_actors:
+      - other-maintainer
+    default_branch: main
+    checkout: {self.repo_root}
+    worktrees: {self.worktree_root}
+""",
+            encoding="utf-8",
+        )
+        self.fixture_path.write_text(json.dumps({"events": []}), encoding="utf-8")
+
+        for error, expected_scope in (
+            (ValueError("bad repository payload"), "repository"),
+            (sqlite3.DatabaseError("disk I/O error"), "controller"),
+        ):
+            with (
+                self.subTest(scope=expected_scope),
+                patch.object(result_audit, "audit_completed_results", side_effect=[error, 0]) as audit,
+            ):
+                result = run_once.run_once(
+                    self.config_path, fixture_path=self.fixture_path, dry_run=True, skip_external=True
+                )
+                self.assertEqual(audit.call_count, 2)
+                self.assertEqual(result["status"], "partial_failure")
+                self.assertEqual([repo["status"] for repo in result["repo_summaries"]], ["failed", "completed"])
+                self.assertEqual(result["failure_scope"], expected_scope)
 
     def test_run_once_continues_after_one_repo_discovery_failure(self):
         from robert_agent.runtime import cycle as run_once

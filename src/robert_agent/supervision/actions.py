@@ -378,6 +378,10 @@ def _blocked(reason):
     return {"status": "blocked", "reason_code": reason}
 
 
+def _native_retry_needs_decision(config, native_retry):
+    return native_retry and model_decisions.enabled(config or {})
+
+
 def blocks_consumer(conn, *, task_id, kind, target_id, now, config, native_retry=False):
     """Read-only scheduling hint. The execution boundary still calls begin."""
     del now  # Expiration is reconciled durably by verify, never inferred here.
@@ -388,9 +392,7 @@ def blocks_consumer(conn, *, task_id, kind, target_id, now, config, native_retry
         if tuple(active[:2]) == (kind, target_id):
             return active[2] != RecoveryStatus.REQUESTED.value
         return active[2] in {RecoveryStatus.APPLYING.value, RecoveryStatus.UNKNOWN.value} or native_retry
-    # Scheduling is advisory. Native retries retain their own policy, and
-    # actual supervised claims revalidate configuration at the effect boundary.
-    return False
+    return _native_retry_needs_decision(config, native_retry)
 
 
 def begin(conn, *, task_id, kind, target_id, now, config, generation=None, native_retry=False):
@@ -406,7 +408,7 @@ def begin(conn, *, task_id, kind, target_id, now, config, generation=None, nativ
     # Ordinary domain work must not acquire a new writer or spend a recovery
     # budget. Only a previously planned supervision action grants extra work.
     if not next((dict(row) for row in db_read_supervision_recovery_actions.find_for_begin_4(conn, task_id)), None):
-        if native_retry and model_decisions.enabled(config or {}):
+        if _native_retry_needs_decision(config, native_retry):
             return _blocked("waiting_for_model_decision")
         return {"status": "legacy"}
     # Caller may already own a write transaction in atomic consumers.
