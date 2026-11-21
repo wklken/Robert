@@ -222,6 +222,53 @@ class SupervisionConsumerIntegrationTests(unittest.TestCase):
             )
         self.assertEqual(list(result_spool.directory(db).glob("*.json")), [])
 
+    def test_decide_spool_continuation_preserves_an_applying_recovery_claim(self):
+        from tests.support import compact_result
+        from robert_agent.delivery.application import submission as result
+        from robert_agent.supervision import actions
+
+        fixture = self.fixture(compact_result.CompactResultFixture)
+        db, task_id, attempt_id, _, _ = fixture.prepare("comment")
+        config = self.config(fixture.config_path, "spool_replay")
+        with patch.object(result, "_record_result_db", side_effect=sqlite3.OperationalError("database is locked")):
+            self.assertEqual(result.record_result(db, fixture.envelope(task_id, attempt_id))["status"], "deferred")
+        (path,) = result_spool.directory(db).glob("*.json")
+        fingerprint = json.loads(path.read_text())["fingerprint"]
+        now = values.utc_now()
+        with closing(sqlite3.connect(db)) as conn, conn:
+            action_id = self.request(
+                conn,
+                config,
+                task_id,
+                "result_not_consumed",
+                "result_waiting_ingestion",
+                {"attempt_id": attempt_id, "spool_fingerprint": fingerprint},
+                now,
+            )
+            gate = actions.begin(
+                conn,
+                task_id=task_id,
+                kind="spool_replay",
+                target_id=attempt_id,
+                now=now,
+                config=config,
+                generation=fingerprint,
+            )
+            self.assertEqual(gate["status"], "claimed")
+        config["supervision"]["mode"] = "decide"
+        self.assertEqual(
+            result.replay_pending_results(db, config=config), {"recorded": 0, "deferred": 1, "rejected": 0}
+        )
+        self.assertTrue(path.exists())
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
+            self.assertEqual(
+                conn.execute(
+                    "SELECT status FROM supervision_recovery_actions WHERE action_id=?", (action_id,)
+                ).fetchone(),
+                ("applying",),
+            )
+
     def test_audit_refuses_stale_request_when_operator_cancels_during_inspection(self):
         from tests.support import compact_result
         from robert_agent.delivery.application import submission as result
