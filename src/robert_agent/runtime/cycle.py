@@ -398,15 +398,14 @@ def run_once(
             "publish_result": publish_result,
             "safe_error": dispatch_failure.get("safe_error", "worker dispatch failed"),
         }
+    failure_scope = (
+        "controller" if any(item.get("failure_scope") == "controller" for item in repo_summaries) else "repository"
+    )
     if overall_status == "partial_failure":
         return {
             "ok": False,
             "status": "partial_failure",
-            "failure_scope": (
-                "controller"
-                if any(item.get("failure_status") == "repository_pipeline_failed" for item in repo_summaries)
-                else "repository"
-            ),
+            "failure_scope": failure_scope,
             "run_id": run_id,
             "db_path": str(db_path),
             "prompt_paths": prompt_paths,
@@ -425,11 +424,7 @@ def run_once(
         return {
             "ok": False,
             "status": failure_status,
-            "failure_scope": (
-                "controller"
-                if any(item.get("failure_status") == "repository_pipeline_failed" for item in repo_summaries)
-                else "repository"
-            ),
+            "failure_scope": failure_scope,
             "run_id": run_id,
             "db_path": str(db_path),
             "prompt_paths": prompt_paths,

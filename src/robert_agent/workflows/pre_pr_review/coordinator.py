@@ -16,6 +16,7 @@ from robert_agent.delivery.application import submission, validation, audit
 from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import retry
 from robert_agent.execution.stages import StageStopped, StageSuperseded, attempt_is_active, terminate_children
+from robert_agent.foundation.contracts.delivery import VerificationStatus
 from robert_agent.foundation.contracts.execution import ModelRunStatus
 from robert_agent.persistence import transactions
 from robert_agent.persistence.stores import artifacts as db_write_artifacts
@@ -23,6 +24,13 @@ from robert_agent.persistence.rounds import pre_pr_review as store
 from robert_agent.security.redaction import redact_and_truncate, redact_text
 from robert_agent.workflows.review import files, workspace
 from robert_agent.workflows.review.coordinator import ReviewStages
+from robert_agent.workflows.pre_pr_review import final_verification
+
+
+class ReviewDecisionRequired(StageStopped):
+    def __init__(self, path, value):
+        super().__init__("a review finding requires an operator decision")
+        self.path, self.value = path, value
 
 
 class CandidateWorkspace:
@@ -36,10 +44,11 @@ class Coordinator(ReviewStages):
     workspace = CandidateWorkspace()
     handoff_files = {
         **ReviewStages.handoff_files,
+        "verify_final": ("final-verification.json",),
         "implement": ("candidate.json",),
         "address_findings": ("dispositions.json",),
     }
-    artifact_kinds = (*ReviewStages.artifact_kinds, "candidate", "dispositions")
+    artifact_kinds = (*ReviewStages.artifact_kinds, "candidate", "dispositions", "final_verification")
     stage = "implement"
 
     def __init__(self, db_path, task_id, attempt_id, *, observe_base=remote_branch_sha, **kwargs):
@@ -52,7 +61,16 @@ class Coordinator(ReviewStages):
             settings, rejected = validation.context(conn, task_id, attempt_id)
         if rejected:
             raise StageStopped("the task no longer authorizes implementation")
+        self.origin_type = settings["origin_type"]
         self.scope = settings["action_scope"]
+        reply = self.request.get("operator_reply")
+        if reply:
+            if any(self.scope.get(key) != value for key, value in reply["scope"].items()):
+                raise StageStopped("operator reply cannot change the original review scope")
+            try:
+                store.validate_reply_checkpoint(self.session, reply["decision"])
+            except (OSError, ValueError) as exc:
+                raise StageStopped(str(exc)) from exc
         self.assigned_path = self.scope["worktree_path"]
         self.branch = self.scope["branch_name"]
         self.base = self.scope["base_branch"]
@@ -89,9 +107,13 @@ class Coordinator(ReviewStages):
         environment = super().stage_environment(run)
         if run["stage"] == "implement":
             environment["ROBERT_PRE_PR_CANDIDATE_DIR"] = run["output_dir"]
+        if run["stage"] == "verify_final":
+            environment["ROBERT_PRE_PR_FINAL_REVIEW_INPUT"] = self.final_review["input_path"]
         return environment
 
     def stage_worktree(self, run):
+        if run["stage"] == "verify_final":
+            return self.final_review["worktree_path"]
         if run["stage"] == "address_findings":
             path = self.address_workspace(run["run_id"])
             if not path.exists():
@@ -211,9 +233,21 @@ class Coordinator(ReviewStages):
         self.phase(self.stage)
         candidate_path = self.manifest["candidate"]["candidate_path"]
         head = self.manifest["head_sha"]
+        reply = self.request.get("operator_reply")
+        generation = hashlib.sha256(json.dumps(reply, sort_keys=True).encode()).hexdigest() if reply else ""
+        input_hash = report_sha + ("-" + generation if generation else "")
         prompt = self.prompt(
-            "address-" + report_sha + ".md",
-            render_prompt(address_findings_input(self.manifest, candidate_path, path, report_sha, ids)).text,
+            "address-" + input_hash + ".md",
+            render_prompt(
+                address_findings_input(
+                    self.manifest,
+                    candidate_path,
+                    path,
+                    report_sha,
+                    ids,
+                    operator_reply=reply,
+                )
+            ).text,
         )
 
         def validate(output, _model):
@@ -245,7 +279,7 @@ class Coordinator(ReviewStages):
             if seen != set(ids):
                 raise ValueError("disposition handoff omitted a finding")
             if any(item["status"] == "needs_decision" for item in value["dispositions"]):
-                raise StageStopped("a review finding requires an operator decision")
+                raise ReviewDecisionRequired(disposition, value)
             tree = self.address_workspace(output.name)
             final = clean_head(tree)
             if final != value.get("final_sha"):
@@ -253,9 +287,10 @@ class Coordinator(ReviewStages):
             git(tree, "merge-base", "--is-ancestor", head, final)
             if final == head and any(item["status"] == "fixed" for item in value["dispositions"]):
                 raise ValueError("a finding marked fixed requires a new commit")
-            if not any(isinstance(check, dict) and check.get("status") == "passed" for check in value["verification"]):
-                raise ValueError("final verification must include a passing check")
-            if any(not isinstance(check, dict) or check.get("status") != "passed" for check in value["verification"]):
+            if any(
+                isinstance(check, dict) and check.get("status") == VerificationStatus.FAILED
+                for check in value["verification"]
+            ):
                 raise ValueError("final verification contains an unsuccessful check")
             draft = self.candidate_submission()
             draft["verification"] = value["verification"]
@@ -268,7 +303,54 @@ class Coordinator(ReviewStages):
                 "head": final,
             }
 
-        return self.run_phase(self.stage, self.implementer, prompt, validate, input_hash=report_sha)
+        return self.run_phase(self.stage, self.implementer, prompt, validate, input_hash=input_hash)
+
+    def wait_for_decision(self, decision, report_sha):
+        self.check_active()
+        self.check_base()
+        pending = [item for item in decision.value["dispositions"] if item["status"] == "needs_decision"]
+        summary = "Review findings require a decision within the original task scope.\n" + "\n".join(
+            f"{item['id']}: {item['reason']}" for item in pending
+        )
+        summary = redact_and_truncate(summary, 1900).get("text", "Review findings require an operator decision.")
+        binding = {
+            "round_id": self.round_id,
+            "snapshot_id": self.manifest["snapshot_id"],
+            "candidate_sha": self.manifest["head_sha"],
+            "report_sha256": report_sha,
+            "dispositions_path": str(decision.path),
+            "dispositions_sha256": store.digest(decision.path),
+        }
+        draft = self.candidate_submission()
+        draft.update(
+            planned_github_actions=[]
+            if self.origin_type == "web"
+            else [{"type": "comment", "target_url": self.request["event"]["html_url"], "body": summary}],
+            operator_question={"kind": "scope_decision", "summary": summary, "choices": []},
+            handoff="Waiting for an authenticated reply within the original task scope.",
+        )
+        envelope = {**self.envelope(draft), "output_type": "waiting_for_user"}
+        scope_keys = ("repo", "github_account", "base_branch", "worktree_path", "branch_name", "remote", "sources")
+        proof = {
+            "attempt_id": self.attempt_id,
+            "snapshot_id": self.manifest["snapshot_id"],
+            "report_sha256": report_sha,
+            "head_sha": "",
+            "decision": binding,
+            "scope": {key: self.scope[key] for key in scope_keys},
+            "fingerprint": contract.semantic_fingerprint(envelope),
+        }
+        with store.connect(self.db_path) as conn:
+            transactions.begin(conn, immediate=True)
+            if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                raise StageStopped("review owner changed before question handoff")
+            if any(run["slot_reserved"] for run in store.runs(conn, self.round_id)):
+                raise StageStopped("review processes must exit before requesting a reply")
+            store.update(conn, self.round_id, status="waiting_for_user", proof_json=json.dumps(proof, sort_keys=True))
+        result = submission.record_result(self.db_path, envelope)
+        if not result.get("ok"):
+            raise StageStopped("review question submission blocked: " + result.get("reason_code", result["status"]))
+        return result
 
     def candidate_submission(self):
         candidate = self.manifest["candidate"]
@@ -288,8 +370,6 @@ class Coordinator(ReviewStages):
         return normalized
 
     def finalize(self, report, report_sha, disposition):
-        self.stage = "finalize"
-        self.phase(self.stage)
         head, final = self.manifest["head_sha"], disposition["head"]
         if (
             store.digest(report) != report_sha
@@ -299,6 +379,10 @@ class Coordinator(ReviewStages):
         body = report.read_text(encoding="utf-8")
         draft = self.candidate_submission()
         response = json.loads(Path(disposition["dispositions_path"]).read_text(encoding="utf-8"))
+        finding_ids = [item["id"] for item in response["dispositions"]]
+        verification = final_verification.verify(self, report, report_sha, finding_ids, disposition)
+        self.stage = "finalize"
+        self.phase(self.stage)
         draft["verification"] = response["verification"]
         action = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
         fixed = [f"- {item['id']}：{item['reason']}" for item in response["dispositions"] if item["status"] == "fixed"]
@@ -341,6 +425,7 @@ class Coordinator(ReviewStages):
             if clean_head(self.assigned_path, self.branch) != final:
                 raise StageSuperseded("assigned branch changed before final review handoff")
             proof = {
+                "final_verification": verification,
                 "attempt_id": self.attempt_id,
                 "snapshot_id": self.manifest["snapshot_id"],
                 "candidate_sha": head,
@@ -394,6 +479,8 @@ class Coordinator(ReviewStages):
                 report, sha, ids = self.report(records)
                 disposition = self.address(report, sha, ids)
                 return self.finalize(report, sha, disposition)
+            except ReviewDecisionRequired as exc:
+                return self.wait_for_decision(exc, sha)
             except (OSError, subprocess.SubprocessError, ValueError, RuntimeError) as exc:
                 error = redact_and_truncate(str(exc), 500).get("text", "[redacted]")
                 with store.connect(self.db_path) as conn:
