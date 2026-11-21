@@ -516,3 +516,13 @@ is stale. Fresh independent coverage owns overlapping delay/control alerts.
 Disabling recovery stops new actions; outstanding claims still require draining
 or reconciliation. Keep receipts, unknown scopes and budgets until their effects
 have been verified. No production service or model profile is enabled merely by installing this code.
+
+When pre-publication finding processing needs an operator decision, GitHub requests
+submit only the existing question comment. Web requests create a local question
+without publication actions. Both record a structured question after the normal
+audit and delivery checks. The question pins the review round, snapshot,
+candidate, report and disposition checkpoint. After process exit is confirmed,
+an authenticated versioned reply can resume finding processing with the original
+candidate and reviews. The reply is context within the original scope; it cannot
+change routing, workers, base branch, publication targets or action permissions.
+A stale checkpoint, canceled request or stale question cannot resume the round.
