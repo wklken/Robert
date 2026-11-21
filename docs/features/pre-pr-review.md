@@ -14,7 +14,7 @@ repos:
           workers: [codex_reviewer, claude_reviewer]
 ```
 
-一个 reviewer 直接产出报告。多个 reviewer 使用同一冻结上下文独立审查，结果全数校验通过后，由列表中的第一个 reviewer 汇总。第一个 reviewer 也负责准备上下文。实现 Worker 在另一个本地 worktree 逐项处理报告，并验证最终提交。已启动的任务保留其审查计划和选定的 Worker。修改配置后，新任务使用更新后的计划。
+一个 reviewer 直接产出报告。多个 reviewer 使用同一冻结上下文独立审查，结果全数校验通过后，由列表中的第一个 reviewer 汇总。第一个 reviewer 也负责准备上下文。实现 Worker 在另一个本地 worktree 逐项处理报告，并验证最终提交。 必需验证必须通过。可选验证可以记录跳过原因，已执行且失败的验证会阻止发布。已启动的任务保留其审查计划和选定的 Worker。修改配置后，新任务使用更新后的计划。
 
 PR 正文包含 Review 报告、已修复项、未处理项及原因，并注明候选和最终提交。Robert 保存各 reviewer 的原始结果和汇总输入。Reviewer、准备和汇总共享 `scheduler.model_max_concurrency`，一个新 PR 任务占用一个普通任务额度。
 

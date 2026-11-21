@@ -16,6 +16,7 @@ from robert_agent.delivery.application import submission, validation, audit
 from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import retry
 from robert_agent.execution.stages import StageStopped, StageSuperseded, attempt_is_active, terminate_children
+from robert_agent.foundation.contracts.delivery import VerificationStatus
 from robert_agent.foundation.contracts.execution import ModelRunStatus
 from robert_agent.persistence import transactions
 from robert_agent.persistence.stores import artifacts as db_write_artifacts
@@ -253,9 +254,10 @@ class Coordinator(ReviewStages):
             git(tree, "merge-base", "--is-ancestor", head, final)
             if final == head and any(item["status"] == "fixed" for item in value["dispositions"]):
                 raise ValueError("a finding marked fixed requires a new commit")
-            if not any(isinstance(check, dict) and check.get("status") == "passed" for check in value["verification"]):
-                raise ValueError("final verification must include a passing check")
-            if any(not isinstance(check, dict) or check.get("status") != "passed" for check in value["verification"]):
+            if any(
+                isinstance(check, dict) and check.get("status") == VerificationStatus.FAILED
+                for check in value["verification"]
+            ):
                 raise ValueError("final verification contains an unsuccessful check")
             draft = self.candidate_submission()
             draft["verification"] = value["verification"]
