@@ -27,6 +27,8 @@ PR_MAINLINE_MIGRATION_CHECKSUM = hashlib.sha256(PR_MAINLINE_MIGRATION_NAME.encod
 RECOMMENDED_SKILLS_MIGRATION_VERSION = 5
 RECOMMENDED_SKILLS_MIGRATION_NAME = "robert-route-recommended-skills-v1"
 RECOMMENDED_SKILLS_MIGRATION_CHECKSUM = hashlib.sha256(RECOMMENDED_SKILLS_MIGRATION_NAME.encode("utf-8")).hexdigest()
+FINAL_VERIFIER_MIGRATION_NAME = "robert-pre-pr-final-verifier-v1"
+FINAL_VERIFIER_MIGRATION_CHECKSUM = hashlib.sha256(FINAL_VERIFIER_MIGRATION_NAME.encode("utf-8")).hexdigest()
 SUPERVISION_MIGRATION_VERSION = 6
 SUPERVISION_MIGRATION_NAME = "robert-supervision-v1"
 SUPERVISION_MIGRATION_CHECKSUM = hashlib.sha256(SUPERVISION_MIGRATION_NAME.encode("utf-8")).hexdigest()
@@ -522,6 +524,8 @@ def init_database(db_path, schema_path=None):
         review_schema.initialize(conn)
         vote_schema.initialize(conn)
         pre_pr_review.initialize(conn)
+        if _data_migration_pending(conn, FINAL_VERIFIER_MIGRATION_NAME, FINAL_VERIFIER_MIGRATION_CHECKSUM):
+            pending.append((7, FINAL_VERIFIER_MIGRATION_NAME, FINAL_VERIFIER_MIGRATION_CHECKSUM))
         if built_in_schema and _data_migration_pending(
             conn, SUPERVISION_MIGRATION_NAME, SUPERVISION_MIGRATION_CHECKSUM
         ):

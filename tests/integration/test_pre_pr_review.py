@@ -71,6 +71,7 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
         self.fail_synthesis = False
         self.fail_disposition = False
         self.with_finding = False
+        self.final_review_mode = "approved"
         self.launches = Counter()
         return driver
 
@@ -83,6 +84,42 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             (tree / "source.py").write_text("value = 3\n")
             git(tree, "commit", "-am", "implement")
             (output / "candidate.json").write_text(json.dumps(self.submission))
+        elif prompt.name.startswith("verify-final-"):
+            self.launches["verify_final"] += 1
+            value = json.loads(Path(kwargs["trusted_environment"]["ROBERT_PRE_PR_FINAL_REVIEW_INPUT"]).read_text())
+            self.assertEqual(git(tree, "rev-parse", "HEAD"), value["final_sha"])
+            self.assertIn("value = 4", (tree / "source.py").read_text())
+            self.assertIn("value = 3", Path(value["additional_diff_path"]).read_text())
+            if self.final_review_mode == "failed":
+                return {"ok": True, "process_exited": True, "returncode": 1, "pid": 1073741824}
+            result = {
+                key: value[key]
+                for key in (
+                    "round_id",
+                    "snapshot_id",
+                    "candidate_sha",
+                    "final_sha",
+                    "report_sha256",
+                    "dispositions_sha256",
+                    "additional_diff_sha256",
+                )
+            }
+            result.update(
+                schema_version=1,
+                recommendation="approved",
+                blocking_findings=[],
+                checked_findings=[
+                    {"id": item, "status": "resolved", "reason": "Verified final code and new diff"}
+                    for item in value["finding_ids"]
+                ],
+            )
+            if self.final_review_mode == "wrong_sha":
+                result["final_sha"] = value["candidate_sha"]
+            elif self.final_review_mode in {"blocked", "unknown"}:
+                result["recommendation"] = self.final_review_mode
+            elif self.final_review_mode == "blocking_approval":
+                result["checked_findings"][0]["status"] = "blocking"
+            (output / "final-verification.json").write_text(json.dumps(result))
         elif prompt.name.startswith("address-"):
             self.launches["address"] += 1
             if not self.fail_disposition:
@@ -347,3 +384,173 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             self.assertEqual(capacity.running_attempt_count(conn, "repo:example/backend"), 1)
             self.assertEqual(pool.status(conn)["in_use"], 0)
             self.assertFalse(rounds.observe_exit(conn, driver.task_id)["all_stopped"])
+
+    def test_changed_final_sha_requires_a_bound_reviewer_proof(self):
+        driver = self.start(["claude"])
+        self.with_finding = True
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.launches["verify_final"], 1)
+        with fixture_database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=driver.task_id)
+            proof = entry["proof"]["final_verification"]
+            self.assertEqual(proof["final_sha"], entry["proof"]["head_sha"])
+            self.assertEqual(proof["round_id"], driver.round_id)
+            self.assertTrue(store.matches_submission(entry, driver.attempt_id, entry["proof"]["fingerprint"]))
+            entry["proof"]["final_verification"]["final_sha"] = entry["proof"]["candidate_sha"]
+            self.assertFalse(store.matches_submission(entry, driver.attempt_id, entry["proof"]["fingerprint"]))
+
+    def assert_final_rejected(self, mode):
+        driver = self.start(["claude"])
+        self.with_finding = True
+        self.final_review_mode = mode
+        with patch.object(driver.stopping, "wait", return_value=False), self.assertRaises(RuntimeError):
+            driver.run()
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
+        self.assertLessEqual(self.launches["verify_final"], 3)
+
+    def test_wrong_sha_cannot_release_a_result(self):
+        self.assert_final_rejected("wrong_sha")
+
+    def test_blocking_final_approval_cannot_release_a_result(self):
+        self.assert_final_rejected("blocking_approval")
+
+    def test_blocked_final_review_cannot_release_a_result(self):
+        self.assert_final_rejected("blocked")
+
+    def test_unknown_final_review_cannot_release_a_result(self):
+        self.assert_final_rejected("unknown")
+
+    def test_failed_final_review_cannot_release_a_result(self):
+        self.assert_final_rejected("failed")
+
+    def test_final_reviewer_restart_adopts_output_without_relaunching_completed_stages(self):
+        driver = self.start(["claude"])
+        self.with_finding = True
+        wait = driver._wait
+
+        def interrupt_final(run, launched, timeout):
+            if run["stage"] == "verify_final":
+                raise KeyboardInterrupt("coordinator restarted during final review")
+            return wait(run, launched, timeout)
+
+        with patch.object(driver, "_wait", side_effect=interrupt_final), self.assertRaises(KeyboardInterrupt):
+            driver.run()
+        with fixture_database.connect(self.db) as conn:
+            final = [run for run in store.runs(conn, driver.round_id) if run["stage"] == "verify_final"]
+            self.assertEqual(final[0]["status"], "running")
+            self.assertEqual(final[0]["slot_reserved"], 1)
+        restarted = Coordinator(
+            self.db, driver.task_id, driver.attempt_id, launcher=self.launch_pr_stage, poll_seconds=0.01
+        )
+        self.assertTrue(restarted.run()["ok"])
+        self.assertEqual(self.launches["reviewer-prompt.md"], 1)
+        self.assertEqual(self.launches["address"], 1)
+        self.assertEqual(self.launches["verify_final"], 1)
+
+    def test_final_reviewer_schema_upgrade_preserves_old_runs_and_constraints(self):
+        import sqlite3
+        from robert_agent.persistence.schema import database
+
+        driver = self.start(["claude"])
+        with fixture_database.connect(self.db) as conn:
+            run = store.new_run(conn, driver.round_id, "review", "claude", driver.attempt_id, self.root, "old-prompt")
+            store.update_run(
+                conn, run["run_id"], status="running", slot_reserved=1, dispatch_json=json.dumps({"pid": 1073741824})
+            )
+            old = dict(conn.execute("SELECT * FROM pre_pr_review_runs").fetchone())
+            ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name='pre_pr_review_runs'").fetchone()[0]
+            conn.execute("ALTER TABLE pre_pr_review_runs RENAME TO legacy_runs")
+            conn.execute(ddl.replace(",'verify_final'", ""))
+            columns = ",".join(old)
+            conn.execute(f"INSERT INTO pre_pr_review_runs ({columns}) SELECT {columns} FROM legacy_runs")
+            conn.execute("DROP TABLE legacy_runs")
+            conn.execute("DELETE FROM schema_migrations WHERE name=?", (database.FINAL_VERIFIER_MIGRATION_NAME,))
+        database.init_database(self.db)
+        database.init_database(self.db)
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(dict(conn.execute("SELECT * FROM pre_pr_review_runs").fetchone()), old)
+            ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name='pre_pr_review_runs'").fetchone()[0]
+            self.assertIn("verify_final", ddl)
+            self.assertIn("UNIQUE (round_id, stage, worker_id, attempt_no)", ddl)
+            self.assertIn("UNIQUE (output_dir)", ddl)
+            self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+            self.assertIsNotNone(
+                conn.execute("SELECT 1 FROM sqlite_master WHERE name='pre_pr_review_runs_reserved'").fetchone()
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute("UPDATE pre_pr_review_runs SET stage='unsupported'")
+            store.new_run(conn, driver.round_id, "verify_final", "claude", driver.attempt_id, self.root, "new-prompt")
+
+    def emulate_pre_upgrade_ready_result(self, driver):
+        from robert_agent.persistence.schema import database
+
+        with fixture_database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=driver.task_id)
+            proof = {key: value for key, value in entry["proof"].items() if key != "final_verification"}
+            store.update(conn, driver.round_id, proof_json=json.dumps(proof))
+            conn.execute("DELETE FROM pre_pr_review_runs WHERE stage='verify_final'")
+            ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name='pre_pr_review_runs'").fetchone()[0]
+            conn.execute("ALTER TABLE pre_pr_review_runs RENAME TO legacy_runs")
+            conn.execute(ddl.replace(",'verify_final'", ""))
+            conn.execute("INSERT INTO pre_pr_review_runs SELECT * FROM legacy_runs")
+            conn.execute("DROP TABLE legacy_runs")
+            conn.execute("DELETE FROM schema_migrations WHERE name=?", (database.FINAL_VERIFIER_MIGRATION_NAME,))
+        return proof
+
+    def test_upgrade_preserves_old_accepted_frozen_publication(self):
+        from robert_agent.delivery.application import guards
+        from robert_agent.persistence.schema import database
+
+        driver = self.start(["claude"])
+        self.with_finding = True
+        self.assertTrue(driver.run()["ok"])
+        proof = self.emulate_pre_upgrade_ready_result(driver)
+        with patch.object(store, "_matches_final_verification", return_value=True):
+            self.cycle([])
+        database.init_database(self.db)
+        with fixture_database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=driver.task_id)
+            self.assertEqual(entry["proof"], proof)
+            actions = queries.ready_actions(conn, 10)
+            self.assertEqual(len(actions), 2)
+            for action in actions:
+                self.assertIsNone(guards.publication_scope_guard(conn, action))
+
+    def test_upgrade_binds_only_the_preexisting_unaudited_result(self):
+        from robert_agent.persistence.schema import database
+
+        driver = self.start(["claude"])
+        self.with_finding = True
+        result = driver.run()
+        proof = self.emulate_pre_upgrade_ready_result(driver)
+        database.init_database(self.db)
+        self.cycle([])
+        with fixture_database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=driver.task_id)
+            self.assertEqual(entry["proof"], proof)
+            self.assertEqual(len(queries.ready_actions(conn, 10)), 2)
+            self.assertTrue(
+                store.matches_submission(entry, driver.attempt_id, proof["fingerprint"], result_id=result["result_id"])
+            )
+            self.assertFalse(store.matches_submission(entry, driver.attempt_id, proof["fingerprint"]))
+            self.assertFalse(
+                store.matches_submission(entry, driver.attempt_id, proof["fingerprint"], result_id="new-result")
+            )
+            entry["proof"]["head_sha"] = proof["candidate_sha"]
+            self.assertFalse(
+                store.matches_submission(entry, driver.attempt_id, proof["fingerprint"], result_id=result["result_id"])
+            )
+
+    def test_final_verifier_reuses_the_finished_address_worktree(self):
+        driver = self.start(["claude"])
+        self.with_finding = True
+        self.assertTrue(driver.run()["ok"])
+        with fixture_database.connect(self.db) as conn:
+            address = next(run for run in store.runs(conn, driver.round_id) if run["stage"] == "address_findings")
+            self.assertEqual(address["slot_reserved"], 0)
+            self.assertEqual(address["status"], "succeeded")
+        self.assertEqual(Path(driver.final_review["worktree_path"]), driver.address_workspace(address["run_id"]))
+        self.assertFalse((Path(driver.repo["worktree_root"]) / "pre-pr-final").exists())

@@ -298,3 +298,55 @@ def address_findings_input(manifest, candidate_path, report_path, report_sha, de
             _file_item("report", "Frozen report with the findings to address", "Robert", report_path, report_sha),
         ),
     )
+
+
+def final_review_input(inputs, input_path):
+    identity = {
+        key: inputs[key]
+        for key in (
+            "round_id",
+            "snapshot_id",
+            "candidate_sha",
+            "final_sha",
+            "report_sha256",
+            "dispositions_sha256",
+            "additional_diff_sha256",
+        )
+    }
+    return PromptInput(
+        "review.verify_final",
+        identity,
+        _files_output(
+            "final_review",
+            _REVIEW_DIR,
+            ("final-verification.json",),
+            "Pre-PR release gate",
+            {
+                "schema_version": 1,
+                **identity,
+                "recommendation": "approved",
+                "checked_findings": [
+                    {"id": item, "status": "resolved", "reason": "concrete final source evidence"}
+                    for item in inputs["finding_ids"]
+                ],
+                "blocking_findings": [],
+            },
+        ),
+        authority={"source_access": "read-only", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
+        context_items=(
+            _file_item(
+                "final-review-inputs",
+                "Pinned findings, dispositions, additional diff and their digests",
+                "Robert",
+                input_path,
+                inputs["final_sha"],
+            ),
+            _file_item(
+                "final-worktree",
+                "Actual final candidate source, callers and tests",
+                "Robert",
+                inputs["worktree_path"],
+                inputs["final_sha"],
+            ),
+        ),
+    )
