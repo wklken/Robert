@@ -1,6 +1,6 @@
 """Shared stores operations for daemon_events."""
 
-from sqlalchemy import bindparam
+from sqlalchemy import bindparam, update
 from sqlalchemy.dialects.sqlite import insert
 
 
@@ -31,3 +31,18 @@ def record_event(conn, daemon_event_id, daemon_run_id, event_type, status, now, 
             "p5": value_6,
         },
     )
+
+
+def complete_idle_drain(conn, daemon_run_id, event_id, now, metadata_json):
+    events = tables["daemon_events"]
+    stmt = (
+        update(events)
+        .where(
+            events.c.daemon_event_id == event_id,
+            events.c.daemon_run_id == daemon_run_id,
+            events.c.event_type == "local_drain_started",
+            events.c.status == "running",
+        )
+        .values(event_type="local_drain_completed", status="ok", created_at=now, metadata_json=metadata_json)
+    )
+    return statements.write(conn, stmt) == 1

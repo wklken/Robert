@@ -687,7 +687,7 @@ def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json
         consume_observations=context.background_lanes is not None,
     )
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
-        daemon_state.record_event(
+        started = daemon_state.record_event(
             conn,
             context.daemon_run_id,
             "local_drain_started",
@@ -695,21 +695,29 @@ def _run_local_drain(context, *, skip_publish=False, child_runner=run_child_json
             {"command": command},
             now=now,
         )
+    started_mono = time.monotonic()
     result = child_runner(
         command,
         timeout_seconds=context.daemon_config["local_drain_timeout_seconds"],
     )
+    duration = max(0.0, time.monotonic() - started_mono)
+    finished_at = daemon_state.utc_now()
     _reconcile_child_result(context, result)
     _record_control_outcome(context, "local", result, now=now)
+    metadata = {**_event_result(result), "control_lane": "local"}
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
-        daemon_state.record_event(
-            conn,
-            context.daemon_run_id,
-            "local_drain_completed" if result.get("ok") else result.get("status", "child_failed"),
-            "ok" if result.get("ok") else "failed",
-            {**_event_result(result), "control_lane": "local"},
-            now=now,
+        merged = daemon_state.local_drain_is_idle(result) and daemon_state.complete_idle_drain(
+            conn, started, metadata, duration_seconds=duration, now=finished_at
         )
+        if not merged:
+            daemon_state.record_event(
+                conn,
+                context.daemon_run_id,
+                "local_drain_completed" if result.get("ok") else result.get("status", "child_failed"),
+                "ok" if result.get("ok") else "failed",
+                metadata,
+                now=finished_at,
+            )
     return result
 
 
