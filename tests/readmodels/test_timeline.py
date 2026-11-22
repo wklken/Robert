@@ -205,6 +205,61 @@ class CompletedWorkTests(BoardReadModelFixture):
             },
         )
 
+    def test_receipt_prefers_published_change_summary_to_git_and_verification_details(self):
+        self.result("receipt")
+        self.action("receipt", "https://github.com/example/repo/pull/2")
+        self.conn.execute(
+            "UPDATE github_actions SET metadata_json=? WHERE action_id='receipt-1-1'",
+            (
+                json.dumps(
+                    {
+                        "body": "## Summary\n- Consolidated version diff parsing.\n- Fixed empty field handling.\n"
+                        "## Verification\n- Run a long verification command."
+                    }
+                ),
+            ),
+        )
+        self.conn.execute(
+            "UPDATE worker_results SET handoff=? WHERE result_id='receipt-1'",
+            ("已实现并本地提交：a1b2c3d4e5f6；工作区干净。",),
+        )
+        self.conn.commit()
+
+        receipt = get_receipt(self.db_path, "receipt", "receipt-1")
+        self.assertEqual(receipt["summary"], "Consolidated version diff parsing.\nFixed empty field handling.")
+        self.assertFalse(receipt["summary_truncated"])
+
+    def test_receipt_extracts_handoff_outcomes_when_a_change_summary_is_unavailable(self):
+        self.result("receipt", output="local_result")
+        self.conn.execute(
+            "UPDATE worker_results SET handoff=? WHERE result_id='receipt-1'",
+            (
+                "已实现并本地提交：a1b2c3d4e5f6；工作区干净。\n\n"
+                "归并资源版本差异的检查逻辑。验证：运行了一长串命令。\n"
+                "补齐空字段与文档缺失的处理。",
+            ),
+        )
+        self.conn.commit()
+
+        receipt = get_receipt(self.db_path, "receipt", "receipt-1")
+        self.assertEqual(receipt["summary"], "归并资源版本差异的检查逻辑。\n补齐空字段与文档缺失的处理。")
+        self.assertFalse(receipt["summary_truncated"])
+
+    def test_receipt_bounds_a_long_change_summary_and_hides_verification_commands(self):
+        self.result("receipt", output="local_result")
+        long_summary = "Consolidated version diff parsing with " + "additional changes " * 35
+        self.conn.execute(
+            "UPDATE worker_results SET handoff=? WHERE result_id='receipt-1'",
+            (long_summary + ".\n## Verification\n- run-diagnostics\n",),
+        )
+        self.conn.commit()
+
+        receipt = get_receipt(self.db_path, "receipt", "receipt-1")
+        self.assertTrue(receipt["summary"].startswith("Consolidated version diff parsing"))
+        self.assertLessEqual(len(receipt["summary"]), 280)
+        self.assertNotIn("run-diagnostics", receipt["summary"])
+        self.assertTrue(receipt["summary_truncated"])
+
     def test_receipt_hides_sensitive_summary_and_rejects_undelivered_or_stale_results(self):
         self.result("receipt")
         self.result("receipt", attempt=2)

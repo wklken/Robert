@@ -20,7 +20,7 @@ const translations = {
     pageTitle: "Robert Workbench", workbenchControls: "Workbench controls", live: "Live",
     theme: "Theme", themeSystem: "System", themeLight: "Light", themeDark: "Dark",
     language: "Language", languageEnglish: "English", languageChinese: "Chinese",
-    primaryNavigation: "Primary navigation", navWork: "Work", navBoard: "Board", navHistory: "History", navTimeline: "Timeline",
+    primaryNavigation: "Primary navigation", navWork: "Work", navBoard: "Board", navHistory: "History", navTimeline: "Timeline", navProposals: "Proposals",
     navOperations: "Operations", navKnowledge: "Knowledge", workTitle: "Work queue",
     workSubtitle: "Active GitHub work that still needs attention", historyTitle: "History",
     historySubtitle: "Completed, ignored and canceled GitHub work", workSummary: "Work summary",
@@ -95,7 +95,7 @@ const translations = {
     pageTitle: "Robert 工作台", workbenchControls: "工作台控制", live: "实时",
     theme: "主题", themeSystem: "跟随系统", themeLight: "浅色", themeDark: "深色",
     language: "语言", languageEnglish: "English", languageChinese: "中文",
-    primaryNavigation: "一级导航", navWork: "工作", navBoard: "任务看板", navHistory: "历史", navTimeline: "时间线",
+    primaryNavigation: "一级导航", navWork: "工作", navBoard: "任务看板", navHistory: "历史", navTimeline: "时间线", navProposals: "提案",
     navOperations: "运行状态", navKnowledge: "知识", workTitle: "工作队列",
     workSubtitle: "仍需处理的活跃 GitHub 工作", historyTitle: "历史",
     historySubtitle: "已完成、已忽略和已取消的 GitHub 工作", workSummary: "工作摘要",
@@ -888,8 +888,12 @@ function syncControls() {
   $("work-search").value = state.filters.q;
   $("bucket-filter").value = state.filters.bucket;
   $("sort-filter").value = state.filters.sort;
-  document.querySelector('[data-nav="work"]').classList.toggle("selected", state.filters.bucket !== "history");
-  document.querySelector('[data-nav="history"]').classList.toggle("selected", state.filters.bucket === "history");
+  for (const [tab, active] of [["work", state.filters.bucket !== "history"], ["history", state.filters.bucket === "history"]]) {
+    const link = document.querySelector(`[data-nav="${tab}"]`);
+    link.classList.toggle("selected", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
   $("work-title").textContent = state.filters.bucket === "history" ? t("historyTitle") : t("workTitle");
   document.querySelector(".summary-counts").hidden = state.filters.bucket === "history";
   $("work-subtitle").textContent = state.filters.bucket === "history" ? t("historySubtitle") : t("workSubtitle");
@@ -912,7 +916,8 @@ function applyTheme(choice) {
   state.theme = ["system", "light", "dark"].includes(choice) ? choice : "system";
   const dark = matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.themeChoice = state.theme;
-  document.documentElement.dataset.colorMode = state.theme === "system" ? (dark ? "dark" : "light") : state.theme;
+  document.documentElement.dataset.theme = document.documentElement.dataset.colorMode =
+    state.theme === "system" ? (dark ? "dark" : "light") : state.theme;
   localStorage.setItem("robertWorkbenchTheme", state.theme);
   $("theme-select").value = state.theme;
 }

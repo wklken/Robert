@@ -128,6 +128,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .nav-glyph { flex: 0 0 auto; color: var(--fgColor-muted); }
 .snapshot-notice { grid-column: 1 / -1; margin: 0; padding: 8px 20px; border-bottom: 1px solid var(--borderColor-muted); color: var(--fgColor-muted); background: var(--bgColor-default); font-size: 12px; }
 
+.workbench-page { padding: 20px 20px 40px; }
+.workbench-page-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.workbench-page-heading h1 { margin: 0; font-size: 20px; font-weight: 600; line-height: 1.25; }
+
 /* Shared status vocabulary: one chip style per tone, used by every page. */
 .status-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status-chip::before { content: ""; width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: currentColor; }
@@ -164,7 +168,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .raw-detail code { padding: 0 4px; border-radius: 4px; background: var(--bgColor-inset); color: var(--fgColor-muted); }
 
 @media (max-width: 900px) {
-  .repo-header { padding-inline: 12px; }
+  .repo-header, .workbench-page { padding-inline: 12px; }
 }
 
 @media (max-width: 620px) {

@@ -71,7 +71,7 @@ function paintReceiptPaper(context, paper, origin, toothDepth) {
   }
 
   context.setLineDash([3, 2]);
-  for (const section of paper.querySelectorAll(".receipt-section, .receipt-lines, #receipt-reference")) {
+  for (const section of paper.querySelectorAll(".receipt-section")) {
     const style = getComputedStyle(section);
     const box = section.getBoundingClientRect();
     if (style.borderTopStyle !== "dashed" || !box.width) continue;

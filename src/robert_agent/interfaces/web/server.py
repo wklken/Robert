@@ -1,4 +1,5 @@
 from robert_agent.persistence import errors as db_errors
+from robert_agent.interfaces.web.shell import render_shell
 from robert_agent.interfaces.web.templates import render_dashboard_html
 from robert_agent.context.application import knowledge_review
 from robert_agent.work.application import web_setup
@@ -36,6 +37,7 @@ WEB_ASSETS = {
     "/proposals": ("proposals.html", "text/html; charset=utf-8"),
     "/assets/proposals.js": ("proposals.js", "text/javascript; charset=utf-8"),
     "/assets/proposals.css": ("proposals.css", "text/css; charset=utf-8"),
+    "/assets/shell-preferences.js": ("shell-preferences.js", "text/javascript; charset=utf-8"),
     "/favicon.ico": ("robert-favicon.svg", "image/svg+xml"),
     "/assets/robert-favicon.svg": ("robert-favicon.svg", "image/svg+xml"),
     "/assets/robert-logo.svg": ("robert-logo.svg", "image/svg+xml"),
@@ -102,12 +104,19 @@ def build_http_response(path, db_path, control_context=None):
     parsed = urlsplit(path)
     route = parsed.path
     if route in WEB_ASSETS:
-        asset_route = "/work" if route == "/" and "bucket" in parse_qs(parsed.query) else route
+        query = parse_qs(parsed.query)
+        asset_route = "/work" if route == "/" and "bucket" in query else route
         filename, content_type = WEB_ASSETS[asset_route]
         try:
             payload = (WEB_ASSET_ROOT / filename).read_bytes()
         except OSError:
             return 404, {"content-type": "text/plain; charset=utf-8"}, b"not found\n"
+        if content_type.startswith("text/html"):
+            page = "/board" if asset_route == "/" else asset_route
+            html = render_shell(
+                payload.decode("utf-8"), page, history=page == "/work" and query.get("bucket") == ["history"]
+            )
+            payload = html.encode("utf-8")
         return 200, {"content-type": content_type}, payload
     if route == "/api/proposals" or route.startswith("/api/proposals/"):
         query = parse_qs(parsed.query)

@@ -1,40 +1,40 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Proposals · Robert</title>
-  <link rel="icon" href="/favicon.ico">
+  <title>Robert · Proposals</title>
+  <!-- workbench-head -->
   <link rel="stylesheet" href="/assets/github-shell.css">
   <link rel="stylesheet" href="/assets/proposals.css">
   <script src="/assets/proposals.js" defer></script>
 </head>
 <body>
-  <header class="proposal-header">
-    <a class="proposal-brand" href="/"><img src="/assets/robert-logo.svg" alt="">Robert</a>
-    <nav class="proposal-nav" aria-label="主导航">
-      <a href="/work">Work</a>
-      <a href="/board">Board</a>
-      <a href="/proposals" aria-current="page">Proposals</a>
-      <a href="/operations">Operations</a>
-    </nav>
+  <header class="global-bar">
+    <!-- workbench-brand -->
+    <div class="global-actions">
+      <!-- workbench-preferences -->
+    </div>
   </header>
-  <main class="proposal-page">
-    <div class="proposal-toolbar">
-      <h1>提案</h1>
-      <label>状态
+  <header class="repo-header">
+    <!-- workbench-navigation -->
+  </header>
+  <main class="workbench-page">
+    <header class="workbench-page-heading">
+      <h1 data-i18n="navProposals">Proposals</h1>
+      <label class="shell-select"><span data-i18n="status">Status</span>
         <select id="proposal-filter">
-          <option value="pending">待决策</option>
-          <option value="held">暂缓</option>
-          <option value="approved">已批准，待受理</option>
-          <option value="admitted">已受理</option>
-          <option value="blocked">待复核</option>
-          <option value="discarded">已放弃</option>
-          <option value="all">全部</option>
+          <option value="pending" data-i18n="pending">Needs decision</option>
+          <option value="held" data-i18n="held">On hold</option>
+          <option value="approved" data-i18n="approved">Approved, awaiting admission</option>
+          <option value="admitted" data-i18n="admitted">Admitted</option>
+          <option value="blocked" data-i18n="blocked">Needs review</option>
+          <option value="discarded" data-i18n="discarded">Discarded</option>
+          <option value="all" data-i18n="all">All</option>
         </select>
       </label>
-    </div>
-    <p id="proposal-message" role="status">正在读取提案…</p>
+    </header>
+    <p id="proposal-message" role="status" data-i18n="loading">Loading proposals…</p>
     <ul id="proposal-list" class="proposal-list"></ul>
     <article id="proposal-detail" class="proposal-detail" hidden></article>
   </main>
