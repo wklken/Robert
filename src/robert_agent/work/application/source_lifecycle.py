@@ -143,6 +143,11 @@ def _tapd_terminal_delivery_still_blocked(
         recorded.get(key) != remote_state.get(key) for key in ("state", "state_reason", "tapd_status")
     ):
         return False
+    # An open TAPD observation clears the source's closure receipt. A later
+    # close with the same status must be applied again.
+    source = db_records.first(db_read_github_sources.find_metadata_json_and_state_by_source_id(conn, source_id))
+    if not source or values.json_object(source[0]).get("remote_state") != recorded:
+        return False
     item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
     if not item or item["origin_source_id"] != source_id:
         return False

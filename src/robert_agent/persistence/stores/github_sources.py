@@ -239,6 +239,7 @@ def upsert_tapd_source(
             "metadata_json": bindparam("p10"),
         }
     )
+    metadata = func.json_patch(table.c["metadata_json"], stmt.excluded["metadata_json"])
     stmt = stmt.on_conflict_do_update(
         index_elements=["source_key"],
         set_={
@@ -246,7 +247,10 @@ def upsert_tapd_source(
             "title": stmt.excluded["title"],
             "state": stmt.excluded["state"],
             "source_updated_at": stmt.excluded["source_updated_at"],
-            "metadata_json": func.json_patch(table.c["metadata_json"], stmt.excluded["metadata_json"]),
+            "metadata_json": case(
+                (stmt.excluded["state"] == sql_constant("open"), func.json_remove(metadata, "$.remote_state")),
+                else_=metadata,
+            ),
         },
     )
     return statements.write(
