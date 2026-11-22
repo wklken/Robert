@@ -532,8 +532,15 @@ def worker_prompt_input(
 
     if expected_output == OutputType.CLASSIFICATION_RESULT:
         result.update(recommended_route="waiting-for-user", branch_slug="")
-    if expected_output == OutputType.WAITING_FOR_USER:
-        result["operator_question"] = {"kind": "scope_decision", "summary": "<exact missing decision>"}
+    if expected_output == OutputType.WAITING_FOR_USER or (web and expected_output == OutputType.CLASSIFICATION_RESULT):
+        result["operator_question"] = {
+            "kind": "scope_decision",
+            "summary": "<exact missing decision>",
+            "choices": [
+                {"id": "a", "label": "<recommended answer>", "tradeoff": "<why this best fits the evidence>"},
+                {"id": "b", "label": "<another feasible answer>", "tradeoff": "<what this gains and costs>"},
+            ],
+        }
 
     recovery = context.get("recovery_context")
     if recovery:

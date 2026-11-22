@@ -20,6 +20,7 @@ from robert_agent.runtime import cycle as run_once
 from robert_agent.runtime import daemon
 from robert_agent.work import scan_batches, tapd_policy
 from robert_agent.work.application import source_lifecycle, synchronization
+from tests.support.work_items import example_choices
 from tests.support.tapd import STORY, comment
 from tests.support.tapd_cycle import TapdCycleCase
 
@@ -164,7 +165,11 @@ class TapdAdmissionTests(TapdCycleCase):
                 "submission": {
                     "planned_github_actions": [{"type": "comment", "body": "需要确认范围：只看接口还是包括前端？"}],
                     "consumed_event_fingerprints": ["tapd-comment:tapd.example/100/1"],
-                    "operator_question": {"kind": "scope_decision", "summary": "接口还是前端"},
+                    "operator_question": {
+                        "kind": "scope_decision",
+                        "summary": "接口还是前端",
+                        "choices": example_choices(),
+                    },
                     "verification": [],
                     "handoff": "asked",
                     "used_skills": [],

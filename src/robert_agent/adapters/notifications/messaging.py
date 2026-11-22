@@ -1,9 +1,13 @@
 """Bounded external transports for the versioned operator message envelope."""
 
+import base64
 import json
 import os
+import re
 import shlex
 import subprocess
+
+from robert_agent.foundation.question_choices import option_lines
 
 
 EVENT_LABELS = {
@@ -156,6 +160,34 @@ def configured(config=None):
     return bool(os.environ.get("ROBERT_NOTIFICATION_COMMAND") or (config or {}).get("messaging", {}).get("enabled"))
 
 
+def _choice_presentation(payload):
+    match = re.fullmatch(r"(attention-wie-|decision-)([a-f0-9]{32})", payload["notification_id"])
+    if not match:
+        return None
+    # Telegram adds its own callback prefix. Compact the existing UUID without
+    # changing its identity or placing any model-written text in the command.
+    prefix = "a" if match[1] == "attention-wie-" else "d"
+    identifier = base64.urlsafe_b64encode(bytes.fromhex(match[2])).decode().rstrip("=")
+    command = f"/robert-respond {prefix}{identifier}:{payload['version']}:"
+    buttons = [
+        {
+            "label": choice["label"] + ("（推荐）" if index == 1 else ""),
+            "action": {"type": "command", "command": command + str(index)},
+            "style": "primary" if index == 1 else "secondary",
+        }
+        for index, choice in enumerate(payload["choices"], 1)
+    ]
+    buttons.append(
+        {
+            "label": "以上都不选，自己填写",
+            "action": {"type": "command", "command": command + "x"},
+            "style": "secondary",
+            "reusable": True,
+        }
+    )
+    return {"blocks": [{"type": "buttons", "buttons": buttons}]}
+
+
 def render_message(payload, *, contextual_replies=False):
     lines = ["Robert: " + EVENT_LABELS.get(payload["type"], "新通知，请查看任务详情")]
     descriptions = {
@@ -186,13 +218,27 @@ def render_message(payload, *, contextual_replies=False):
     ):
         if payload.get(key):
             lines.append(f"{name}: {descriptions.get(key, payload[key])}")
-    for choice in payload.get("choices", []):
-        lines.append(f"{choice['id']}: {choice['label']}")
+    if payload.get("selectable_choices"):
+        lines.extend(option_lines(payload["choices"], recommended="（推荐）"))
+        lines.extend(
+            [
+                "也可以用命令选择编号。",
+                f"/robert-respond {payload['notification_id']} {payload['version']} pick <编号>",
+                "以上都不选，自己填写时请使用下方回复命令。",
+            ]
+        )
+    else:
+        for choice in payload.get("choices", []):
+            lines.append(f"{choice['id']}: {choice['label']}")
     if payload.get("task_id"):
         lines.append("查看任务: /robert-task " + payload["task_id"])
     if payload.get("request_id"):
         lines.append("/robert-inbox status " + payload["request_id"])
-    if contextual_replies and "reply" in payload.get("actions", []):
+    if (
+        contextual_replies
+        and "reply" in payload.get("actions", [])
+        and (payload["type"] != "supervision_question" or payload.get("event_id"))
+    ):
         lines.append("可在本会话直接回复。引用消息时回复该问题；没有引用时回复最近送达的待回复问题。")
     if payload.get("notification_id") and payload.get("actions", ["ack"]):
         lines.append("可执行命令:")
@@ -206,6 +252,7 @@ def render_message(payload, *, contextual_replies=False):
 
 def send(payload, *, config=None, command=None, runner=subprocess.run, receipt=None, media_paths=()):
     command = command or os.environ.get("ROBERT_NOTIFICATION_COMMAND")
+    presentation = None
     if command:
         if media_paths:
             return False
@@ -233,9 +280,16 @@ def send(payload, *, config=None, command=None, runner=subprocess.run, receipt=N
             argv += ["--thread-id", settings["thread"]]
         for media_path in media_paths:
             argv += ["--media", os.fspath(media_path)]
+        if payload.get("selectable_choices") and settings["channel"] in {"telegram", "discord", "slack"}:
+            presentation = _choice_presentation(payload)
+            if presentation:
+                argv += ["--presentation", json.dumps(presentation, ensure_ascii=False)]
         kwargs = {"timeout": 30}
     try:
         result = runner(argv, text=True, capture_output=True, check=False, **kwargs)
+        if presentation and result.returncode and result.stderr.strip() == "error: unknown option '--presentation'":
+            # This exact CLI parsing error happens before any send is attempted.
+            result = runner(argv[:-2], text=True, capture_output=True, check=False, **kwargs)
         if result.returncode != 0:
             return False
         if not command:

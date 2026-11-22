@@ -16,6 +16,7 @@ from robert_agent.work.application import commands
 from robert_agent.persistence.rounds import pre_pr_review as store
 from robert_agent.workflows.pre_pr_review.coordinator import Coordinator
 from robert_agent.workflows.review import workspace as review_workspace
+from tests.support.work_items import example_choices
 from tests.support import database as fixture_database
 from tests.support.repository_cycle import _new_pr_actions, _verification_evidence
 from tests.support.review_coordinator import ReviewCoordinatorFixture
@@ -98,6 +99,7 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
         self.fail_disposition = False
         self.with_finding = False
         self.needs_decision = False
+        self.question_choices = example_choices()
         self.launches = Counter()
         self.final_review_mode = "approved"
         return driver
@@ -174,6 +176,7 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
                             "final_sha": git(tree, "rev-parse", "HEAD"),
                             "report_sha256": report_sha,
                             "dispositions": decisions,
+                            **({"choices": self.question_choices} if self.needs_decision else {}),
                             "verification": self.verification,
                             "body": "Updated example.\n\n## Assumptions and decisions\nNone.",
                         }
@@ -221,6 +224,7 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
                 "operator_question"
             ]
             self.assertEqual(question["kind"], "scope_decision")
+            self.assertEqual(question["choices"], example_choices())
             self.assertEqual(saved["proof"]["decision"]["round_id"], driver.round_id)
             self.assertEqual(saved["proof"]["decision"]["candidate_sha"], saved["manifest"]["head_sha"])
             self.assertEqual(saved["proof"]["decision"]["report_sha256"], saved["report_sha256"])
@@ -229,6 +233,27 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             actions = conn.execute("SELECT action_type FROM github_actions").fetchall()
             self.assertEqual([row[0] for row in actions], ["comment"])
         self.assertEqual(self.launches["address"], 1)
+
+    def test_review_missing_choices_stays_in_recovery_and_does_not_publish_an_unanswerable_question(self):
+        driver = self.start(["claude"])
+        self.with_finding = self.needs_decision = True
+        self.question_choices = []
+        with (
+            patch.object(driver.stopping, "wait", return_value=False),
+            self.assertRaisesRegex(ValueError, "two to five"),
+        ):
+            driver.run()
+        with fixture_database.connect(self.db) as conn:
+            saved = store.session(conn, task_id=driver.task_id)
+            self.assertEqual(saved["status"], "attention")
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
+            self.assertTrue(
+                all(
+                    run["status"] == "failed"
+                    for run in store.runs(conn, driver.round_id)
+                    if run["stage"] == "address_findings"
+                )
+            )
 
     def test_web_review_decision_has_no_publication_and_resumes(self):
         driver = self.start(["claude"], local=True)

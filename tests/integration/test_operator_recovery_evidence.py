@@ -1,5 +1,6 @@
 """Acceptance gaps left by the first reliability delivery."""
 
+from tests.support.work_items import example_choices
 from tests.support.durable_result import DurableResultFixture
 
 
@@ -113,7 +114,7 @@ class ReviewRegressionTests(unittest.TestCase):
             operator_question={
                 "kind": "clarification",
                 "summary": "Which version?",
-                "choices": [],
+                "choices": example_choices(),
             },
         )
         rejected = result.record_result(db, payload)

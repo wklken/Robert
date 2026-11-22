@@ -12,5 +12,5 @@ Classification scope:
 
 ## Delivery
 Classification result:
-Set recommended_route to new-pr, update-existing-pr, review-comment, review-pr, comment-analysis, vote or waiting-for-user. If the route or requested outcome remains unclear, choose waiting-for-user and explain the missing decision in handoff. A missing or blank route defaults to waiting-for-user; it never means the request is complete.
+Set recommended_route to new-pr, update-existing-pr, review-comment, review-pr, comment-analysis, vote or waiting-for-user. If the route or requested outcome remains unclear, choose waiting-for-user and explain the missing decision in handoff. For a Web task, also include the complete structured operator_question so Robert can ask without another Worker run. A missing or blank route defaults to waiting-for-user; it never means the request is complete.
 For new-pr, set branch_slug to meaningful lowercase English kebab-case, at most 60 characters; otherwise leave it empty. Put the routing evidence in handoff.

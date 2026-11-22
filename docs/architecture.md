@@ -77,6 +77,10 @@ robert_agent/
 定义 TAPD 主机、项目键、单据 URL、来源键和评论 fingerprint 的语法，供配置、适配器、
 来源 owner 和发布合同共用。
 
+[`foundation/question_choices.py`](../src/robert_agent/foundation/question_choices.py) 提供有序选项的共享格式和校验。
+Worker 结果和原生阶段在进入等待前校验新提问。看板和 OpenClaw 的点选复用版本化回复命令，
+从当前问题记录解析选项，发布与监督继续使用各自的授权边界。
+
 稳定领域能力、纯策略、适配器和读模型不依赖应用用例、具体 workflow、runtime 或接口。
 领域 `application/` 与具体 workflow 属于应用层，按明确的模块依赖组合能力；跨领域
 调度放在外层组合入口。公共函数/类型/常量归实际 owner；不靠延迟 import、动态查找、

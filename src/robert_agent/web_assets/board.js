@@ -318,6 +318,8 @@ const translations = {
     editRequirement: "Edit requirement",
     approve: "Approve and continue",
     reply: "Answer the question",
+    recommendedChoice: "Recommended",
+    otherChoice: "None of these · write my own answer",
     requestChanges: "Request changes",
     retry: "Run again",
     retrigger: "Run again",
@@ -741,6 +743,8 @@ const translations = {
 
     editRequirement: "编辑需求",
     approve: "批准并继续",
+    recommendedChoice: "推荐",
+    otherChoice: "以上都不选，自己填写",
     reply: "回答问题",
     requestChanges: "要求修改",
     retry: "重新运行",
@@ -1553,10 +1557,14 @@ function renderActions(detail) {
   const section = node("section", "detail-block");
   section.id = "detail-actions";
   section.append(node("h3", "", t("nextStep")));
-  if (QUESTION_STATES.has(summary.state) && summary.cause?.text)
-    section.append(node("p", "question-text", summary.cause.text));
   const commands = detail.valid_commands || [];
   const primary = primaryCommand(detail);
+  const question = primary === "reply"
+    ? detail.attention_signals?.find(signal => signal.event_id === attentionForCommand(detail, "reply"))
+    : null;
+  const questionText = question?.summary || summary.cause?.text;
+  if (QUESTION_STATES.has(summary.state) && questionText)
+    section.append(node("p", "question-text", questionText));
   const row = node("div", "command-row");
   const commandButton = (command, className) => {
     const b = button(actionLabel(command, detail), () => composeOrExecute(command), className);
@@ -1569,7 +1577,24 @@ function renderActions(detail) {
     if (link) row.append(link);
   }
   const composing = state.composer?.command;
-  if (primary && primary !== composing) row.append(commandButton(primary, "primary-button command-button"));
+  const hasChoices = Boolean(question?.choices?.length);
+  if (hasChoices && !composing) {
+    const choices = node("div", "question-choices");
+    for (const [index, choice] of question.choices.entries()) {
+      const option = button(null, () => executeCommand(detail, "reply", { choice: index + 1 }),
+        "command-button question-choice");
+      option.disabled = state.busy || !canWrite(detail);
+      option.append(node("strong", "", choice.label));
+      if (index === 0) option.append(node("span", "choice-recommendation", t("recommendedChoice")));
+      option.append(node("span", "choice-tradeoff", choice.tradeoff));
+      choices.append(option);
+    }
+    const other = button(t("otherChoice"), () => composeOrExecute("reply"), "command-button choice-other");
+    other.disabled = state.busy || !canWrite(detail);
+    choices.append(other);
+    section.append(choices);
+  }
+  if (primary && primary !== composing && !hasChoices) row.append(commandButton(primary, "primary-button command-button"));
   if (row.children.length) section.append(row);
   if (primary && !state.composer) {
     const effects = consequence(primary);

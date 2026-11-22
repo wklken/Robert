@@ -2,7 +2,9 @@
 
 import json
 
+from robert_agent.foundation import question_choices
 from robert_agent.persistence import records
+from robert_agent.security.redaction import redact_text
 from robert_agent.persistence.queries import notifications, work_item_events
 from robert_agent.persistence.stores import notifications as notification_store
 from robert_agent.work.inputs import QUESTION_EVENTS, FAILURE_EVENTS, DECISION_EVENTS
@@ -60,6 +62,20 @@ def attention_details(conn, metadata, *, include_closed=False):
         "version": row[5],
         "title": row[6],
     }
+
+
+def selectable_choices(choices):
+    """Return displayable structured options in their original order, or none."""
+    if question_choices.validation_error(choices, required=True):
+        return []
+    visible = []
+    for choice in choices:
+        label = redact_text(choice["label"])
+        tradeoff = redact_text(choice["tradeoff"])
+        if not label["ok"] or not tradeoff["ok"]:
+            return []
+        visible.append({"id": choice["id"], "label": label["text"], "tradeoff": tradeoff["text"]})
+    return visible if not question_choices.validation_error(visible, required=True) else []
 
 
 def actions_for(event_type, kind=None):

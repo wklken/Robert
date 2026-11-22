@@ -20,4 +20,4 @@ Write `prepared-request.json` for ballot preparation.
 
 ## Ending
 
-If source is necessary and the manifest has no source worktree, use status `needs_code` with a question explaining the required code. If a material question, option, or constraint is ambiguous, use status `needs_clarification` with a precise question. Otherwise use `ready`.
+If source is necessary and the manifest has no source worktree, use status `needs_code` with a question explaining the required code. If a material question, option, or constraint is ambiguous, use status `needs_clarification` with a precise question and the structured `choices` for clarifying it. These are answer options for the human and do not change the ballot options. Otherwise use `ready`.

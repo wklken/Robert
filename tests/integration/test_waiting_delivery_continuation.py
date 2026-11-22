@@ -8,6 +8,7 @@ import subprocess
 import time
 from unittest.mock import patch
 
+from tests.support.work_items import example_choices
 from tests.support.repository_cycle import RepositoryCycleFixture, _verification_evidence
 from robert_agent.delivery.application import submission
 from robert_agent.execution.application import dispatch
@@ -49,7 +50,11 @@ class WaitingDeliveryContinuationTests(RepositoryCycleFixture):
                 [_verification_evidence("git diff --check")],
                 "Implementation is ready; no commit or push yet.",
                 planned_github_actions=[{"type": "comment", "body": "Allow native verification?"}],
-                operator_question={"kind": "completion_acceptance", "summary": "Allow native verification?"},
+                operator_question={
+                    "kind": "completion_acceptance",
+                    "summary": "Allow native verification?",
+                    "choices": example_choices(),
+                },
             ),
             notifier=lambda _: None,
         )

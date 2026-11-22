@@ -16,6 +16,7 @@ from robert_agent.adapters.github import sources as github_sources
 from robert_agent.work.application import commands, tapd_scan, source_lifecycle
 from robert_agent.work.application import intake
 from robert_agent.readmodels import board
+from tests.support.work_items import example_choices
 from tests.support.repository_cycle import _verification_evidence
 
 from tests.support.tapd import STORY, comment
@@ -271,7 +272,11 @@ class TapdBackportTests(TapdCycleCase):
                 "submission": {
                     "planned_github_actions": [{"type": "comment", "body": "Which target?"}],
                     "consumed_event_fingerprints": ["tapd-comment:tapd.example/100/3"],
-                    "operator_question": {"kind": "scope_decision", "summary": "Which target?"},
+                    "operator_question": {
+                        "kind": "scope_decision",
+                        "summary": "Which target?",
+                        "choices": example_choices(),
+                    },
                     "verification": [],
                     "handoff": "Waiting.",
                     "used_skills": [],
