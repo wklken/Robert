@@ -75,6 +75,10 @@ Paths below are relative to `src/robert_agent/`.
  project key, ticket URL, source key and comment fingerprint syntax. Configuration,
  the TAPD adapter, source owners and `delivery.contract` import it directly; it
  must not acquire I/O or domain dependencies.
+- `foundation/question_choices.py` owns the shared ordered option shape and
+  labels for Agent questions. Prompt, Worker result, supervision and notification
+  consumers share this standard-library leaf. The delivery use case owns public
+  text validation and the operator command owns selection against a saved question.
 - Group by domain first, then split a domain into responsibility/layer submodules.
   Reuse the domain's existing input types, errors, policies, facts and public
   capabilities. Do not scatter another implementation of the same concept into

@@ -16,6 +16,7 @@ from robert_agent.delivery.application import submission, validation, audit
 from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import retry
 from robert_agent.execution.stages import StageStopped, StageSuperseded, attempt_is_active, terminate_children
+from robert_agent.foundation import question_choices
 from robert_agent.foundation.contracts.delivery import VerificationStatus
 from robert_agent.foundation.contracts.execution import ModelRunStatus
 from robert_agent.persistence import transactions
@@ -28,9 +29,9 @@ from robert_agent.workflows.pre_pr_review import final_verification
 
 
 class ReviewDecisionRequired(StageStopped):
-    def __init__(self, path, value):
+    def __init__(self, path, question):
         super().__init__("a review finding requires an operator decision")
-        self.path, self.value = path, value
+        self.path, self.question = path, question
 
 
 class CandidateWorkspace:
@@ -251,6 +252,7 @@ class Coordinator(ReviewStages):
             ).text,
             stage="address_findings",
         )
+        require_choices = question_choices.PROMPT_MARKER in prompt.read_text(encoding="utf-8")
 
         def validate(output, _model):
             disposition = output / "dispositions.json"
@@ -280,8 +282,21 @@ class Coordinator(ReviewStages):
                 seen.add(item["id"])
             if seen != set(ids):
                 raise ValueError("disposition handoff omitted a finding")
-            if any(item["status"] == "needs_decision" for item in value["dispositions"]):
-                raise ReviewDecisionRequired(disposition, value)
+            pending = [item for item in value["dispositions"] if item["status"] == "needs_decision"]
+            if pending:
+                summary = "Review findings require a decision within the original task scope.\n" + "\n".join(
+                    f"{item['id']}: {item['reason']}" for item in pending
+                )
+                summary = redact_and_truncate(summary, 1900).get(
+                    "text", "Review findings require an operator decision."
+                )
+                choices = value.get("choices", [])
+                question = {"kind": "scope_decision", "summary": summary, "choices": choices}
+                if require_choices:
+                    validation.require_answerable_question(question)
+                elif error := question_choices.validation_error(choices):
+                    raise ValueError(error)
+                raise ReviewDecisionRequired(disposition, question)
             tree = self.address_workspace(output.name)
             final = clean_head(tree)
             if final != value.get("final_sha"):
@@ -310,11 +325,7 @@ class Coordinator(ReviewStages):
     def wait_for_decision(self, decision, report_sha):
         self.check_active()
         self.check_base()
-        pending = [item for item in decision.value["dispositions"] if item["status"] == "needs_decision"]
-        summary = "Review findings require a decision within the original task scope.\n" + "\n".join(
-            f"{item['id']}: {item['reason']}" for item in pending
-        )
-        summary = redact_and_truncate(summary, 1900).get("text", "Review findings require an operator decision.")
+        question = decision.question
         binding = {
             "round_id": self.round_id,
             "snapshot_id": self.manifest["snapshot_id"],
@@ -323,12 +334,15 @@ class Coordinator(ReviewStages):
             "dispositions_path": str(decision.path),
             "dispositions_sha256": store.digest(decision.path),
         }
+        comment = "\n\n".join(
+            [question["summary"], "\n".join(question_choices.option_lines(question["choices"], recommended="（推荐）"))]
+        ).strip()
         draft = self.candidate_submission()
         draft.update(
             planned_github_actions=[]
             if self.origin_type == "web"
-            else [{"type": "comment", "target_url": self.request["event"]["html_url"], "body": summary}],
-            operator_question={"kind": "scope_decision", "summary": summary, "choices": []},
+            else [{"type": "comment", "target_url": self.request["event"]["html_url"], "body": comment}],
+            operator_question=question,
             handoff="Waiting for an authenticated reply within the original task scope.",
         )
         envelope = {**self.envelope(draft), "output_type": "waiting_for_user"}

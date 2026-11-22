@@ -157,6 +157,11 @@
               "label": {
                 "type": "string",
                 "minLength": 1
+              },
+              "tradeoff": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
               }
             },
             "additionalProperties": false

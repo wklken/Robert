@@ -181,12 +181,6 @@ def validate_submission(submission, output_type, origin_type):
             "operator_question.kind",
             "Question kind must be a string.",
         )
-        for choice in question.get("choices", []) if isinstance(question.get("choices", []), list) else []:
-            _require(
-                isinstance(choice, dict) and not (set(choice) - {"id", "label"}),
-                "operator_question.choices",
-                "Choice contains unsupported fields.",
-            )
         question_error = policies.validate_operator_question(submission)
         _require(
             question_error is None,

@@ -180,6 +180,16 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
         with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM vote_sessions").fetchone()[0], 1)
 
+    def test_clarification_without_choices_fails_before_registering_waiting(self):
+        self.clarify = True
+        self.question_choices = []
+        driver = self.start()
+        with self.assertRaisesRegex(ValueError, "two to five"):
+            driver.run()
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(vote_store.session(conn, task_id=driver.task_id)["status"], "failed")
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
+
     def test_repeated_or_historical_reply_cannot_answer_a_new_clarification(self):
         self.clarify = True
         driver = self.start()

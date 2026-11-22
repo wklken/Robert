@@ -6,6 +6,7 @@ import sqlite3
 import unittest
 from unittest import mock
 
+from tests.support.work_items import example_choices
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.execution import spool as result_spool
 from robert_agent.delivery.application import audit as audit_result
@@ -29,6 +30,7 @@ class PreSubmitAuditTests(unittest.TestCase):
             operator_question={
                 "kind": "clarification",
                 "summary": "Which behavior is intended?",
+                "choices": example_choices(),
             },
         )
 
@@ -62,6 +64,28 @@ class PreSubmitAuditTests(unittest.TestCase):
             ),
         )
         self.assertTrue(accepted["ok"], accepted)
+
+    def test_new_question_requires_options_before_reserving_a_result(self):
+        db, task, attempt, _, _ = self.prepare("comment")
+        payload = self.waiting(
+            task,
+            attempt,
+            [
+                {
+                    "type": "comment",
+                    "target_url": "https://github.com/example/backend/pull/456",
+                    "body": "Which behavior is intended?",
+                }
+            ],
+        )
+        question = payload["submission"]["operator_question"]
+        question["choices"] = []
+        rejected = result.record_result(db, payload)
+        self.assertEqual(rejected["reason_code"], "question_not_deliverable")
+        self.assertEqual(rejected["field_path"], "operator_question")
+        self.assertEqual(list(result_spool.directory(db).glob("*.json")), [])
+        question["choices"] = example_choices()
+        self.assertTrue(result.record_result(db, payload)["ok"])
 
     def test_invalid_publication_target_does_not_reserve_final_result(self):
         db, task, attempt, _, _ = self.prepare("comment")

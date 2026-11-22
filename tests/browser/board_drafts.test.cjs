@@ -105,3 +105,21 @@ test('completed tasks expose a cancel button and submit the existing cancel comm
   assert.equal(vm.runInContext('captured.command', context), 'cancel');
   assert.equal(vm.runInContext('captured.version', context), 1);
 });
+
+test('recommended and alternative choices submit immediately and Other opens a free-text draft', () => {
+  const { context } = scenario('reply', {
+    column: 'waiting', status_summary: {state: 'needs_reply', primary: 'reply'},
+    attention_signals: [{event_id:'question', type:'operator_question', summary:'Which?',
+      choices:[{id:'keep', label:'Keep', tradeoff:'Avoids breakage'},
+        {id:'remove', label:'Remove', tradeoff:'Less maintenance'}]}],
+  }, {});
+  const actions = vm.runInContext('state.composer = null; renderActions(state.detail)', context);
+  const options = actions.children.find(el => el.className === 'question-choices').children;
+  assert.equal(options.length, 3);
+  assert.match(options[0].children.map(el => el.textContent).join(' '), /Keep.*Recommended.*Avoids breakage/);
+  options[1].events.click();
+  assert.equal(vm.runInContext('captured.choice', context), 2);
+  assert.equal(vm.runInContext('captured.version', context), 1);
+  options[2].events.click();
+  assert.equal(vm.runInContext('state.composer.command', context), 'reply');
+});

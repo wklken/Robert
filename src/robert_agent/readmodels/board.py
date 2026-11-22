@@ -39,6 +39,7 @@ from robert_agent.readmodels.execution import (
     publication_history,
     safe_text,
 )
+from robert_agent.work.messaging import selectable_choices
 from robert_agent.work import control_queries
 from robert_agent.work import inputs as work_items
 
@@ -149,7 +150,10 @@ def _unresolved_attention(conn, work_item_id):
         {
             "event_id": row["event_id"],
             "type": row["event_type"],
-            "summary": safe_text(row["body"], 500),
+            "summary": safe_text(row["body"], 2000 if row["event_type"] == "operator_question" else 500),
+            "choices": selectable_choices(json_object(row["metadata_json"]).get("choices", []))
+            if row["event_type"] == "operator_question"
+            else [],
             "created_at": row["created_at"],
             "metadata": _safe_event_metadata(row["metadata_json"]),
         }
