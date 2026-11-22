@@ -353,6 +353,16 @@ def load_review_participants(conn, repo_id):
     return statements.read(conn, query1, {"p0": repo_id})
 
 
+def find_terminal_reconciliation_state(conn, workstream_id):
+    streams = tables["workstreams"]
+    return statements.read(
+        conn,
+        select(streams.c.lifecycle, streams.c.active_task_id, streams.c.metadata_json).where(
+            streams.c.workstream_id == workstream_id
+        ),
+    )
+
+
 def find_metadata_json_by_workstream_id(conn, workstream_id):
     query1 = (
         select(tables["workstreams"].c["metadata_json"])

@@ -4,6 +4,7 @@ from robert_agent.foundation.contracts.delivery import GitHubActionType, Publish
 from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
 from robert_agent.foundation.contracts.work import (
     REMEDIATION_TASK_KINDS,
+    TERMINAL_TASK_LIFECYCLES,
     SourceProvider,
     SourceType,
     WorkstreamLifecycle,
@@ -121,6 +122,34 @@ def record_remote_terminal_state(
             raise
 
 
+def _tapd_terminal_delivery_still_blocked(
+    conn, workstream_id, source_id, source_key, task_id, remote_state, workstream_lifecycle
+):
+    stream = db_records.first(db_read_workstreams.find_terminal_reconciliation_state(conn, workstream_id))
+    if not stream or stream["lifecycle"] != workstream_lifecycle or stream["active_task_id"] is not None:
+        return False
+    previous = values.json_object(stream["metadata_json"]).get("remote_reconciliation")
+    if (
+        not isinstance(previous, dict)
+        or previous.get("status") != "remote_source_closed"
+        or previous.get("source_key") != source_key
+        or "task_id" not in previous
+        or previous["task_id"] != task_id
+    ):
+        return False
+    recorded = previous.get("remote_state")
+    # The TAPD scan timestamps describe the observation, not a new closure.
+    if not isinstance(recorded, dict) or any(
+        recorded.get(key) != remote_state.get(key) for key in ("state", "state_reason", "tapd_status")
+    ):
+        return False
+    item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
+    if not item or item["origin_source_id"] != source_id:
+        return False
+    facts = control_queries.lifecycle_facts(conn, item)
+    return bool(facts["open_pull_requests"] or facts["unmerged_pull_requests"])
+
+
 def _record_remote_terminal_state_locked(
     conn,
     repo_id,
@@ -142,13 +171,21 @@ def _record_remote_terminal_state_locked(
     ):
         return False
     subject_type, subject_id = "task", task_id
-    if task_id:
-        task_row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
-        task_metadata = values.json_object(task_row[1] if task_row else None)
-        episode_id = task_metadata.get("remediation_episode_id") if task_row else None
-        if task_row and task_row[0] in REMEDIATION_TASK_KINDS and episode_id:
+    task_row = db_records.first(db_read_tasks.find_record_by_task_id(conn, task_id)) if task_id else None
+    if task_row and task_row["task_kind"] in REMEDIATION_TASK_KINDS:
+        episode_id = values.json_object(task_row["metadata_json"]).get("remediation_episode_id")
+        if episode_id:
             subject_type, subject_id = "remediation_episode", str(episode_id)
     binding = execution_store.get_binding(conn, subject_type, subject_id) if subject_id else None
+    if (
+        source_type in {SourceType.TAPD_STORY, SourceType.TAPD_BUG}
+        and (binding is None or binding["binding_status"] == BindingStatus.TERMINAL)
+        and (task_id is None or (task_row and task_row["lifecycle"] in TERMINAL_TASK_LIFECYCLES))
+        and _tapd_terminal_delivery_still_blocked(
+            conn, workstream_id, source_id, source_key, task_id, remote_state, workstream_lifecycle
+        )
+    ):
+        return False
     workflow_fact = None
     if binding and binding["binding_status"] == BindingStatus.ACTIVE:
         marker = (
@@ -253,7 +290,11 @@ def _record_remote_terminal_state_locked(
         db_read_workstreams.find_metadata_json_by_workstream_id(conn, workstream_id)
     )
     workstream_metadata = values.json_object(workstream_metadata_row[0] if workstream_metadata_row else None)
-    workstream_metadata["remote_reconciliation"] = remote_payload
+    workstream_metadata["remote_reconciliation"] = (
+        {**remote_payload, "task_id": task_id}
+        if source_type in {SourceType.TAPD_STORY, SourceType.TAPD_BUG}
+        else remote_payload
+    )
     db_write_workstreams.record_remote_terminal_state_locked(
         conn,
         workstream_lifecycle,
