@@ -20,8 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from robert_agent.configuration import command as validate_config
-from robert_agent.readmodels import board
-from robert_agent.readmodels import agent_session
+from robert_agent.readmodels import agent_session, board, timeline
 from robert_agent.work.application import commands as work_items
 from robert_agent.readmodels import workbench
 from robert_agent.foundation.commands import emit
@@ -32,6 +31,7 @@ WEB_ASSETS = {
     "/": ("board.html", "text/html; charset=utf-8"),
     "/work": ("index.html", "text/html; charset=utf-8"),
     "/board": ("board.html", "text/html; charset=utf-8"),
+    "/timeline": ("timeline.html", "text/html; charset=utf-8"),
     "/favicon.ico": ("robert-favicon.svg", "image/svg+xml"),
     "/assets/robert-favicon.svg": ("robert-favicon.svg", "image/svg+xml"),
     "/assets/robert-logo.svg": ("robert-logo.svg", "image/svg+xml"),
@@ -41,6 +41,9 @@ WEB_ASSETS = {
     "/assets/board-client.js": ("board-client.js", "text/javascript; charset=utf-8"),
     "/assets/agent-session.js": ("agent-session.js", "text/javascript; charset=utf-8"),
     "/assets/board.js": ("board.js", "text/javascript; charset=utf-8"),
+    "/assets/timeline.css": ("timeline.css", "text/css; charset=utf-8"),
+    "/assets/timeline.js": ("timeline.js", "text/javascript; charset=utf-8"),
+    "/assets/receipt-image.js": ("receipt-image.js", "text/javascript; charset=utf-8"),
     "/assets/workbench.css": ("workbench.css", "text/css; charset=utf-8"),
     "/assets/workbench.js": (
         "workbench.js",
@@ -157,6 +160,37 @@ def build_http_response(path, db_path, control_context=None):
                 {"ok": False, "status": "failed_validation", "safe_error": str(exc)},
                 422,
             )
+        return _json_response(payload)
+    if route == "/api/timeline":
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        try:
+            payload = timeline.list_completed(
+                db_path,
+                view=query.get("view", ["week"])[0],
+                anchor_date=query.get("date", [None])[0],
+                timezone_name=query.get("tz", ["UTC"])[0],
+            )
+        except timeline.TimelineQueryError as exc:
+            return _json_response({"ok": False, "status": "failed_validation", "safe_error": str(exc)}, 422)
+        except db_errors.OperationalError:
+            return _json_response(
+                {"ok": False, "status": "unavailable", "safe_error": "timeline data is unavailable"}, 409
+            )
+        return _json_response(payload)
+    if route == "/api/timeline/receipt":
+        query = parse_qs(parsed.query)
+        task_id = query.get("task_id", [""])[0]
+        result_id = query.get("result_id", [""])[0]
+        if not all(value.strip() and len(value) <= 300 for value in (task_id, result_id)):
+            return _json_response({"ok": False, "status": "failed_validation"}, 422)
+        try:
+            payload = timeline.get_receipt(db_path, task_id, result_id)
+        except db_errors.OperationalError:
+            return _json_response(
+                {"ok": False, "status": "unavailable", "safe_error": "timeline data is unavailable"}, 409
+            )
+        if payload is None:
+            return _json_response({"ok": False, "status": "not_found"}, 404)
         return _json_response(payload)
     if route.startswith("/api/work-items/"):
         raw_suffix = route[len("/api/work-items/") :]

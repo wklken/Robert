@@ -423,6 +423,7 @@ def run_repo_pipeline(
                 discovery_runner or subprocess.run,
                 run_now,
                 tapd_settings=config_result.get("tapd"),
+                receipt_config=None if dry_run else config_result,
             )
             summary["reconciled_source_count"] = reconciled_source_count
             system_decisions = remediation_requests.collect_pr_remediation_decisions(

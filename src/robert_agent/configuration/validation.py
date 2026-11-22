@@ -183,6 +183,14 @@ def _normalize(config, path, skip_external):
         raise ValueError("messaging.dispatch_enabled requires messaging.enabled")
     if messaging.get("contextual_replies") and not messaging["enabled"]:
         raise ValueError("messaging.contextual_replies requires messaging.enabled")
+    if receipts := messaging.get("receipts"):
+        if receipts["enabled"] and not messaging["enabled"]:
+            raise ValueError("messaging.receipts.enabled requires messaging.enabled")
+        if receipts["enabled"] or "send_after" in receipts:
+            start = utc_timestamp(receipts.get("send_after"))
+            if start is None:
+                raise ValueError("messaging.receipts.send_after must be an ISO timestamp with an explicit timezone")
+            receipts["send_after"] = start.isoformat()
     if messaging["enabled"]:
         for field in ("channel", "account", "target", "conversation", "allowed_senders", "repos", "send_after"):
             if not messaging.get(field):

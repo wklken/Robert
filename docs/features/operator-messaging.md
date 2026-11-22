@@ -134,6 +134,35 @@ Plugin context is based on the upstream
 Test the real deployment with a disposable work item/question and a response
 before relying on unattended delivery.
 
+## 交付小票通知
+
+可以让 Robert 为每项关键交付各生成一张 PNG，通过已有的 OpenClaw 目标集中发送。
+在现有的 `messaging` 配置下加入 `receipts`。此功能需要同一服务账户可运行 Chromium，
+并且 OpenClaw 目标渠道支持图片附件。图片沿用 Web 小票的视觉样式，摘要取自已审核结果。
+
+```yaml
+messaging:
+  receipts:
+    enabled: true
+    send_after: "2026-11-22T09:00:00+08:00" # 改为实际启用时间
+    chromium: chromium                       # 也可指定 Chrome 或 Chromium 的绝对路径
+    events: [pr_opened, report_delivered]
+```
+
+- `pr_opened` 对应首次交付 PR。每个 PR 只发一次。
+- `report_delivered` 对应独立分析、评审报告或投票报告完成。每个原始工作项只发一次。
+- `pr_updated`、`pr_reviewed`、`pr_merged` 可按需加入，每个 PR 的每种节点各发一次。
+
+这项配置默认关闭。第一项待发交付会等待 30 分钟，同一批交付的独立图片在一次 OpenClaw 调用中发送。
+相邻两批至少间隔 30 分钟，每批最多 10 张图片。渠道决定图片显示为相册还是单独的附件。
+参数变更随 daemon 重载配置生效。发送目标或仓库范围改变时，旧候选依照原目标绑定和当前授权筛选。
+
+Robert 在数据目录的 `receipt-media` 下暂存 PNG。渠道需要本地媒体允许目录时，仅允许这一目录。
+图片使用原生 OpenClaw 投递，适用于同主机且可读取暂存文件的渠道。渲染失败的批次稍后重试。
+配置了 `ROBERT_NOTIFICATION_COMMAND` 时，文字走现有命令传输，小票等待原生 OpenClaw 投递恢复。
+发送后结果不确定的批次保留在本地投递记录中，避免超时后重复发图。
+OpenClaw 图片支持与本地路径规则见 [媒体与附件说明](https://docs.openclaw.ai/help/faq/media-and-attachments)。
+
 ## Responding
 
 Messages show complete response commands. `/robert-inbox` retrieves pending

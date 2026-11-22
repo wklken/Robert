@@ -102,6 +102,8 @@ robert_agent/
   验证本地 session 身份并按字节位置倒序读取。页面展开时加载，历史分页不推进执行状态。
 - workbench 列表读取当前任务的最新尝试、阶段和结果，在分页后补充看板生命周期。
   列表仍扫描轻量任务标识以保留全库搜索、计数和筛选项；完整尝试与工件历史由详情页读取。
+- `readmodels.timeline` 从已完成任务、审核结果和发布记录投影日、周、月工作清单，并沿工作流来源关联原始需求。
+- `work.receipt_events` 记录关键交付节点，`delivery.application.receipt_notifications` 将独立小票按批投递到已授权的 OpenClaw 目标。
 - `context.memory_policy` 定义项目记忆的大小和脱敏约束，供提交、审计和入库共用。
 
 [架构门禁](../tests/architecture/test_architecture_boundaries.py) 检查无环、层次方向、根目录合同和

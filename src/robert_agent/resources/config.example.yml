@@ -123,3 +123,9 @@ messaging:
   dispatch_enabled: false
   # Before enabling, set send_after to the current time with an explicit timezone.
   # Retain that value on normal restarts; only newer notifications are delivered.
+  # To send receipt images through this OpenClaw target, add:
+  # receipts:
+  #   enabled: true
+  #   send_after: "2026-11-22T09:00:00+08:00"  # Set the receipt activation time.
+  #   events: [pr_opened, report_delivered]
+  #   chromium: chromium
