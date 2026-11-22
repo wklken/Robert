@@ -59,6 +59,12 @@ def respond(config, request, *, idempotency_key=None):
     if type(version) is not int or version < 0:
         raise WorkItemValidationError("version must be a nonnegative integer")
     action = request.get("action")
+    custom = action == "custom_reply"
+    if custom:
+        action = "reply"
+    choice = request.get("choice")
+    if choice is not None and (custom or action != "reply" or type(choice) is not int):
+        raise WorkItemValidationError("Invalid reply option.")
     if action not in {"reply", "approve", "retry", "retry_publish", "cancel", "ack"}:
         raise WorkItemValidationError("Unsupported messaging action.")
     body = validate_text(request.get("body", ""), "body", MAX_REPLY)
@@ -69,7 +75,10 @@ def respond(config, request, *, idempotency_key=None):
     request_key = (
         "message:"
         + hashlib.sha256(
-            json.dumps([notification_id, version, identity, action, body], ensure_ascii=False).encode()
+            json.dumps(
+                [notification_id, version, identity, action, body] + ([choice] if choice is not None else []),
+                ensure_ascii=False,
+            ).encode()
         ).hexdigest()
     )
     if idempotency_key is not None:
@@ -86,6 +95,22 @@ def respond(config, request, *, idempotency_key=None):
         displayed = messages.envelope(conn, notification_id, config=config, include_closed=True)
         if not displayed or action not in displayed["actions"]:
             raise WorkItemValidationError("This message does not authorize that action.")
+        if custom:
+            current = messages.envelope(conn, notification_id, config=config)
+            if not current or current["version"] != version:
+                raise WorkItemConflictError("This question changed. Use /robert-inbox to read the current question.")
+            return {
+                "ok": True,
+                "status": "awaiting_custom_reply",
+                "message": (
+                    "可以引用这条消息，直接回复你自己的答案。\n"
+                    if metadata.get("attention_event_id") and config["messaging"].get("contextual_replies")
+                    else "请将下面命令中的 <你的答案> 替换为你自己的答复。\n"
+                )
+                + f"/robert-respond {notification_id} {version} reply <你的答案>",
+            }
+    if action == "reply" and not metadata.get("attention_event_id"):
+        return _reply_to_supervisor(config, notification_id, version, identity, request_key, body, choice)
     if action != "ack":
         context = CommandContext(
             "operator", identity, allowed, frozenset(worker["name"] for worker in config["workers"])
@@ -99,6 +124,7 @@ def respond(config, request, *, idempotency_key=None):
             expected_event_id=metadata["attention_event_id"],
             idempotency_key=request_key,
             body=body,
+            choice=choice,
         )
         # The command event itself is the atomic receipt; crash/replay reuses it.
         return {
@@ -130,6 +156,53 @@ def respond(config, request, *, idempotency_key=None):
                 conn, json.dumps(metadata, ensure_ascii=False), notification_id
             )
     return {"ok": True, "status": "acknowledged", "notification_id": notification_id}
+
+
+def _reply_to_supervisor(config, notification_id, version, identity, request_key, body, choice):
+    from robert_agent.supervision import decisions
+
+    with _connection(config, write=True) as conn, conn:
+        transactions.begin_immediate(conn)
+        displayed = messages.envelope(conn, notification_id, config=config, include_closed=True)
+        if (
+            not displayed
+            or displayed["type"] != "supervision_question"
+            or "reply" not in displayed["actions"]
+            or displayed["version"] != version
+        ):
+            raise WorkItemConflictError("This supervisor question changed. Use /robert-inbox.")
+        row = records.first(notifications.find_local_response(conn, notification_id))
+        metadata = json.loads(row[1] or "{}")
+        previous = metadata.get("operator_response")
+        if previous and previous["request_key"] == request_key:
+            return previous["result"]
+        if choice is not None:
+            options = displayed.get("choices", [])
+            if body.strip() or not 1 <= choice <= len(options):
+                raise WorkItemValidationError("The selected option is unavailable.")
+            body = options[choice - 1]["label"]
+        body = validate_text(body, "body", MAX_REPLY, required=True)
+        now = commands.utc_now()
+        root_id = metadata["workstream_id"]
+        if decisions.snapshot(conn, root_id, config, now) is None:
+            raise WorkItemConflictError("This supervisor question is no longer available.")
+        try:
+            decisions.reply(conn, config, root_id, notification_id, body, now)
+        except ValueError as exc:
+            raise WorkItemConflictError(str(exc)) from exc
+        result = {"ok": True, "status": "accepted", "notification_id": notification_id, "task_id": None}
+        metadata["operator_response"] = {
+            "request_key": request_key,
+            "actor_identity": identity,
+            "action": "reply",
+            "body": body,
+            "created_at": now,
+            "result": result,
+        }
+        notification_store.set_metadata_json_by_notification_id(
+            conn, json.dumps(metadata, ensure_ascii=False), notification_id
+        )
+    return result
 
 
 def reply(config, request):

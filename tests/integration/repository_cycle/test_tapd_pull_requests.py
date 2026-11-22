@@ -20,6 +20,7 @@ from robert_agent.runtime import cycle as run_once
 from robert_agent.runtime import loop
 from robert_agent.work.application import commands, remediation_requests, source_lifecycle, synchronization, tapd_scan
 from robert_agent.workflows import pr_health, pr_remediation
+from tests.support.work_items import example_choices
 from tests.support.repository_cycle import _verification_evidence
 from tests.support.tapd import STORY, comment
 from tests.support.tapd_cycle import TapdCycleCase
@@ -662,7 +663,11 @@ class TapdDerivedOperatorReplyTests(TapdPullRequestCase):
                 "submission": {
                     "planned_github_actions": [{"type": "comment", "body": "Which logout behavior should I use?"}],
                     "consumed_event_fingerprints": ["tapd-comment:tapd.example/100/3"],
-                    "operator_question": {"kind": "scope_decision", "summary": "Which logout behavior?"},
+                    "operator_question": {
+                        "kind": "scope_decision",
+                        "summary": "Which logout behavior?",
+                        "choices": example_choices(),
+                    },
                     "verification": [_verification_evidence()],
                     "handoff": "Waiting for logout behavior.",
                     "used_skills": [],

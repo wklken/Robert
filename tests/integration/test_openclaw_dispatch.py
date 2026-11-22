@@ -3,6 +3,7 @@ import json
 import sqlite3
 from types import SimpleNamespace
 
+from tests.support.work_items import example_choices
 from tests.support.dispatch_requests import DispatchFixture
 from robert_agent.work.application import dispatch_requests, admission
 from robert_agent.delivery.application import submission, publish, notifications
@@ -288,7 +289,11 @@ class OpenClawDispatchTests(DispatchFixture):
                     "verification": [],
                     "handoff": "等待确认范围",
                     "used_skills": [],
-                    "operator_question": {"kind": "clarification", "summary": "调查哪个启动阶段？", "choices": []},
+                    "operator_question": {
+                        "kind": "clarification",
+                        "summary": "调查哪个启动阶段？",
+                        "choices": example_choices(),
+                    },
                 },
             },
         )

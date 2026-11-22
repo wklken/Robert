@@ -12,6 +12,7 @@ from robert_agent.supervision import decisions
 from robert_agent.delivery.application import notifications
 from robert_agent.work.application import commands, messaging
 from robert_agent.work.errors import WorkItemConflictError, WorkItemValidationError
+from tests.support.work_items import example_choices
 from tests.support.work_items import WorkItemCommandFixture
 
 
@@ -74,6 +75,7 @@ class ContextualMessagingTests(WorkItemCommandFixture):
                 "evidence_ids": ["goals"],
                 "expected_progress": "Receive an answer before continuing supervision",
                 "recheck_seconds": 300,
+                "choices": example_choices(),
                 "message": "Which behavior should the supervised task preserve?",
             }
             self.assertTrue(

@@ -29,7 +29,7 @@ class OpenClawMessagingTests(unittest.TestCase):
             executable = binary / "robert"
             executable.write_text(
                 f"#!{sys.executable}\n"
-                + 'import json, sys\nr=json.loads(sys.stdin.read() or "{}")\nprint(json.dumps({"ok":True,"request":r,"args":sys.argv[1:]}))\n'
+                + 'import json, sys\nr=json.loads(sys.stdin.read() or "{}")\nif "choice" in r or r.get("action") == "custom_reply": print(json.dumps({"ok":True,"status":"awaiting_custom_reply","message":json.dumps(r)})); sys.exit(0)\nprint(json.dumps({"ok":True,"request":r,"args":sys.argv[1:]}))\n'
             )
             executable.chmod(0o755)
             script = root / "plugin/check.mjs"
@@ -42,6 +42,12 @@ const context = { isAuthorizedSender: true, channel: 'chat', channelId: 'telegra
   args: 'notice-1 3 reply Use SQLite.\\nKeep $(touch never) literal.' };
 const response = await commands['robert-respond'].handler(context);
 const status = await commands['robert-status'].handler(context);
+const encoded = Buffer.from('ad'.repeat(16), 'hex').toString('base64url');
+const clicks = [];
+for (const args of [`a${encoded}:3:2`, `d${encoded}:0:x`, 'notice-1 3 pick 1']) {
+  clicks.push(await commands['robert-respond'].handler({ ...context, args }));
+}
+const deniedClick = await commands['robert-respond'].handler({ ...context, isAuthorizedSender: false, args: `a${encoded}:3:2` });
 const denied = await commands['robert-respond'].handler({ ...context, isAuthorizedSender: false });
 const malformed = await commands['robert-respond'].handler({ ...context, args: 'notice reply yes' });
 const dispatch = {};
@@ -57,7 +63,7 @@ for (const name of ['robert-status', 'robert-task', 'robert-run', 'robert-artifa
     allowed: await commands[name].handler(readContext),
     denied: await commands[name].handler({ ...readContext, isAuthorizedSender: false }) });
 }
-console.log(JSON.stringify({ response, status, denied, malformed, reads, dispatch, deniedDispatch, auth: commands['robert-respond'].requireAuth }));
+console.log(JSON.stringify({ response, status, denied, malformed, reads, dispatch, deniedDispatch, clicks, deniedClick, auth: commands['robert-respond'].requireAuth }));
 """)
             result = subprocess.run(
                 ["node", str(script)],
@@ -111,6 +117,26 @@ console.log(JSON.stringify({ response, status, denied, malformed, reads, dispatc
             self.assertTrue(value["auth"])
             self.assertTrue(value["denied"]["isError"])
             self.assertTrue(value["malformed"]["isError"])
+            self.assertTrue(value["deniedClick"]["isError"])
+            selected, custom, typed = [json.loads(reply["text"]) for reply in value["clicks"]]
+            self.assertEqual(
+                {
+                    key: selected[key]
+                    for key in ("notification_id", "version", "choice", "action", "thread", "sender_id")
+                },
+                {
+                    "notification_id": "attention-wie-" + "ad" * 16,
+                    "version": 3,
+                    "choice": 2,
+                    "action": "reply",
+                    "thread": "7",
+                    "sender_id": "42",
+                },
+            )
+            self.assertEqual(custom["notification_id"], "decision-" + "ad" * 16)
+            self.assertEqual(custom["action"], "custom_reply")
+            self.assertNotIn("choice", custom)
+            self.assertEqual(typed["choice"], 1)
 
     def test_generated_plugin_bounds_input_and_survives_early_cli_exit(self):
         with tempfile.TemporaryDirectory() as tmp:

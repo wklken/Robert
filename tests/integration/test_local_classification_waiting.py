@@ -4,6 +4,7 @@ from contextlib import closing
 import json
 import sqlite3
 
+from tests.support.work_items import example_choices
 from tests.support.board_control_integration import BoardControlIntegrationFixture
 from robert_agent.delivery.application import submission
 from robert_agent.foundation import values
@@ -133,6 +134,11 @@ class LocalClassificationWaitingTests(BoardControlIntegrationFixture):
                 consumed_work_item_event_ids=event_ids,
                 verification=[],
                 handoff="The intended outcome is unclear.",
+                operator_question={
+                    "kind": "clarification",
+                    "summary": "What outcome should this request deliver?",
+                    "choices": example_choices(),
+                },
             ),
         )
         self.assertTrue(receipt["ok"], receipt)
@@ -143,6 +149,7 @@ class LocalClassificationWaitingTests(BoardControlIntegrationFixture):
         questions = [event for event in detail["events"] if event["event_type"] == "operator_question"]
         self.assertEqual(len(questions), 1)
         self.assertTrue(questions[0]["body"])
+        self.assertEqual(detail["attention_signals"][0]["choices"], example_choices())
         with closing(sqlite3.connect(self.db_path)) as conn:
             self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "waiting_for_user")
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)

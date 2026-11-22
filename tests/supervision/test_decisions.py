@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
+from tests.support.work_items import example_choices
 from robert_agent.persistence.schema import database as schema
 from robert_agent.supervision import decisions
 from robert_agent.supervision.application.decision_loop import DecisionLoop
@@ -78,6 +79,7 @@ class DecisionTests(unittest.TestCase):
             "expected_progress": "Observe a new attempt and then a result",
             "recheck_seconds": 300,
             "message": "Which behavior should the change preserve?" if action == "ask_user" else "",
+            **({"choices": example_choices()} if action == "ask_user" else {}),
         }
 
     def test_no_action_until_model_selects_it_and_exact_version_is_current(self):
@@ -122,6 +124,56 @@ class DecisionTests(unittest.TestCase):
             ):
                 with self.subTest(changes=changes), self.assertRaises(ValueError):
                     decisions.validate(json.dumps({**self.output(request), **changes}), request)
+
+    def test_supervisor_requires_choices_and_accepts_an_openclaw_selection_without_a_work_item(self):
+        from robert_agent.work.application import messaging
+
+        with self.connect() as conn:
+            conn.execute("DELETE FROM work_items WHERE work_item_id='i'")
+            conn.commit()
+            self.offer(conn)
+            request = self.request(conn)
+            output = self.output(request, "ask_user")
+            with self.assertRaisesRegex(ValueError, "two to five"):
+                decisions.validate(json.dumps({**output, "choices": []}), request)
+            validated = decisions.validate(json.dumps(output), request)
+            self.assertTrue(decisions.approve(conn, self.config, request, validated, self.now))
+            conn.commit()
+        identity = {
+            "protocol": "robert.message.v1",
+            "provider": "openclaw",
+            "channel": "telegram",
+            "account": "personal",
+            "conversation": "telegram:42",
+            "thread": "",
+            "sender_id": "42",
+        }
+        config = {
+            **self.config,
+            "messaging": {
+                "enabled": True,
+                **{key: identity[key] for key in ("provider", "channel", "account", "conversation", "thread")},
+                "target": "42",
+                "allowed_senders": ["42"],
+                "repos": ["acme/project"],
+                "send_after": "2026-01-01T00:00:00Z",
+            },
+        }
+        pending = messaging.inbox(config, identity)["messages"][0]
+        self.assertEqual(pending["choices"], example_choices())
+        response = {
+            **identity,
+            "notification_id": pending["notification_id"],
+            "version": 0,
+            "action": "reply",
+            "choice": 1,
+        }
+        reply = messaging.respond(config, response)
+        self.assertEqual(messaging.respond(config, response), reply)
+        self.assertEqual(messaging.inbox(config, identity)["messages"], [])
+        with self.connect() as conn:
+            self.assertEqual(decisions.read(conn, "w")["reply"], example_choices()[0]["label"])
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
 
     def test_question_and_reply_survive_restart_and_bind_the_exact_question(self):
         with self.connect() as conn:

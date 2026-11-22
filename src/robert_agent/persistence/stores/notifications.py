@@ -423,6 +423,16 @@ def update_failure(conn, kind, key):
     return statements.write(conn, stmt, {"p0": kind, "p1": key})
 
 
+def resolve_supervisor_question(conn, decision_id):
+    notice = tables["notifications"]
+    stmt = (
+        update(notice)
+        .values(status="resolved")
+        .where(notice.c.notification_id == decision_id, notice.c.notification_type == "supervision_question")
+    )
+    return statements.write(conn, stmt)
+
+
 def resolve_attention(conn, event_id):
     notice = tables["notifications"]
     stmt = (

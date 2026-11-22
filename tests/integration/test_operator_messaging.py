@@ -82,6 +82,56 @@ class OperatorMessagingTests(WorkItemCommandFixture):
             child = conn.execute("SELECT parent_task_id FROM tasks WHERE task_id=?", (result["task_id"],)).fetchone()
             self.assertIsNotNone(child[0])
 
+    def test_openclaw_choice_reuses_versioned_reply_and_sends_native_buttons(self):
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE work_item_events SET metadata_json=? WHERE event_id=?",
+                (
+                    json.dumps(
+                        {
+                            **self.question["metadata"],
+                            "choices": [
+                                {"id": "keep", "label": "Keep compatibility", "tradeoff": "Avoids breaking clients"},
+                                {"id": "remove", "label": "Remove compatibility", "tradeoff": "Simplifies maintenance"},
+                            ],
+                        }
+                    ),
+                    self.question["event_id"],
+                ),
+            )
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"ok":true}', ""))
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(notifications.deliver_pending(self.db_path, config=self.config, runner=runner)["sent"], 1)
+        argv = runner.call_args.args[0]
+        text = argv[argv.index("--message") + 1]
+        self.assertIn("Keep compatibility（推荐）", text)
+        self.assertIn("Avoids breaking clients", text)
+        card = json.loads(argv[argv.index("--presentation") + 1])
+        buttons = card["blocks"][0]["buttons"]
+        self.assertEqual(
+            [button["label"] for button in buttons],
+            [
+                "Keep compatibility（推荐）",
+                "Remove compatibility",
+                "以上都不选，自己填写",
+            ],
+        )
+        for button in buttons:
+            self.assertLessEqual(len(("tgcmd:" + button["action"]["command"]).encode()), 64)
+        answer = {**self.reply, "body": "", "choice": 1}
+        custom = messaging.respond(self.config, {**self.reply, "action": "custom_reply", "body": ""})
+        self.assertEqual(custom["status"], "awaiting_custom_reply")
+        self.assertIn(f"{self.notice_id} {self.item['version']} reply", custom["message"])
+        with self.assertRaises(WorkItemValidationError):
+            messaging.respond(self.config, {**answer, "choice": 3})
+        result = messaging.respond(self.config, answer)
+        self.assertEqual(messaging.respond(self.config, answer), result)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            self.assertEqual(
+                conn.execute("SELECT body FROM work_item_events WHERE event_type='user_response'").fetchall(),
+                [("Keep compatibility",)],
+            )
+
     def test_identity_and_repo_scope_are_fail_closed(self):
         for key, value in [
             ("provider", "hermes"),

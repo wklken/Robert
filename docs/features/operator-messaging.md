@@ -157,9 +157,20 @@ For example:
 /robert-respond supervision-... 0 ack Investigating the host failure.
 ```
 
+New Agent questions include two to five viable options with short tradeoffs.
+The first option is marked recommended. Selecting an option submits its saved
+label as the answer to that exact question. The “以上都不选，自己填写” button shows
+the bound free-text reply command. In a dedicated conversation that enables
+contextual replies, quote that prompt and reply with your own text.
+
+Robert sends native command buttons through OpenClaw message presentation for
+Telegram, Discord and Slack. Telegram requires inline buttons on the configured
+account and destination. Reload the generated Robert plugin after upgrading.
+Other channels can use the displayed `/robert-respond <message-id> <version> pick <number>`
+or `reply` command. Older saved questions retain their text reply path.
+
 Use only the actions offered by that message. Free-text replies preserve spaces
-and newlines. Choice IDs/labels are suggestions; answers can explain a choice in
-text. With the default configuration, replies use these explicit commands.
+and newlines. With the default configuration, written replies use the explicit commands.
 A changed version or resolved/replaced question is rejected. Refresh the inbox
 and read the current question before issuing a new response. Duplicate identical
 commands reuse the committed receipt and do not create another task. Replies,
@@ -240,6 +251,9 @@ Outbound envelopes contain `notification_id`, `delivery_id`, `type`, optional
 `task_id`, redacted text, choices, `version` and permitted `actions`. An inbound
 request contains the authenticated provider/channel/account/conversation/thread,
 `sender_id`, `notification_id`, `version`, `action` and optional `body`.
+For a structured question, a `reply` can specify a one-based `choice` instead
+of `body`. The controller resolves the label against the saved question after
+checking its current version and scope.
 
 A future Hermes adapter should translate authenticated host context into this
 contract and implement bounded sending. It must add its provider to strict v2

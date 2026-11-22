@@ -8,6 +8,17 @@ import unittest
 from pathlib import Path
 
 
+def example_choices():
+    return [
+        {"id": "keep", "label": "Preserve the existing behavior", "tradeoff": "Protects current callers."},
+        {
+            "id": "change",
+            "label": "Adopt the new behavior",
+            "tradeoff": "Simplifies the path but changes its contract.",
+        },
+    ]
+
+
 class WorkItemCommandFixture(unittest.TestCase):
     def setUp(self):
         from robert_agent.persistence.schema import database as storage

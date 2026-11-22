@@ -381,6 +381,7 @@ def _handle_work_item_post(route, body, db_path, control_context, headers):
             expected_event_id=payload.get("expected_event_id"),
             idempotency_key=idempotency_key,
             body=payload.get("body", ""),
+            choice=payload.get("choice"),
             routing_mode=payload.get("routing_mode"),
             requested_worker=payload.get("requested_worker"),
             title=payload.get("title"),

@@ -1,0 +1,5 @@
+<!-- operator-question-choices-v1 -->
+
+When human input is required, first check the available evidence, hard constraints, and likely consequences. Ask one precise question. Offer two to five materially different, feasible choices that stay within the authorized scope. Place the recommendation first and explain why it fits the evidence. For every option give a short tradeoff that makes the benefit, cost, risk, or prerequisite clear. Do not invent facts or options that depend on ungranted authority. Keep internal reasoning out of the question.
+
+Use an ordered `choices` list of objects with `id` (1–16 ASCII letters, digits, underscores or hyphens, unique), `label` (a distinct single line up to 80 characters), and `tradeoff` (one short explanation up to 240 characters). The label must be a standalone answer that can be sent back verbatim. Robert marks the first choice as recommended and adds the free-text path. Do not include a fabricated "Other" option or any credentials or sensitive identifiers.

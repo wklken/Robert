@@ -4,6 +4,7 @@ import sqlite3
 import yaml
 from pathlib import Path
 from unittest.mock import Mock
+from tests.support.work_items import example_choices
 from tests.support import PACKAGE_ROOT
 from tests.support.repository_cycle import (
     RepositoryCycleFixture,
@@ -228,7 +229,11 @@ class ClassificationHandoffTests(RepositoryCycleFixture):
                 verification=[],
                 handoff="Waiting for the requested outcome.",
                 planned_github_actions=[{"type": "comment", "body": "Do you want analysis or implementation?"}],
-                operator_question={"kind": "clarification", "summary": "Do you want analysis or implementation?"},
+                operator_question={
+                    "kind": "clarification",
+                    "summary": "Do you want analysis or implementation?",
+                    "choices": example_choices(),
+                },
             ),
         )
         self.assertTrue(question["ok"], question)

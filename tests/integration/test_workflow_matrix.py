@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import yaml
 from pathlib import Path
+from tests.support.work_items import example_choices
 from tests.support import PACKAGE_ROOT
 
 
@@ -743,7 +744,7 @@ repos:
                     "operator_question": {
                         "kind": "clarification",
                         "summary": "Please confirm the desired behavior.",
-                        "choices": [],
+                        "choices": example_choices(),
                     },
                     "used_skills": [],
                 },
