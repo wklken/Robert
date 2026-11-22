@@ -280,9 +280,9 @@ class PromptScopeTests(unittest.TestCase):
             )
         ).text
         self.assertIn('Configured Robert GitHub account: "robert-bot"', prompt)
-        self.assertIn("case-insensitively", prompt)
+        self.assertIn('"decision_mention": "@wklken"', prompt)
         self.assertIn("planned comment body", prompt)
-        self.assertIn("Robert adds the trusted PR author mention", prompt)
+        self.assertIn("Robert adds the confirmed request owner's mention", prompt)
 
     def test_review_policy_preserves_recovery_evidence_and_feedback_scope(self):
         prompt = self.render("review-comment")
@@ -294,6 +294,14 @@ class PromptScopeTests(unittest.TestCase):
             prompt,
         )
         self.assertIn("Do not modify source or plan a push", prompt)
+
+    def test_questions_and_pr_followups_keep_the_original_request_owner(self):
+        owner = {"login": "Alice", "source_key": "github:x/y#1", "event_fingerprint": "comment:1"}
+        for route_id in ("new-pr", "waiting-for-user", "review-pr", "update-existing-pr"):
+            with self.subTest(route_id=route_id):
+                prompt = self.render(route_id, runtime_context={"decision_owner": owner})
+                self.assertIn('"login": "Alice"', prompt)
+                self.assertIn("confirmed decision owner", prompt)
 
     def test_issue_dispatch_guidance_follows_current_request_not_older_context(self):
         task = {"task_id": "task-1", "attempt_id": "attempt-1", "workstream_id": "github:x/y#1"}

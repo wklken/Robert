@@ -15,6 +15,7 @@ from robert_agent.persistence.rounds import pool
 from robert_agent.work.application import commands
 from robert_agent.persistence.rounds import pre_pr_review as store
 from robert_agent.workflows.pre_pr_review.coordinator import Coordinator
+from robert_agent.workflows.review import workspace as review_workspace
 from tests.support import database as fixture_database
 from tests.support.repository_cycle import _new_pr_actions, _verification_evidence
 from tests.support.review_coordinator import ReviewCoordinatorFixture
@@ -392,6 +393,10 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
         self.assertEqual(early["reason_code"], "pre_pr_review_required")
         result = driver.run()
         self.assertTrue(result["ok"], result)
+        self.assertEqual(driver.manifest["decision_owner"]["login"], "maintainer")
+        reviewer_prompt = (Path(driver.manifest["artifact_root"]) / "reviewer-prompt.md").read_text()
+        self.assertIn('"decision_mention": "@maintainer"', reviewer_prompt)
+        self.assertNotIn("user", json.loads((Path(driver.manifest["context_dir"]) / "pr-info.json").read_text()))
         self.assertEqual(self.launches, {"implement": 1, "prepare-prompt.md": 1, "reviewer-prompt.md": 1, "address": 1})
         with fixture_database.connect(self.db) as conn:
             saved = store.session(conn, task_id=driver.task_id)
@@ -416,14 +421,41 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             self.assertIn({**skipped, "attested": False}, json.loads(metadata)["normalized_payload"]["verification"])
 
     def test_failed_synthesis_reuses_both_reviewers(self):
+        def launch(**kwargs):
+            return {**self.launch_pr_stage(**kwargs), "prompt_path": str(kwargs["prompt_path"])}
+
         driver = self.start(["codex", "claude"])
+        driver.launcher = launch
         self.fail_synthesis = True
-        with patch.object(driver.stopping, "wait", side_effect=InterruptedError), self.assertRaises(InterruptedError):
+        wait = driver.stopping.wait
+
+        def interrupt_after_failure(seconds):
+            if not self.fail_synthesis:
+                raise InterruptedError
+            return wait(seconds)
+
+        with (
+            patch.object(driver.stopping, "wait", side_effect=interrupt_after_failure),
+            self.assertRaises(InterruptedError),
+        ):
             driver.run()
-        restarted = Coordinator(
-            self.db, driver.task_id, driver.attempt_id, launcher=self.launch_pr_stage, poll_seconds=0.01
-        )
-        result = restarted.run()
+        self.assertEqual(self.launches["synthesis"], 1)
+        restarted = Coordinator(self.db, driver.task_id, driver.attempt_id, launcher=launch, poll_seconds=0.01)
+        with fixture_database.connect(self.db) as conn:
+            store.update(conn, restarted.round_id, next_retry_at=None)
+        prompt = restarted.prompt
+
+        def upgraded_prompt(name, text, **kwargs):
+            if name.startswith("synthesis-prompt-"):
+                text += "\nUpdated deployment guidance.\n"
+            return prompt(name, text, **kwargs)
+
+        with (
+            patch.object(review_workspace, "_reviewer_text", return_value="Updated reviewer template"),
+            patch.object(restarted, "prompt", side_effect=upgraded_prompt),
+            patch.object(restarted.stopping, "wait", side_effect=AssertionError("unexpected retry after upgrade")),
+        ):
+            result = restarted.run()
         self.assertTrue(result["ok"], result)
         self.assertEqual(
             self.launches,
@@ -439,6 +471,12 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             syntheses = [run for run in store.runs(conn, driver.round_id) if run["stage"] == "synthesis"]
         self.assertEqual([run["status"] for run in syntheses], ["failed", "succeeded"])
         self.assertEqual(syntheses[0]["prompt_sha256"], syntheses[1]["prompt_sha256"])
+        saved_prompt = Path(syntheses[0]["dispatch"]["prompt_path"])
+        with self.assertRaisesRegex(ValueError, "registered phase prompt changed"):
+            restarted.prompt(saved_prompt.name, "New template", stage="prepare")
+        saved_prompt.write_text("Tampered contents")
+        with self.assertRaisesRegex(ValueError, "registered phase prompt changed"):
+            restarted.prompt(saved_prompt.name, "New template", stage="synthesis")
 
     def test_failed_disposition_blocks_all_publication(self):
         driver = self.start(["claude"])

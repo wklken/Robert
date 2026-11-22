@@ -1,6 +1,7 @@
 import copy
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 from robert_agent.context import native_prompts
 from robert_agent.context.prompts import render_prompt
@@ -46,7 +47,11 @@ class VoteFileTests(VoteFileFixture):
                 self.read({**self.ballot, **mutation})
 
     def test_changed_prompt_or_spec_cannot_be_used(self):
-        self.assertTrue(vote_workspace.verify_snapshot(self.manifest))
+        with patch.object(vote_workspace, "render_prompt") as render:
+            render.return_value.text = "Updated voter template"
+            self.assertTrue(vote_workspace.verify_snapshot(self.manifest))
+            with self.assertRaisesRegex(ValueError, "frozen vote manifest or prompt changed"):
+                vote_workspace.verify_snapshot(self.manifest, require_current_prompt=True)
         Path(self.manifest["prompt_path"]).write_text("another question")
         with self.assertRaises(ValueError):
             vote_workspace.verify_snapshot(self.manifest)

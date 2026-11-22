@@ -24,6 +24,43 @@ from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
 
 
+def decision_owner_stream(conn, workstream_id):
+    table = tables["workstreams"]
+    query = select(table.c.repo_id, table.c.origin_workstream_id, table.c.metadata_json).where(
+        table.c.workstream_id == bindparam("workstream_id")
+    )
+    return statements.read(conn, query, {"workstream_id": workstream_id})
+
+
+def decision_owner_requests(conn, workstream_id, repo_id):
+    tasks = tables["tasks"]
+    links = tables["task_events"]
+    events = tables["github_events"]
+    query = (
+        select(events.c.payload_json)
+        .select_from(
+            tasks.join(links, tasks.c.task_id == links.c.task_id).join(events, links.c.event_id == events.c.event_id)
+        )
+        .where(
+            tasks.c.workstream_id == bindparam("workstream_id"),
+            events.c.repo_id == bindparam("repo_id"),
+            or_(
+                links.c.relationship == "trigger",
+                and_(
+                    links.c.relationship == "consumed",
+                    func.json_extract(tasks.c.metadata_json, "$.request_event_fingerprint")
+                    == events.c.event_fingerprint,
+                ),
+            ),
+            events.c.authorization_status.in_(["authorized_trigger", "accepted_context"]),
+            tasks.c.lifecycle != TaskLifecycle.IGNORED.value,
+        )
+        .order_by(tasks.c.created_at, links.c.created_at, events.c.event_at, events.c.event_id)
+        .limit(1)
+    )
+    return statements.read(conn, query, {"workstream_id": workstream_id, "repo_id": repo_id})
+
+
 def find_lifecycle_by_workstream_id(conn, issue_workstream_id):
     query1 = (
         select(tables["workstreams"].c["lifecycle"])

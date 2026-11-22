@@ -362,7 +362,7 @@ class ReviewFilesTests(unittest.TestCase):
             self.assertIn("Security review is required and proportional", prompt)
             self.assertIn("A blocking finding needs", prompt)
             self.assertIn("stop repeating the review", prompt)
-            self.assertIn("case-insensitively", prompt)
+            self.assertIn('"decision_mention": "@wklken"', prompt)
             self.assertIn("@wklken", prompt)
             self.assertIn('Configured Robert GitHub account: "robert-bot"', prompt)
         self.assertNotIn("Review judgment policy:", render_prompt(native_prompts.review_prepare_input(manifest)).text)
@@ -377,7 +377,22 @@ class ReviewFilesTests(unittest.TestCase):
     def test_missing_native_account_does_not_guess_robot_identity(self):
         prompt = self.reviewer_prompt()
         self.assertIn('Configured Robert GitHub account: ""', prompt)
-        self.assertIn("If identity cannot be established, ask @wklken", prompt)
+        self.assertIn("If no owner is confirmed, ask @wklken", prompt)
+
+    def test_candidate_review_and_synthesis_address_the_confirmed_request_owner(self):
+        manifest = self.manifest | {
+            "pr_number": None,
+            "github_account": "robert-bot",
+            "decision_owner": {
+                "login": "Carlmac",
+                "source_key": "github:x/y#1",
+                "event_fingerprint": "assigned:1",
+            },
+        }
+        for prompt in (self.reviewer_prompt(manifest), self.synthesis_prompt(manifest)):
+            self.assertIn('"login": "Carlmac"', prompt)
+            self.assertIn("confirmed decision owner", prompt)
+            self.assertNotIn("Use `pr-info.json` `user.login` for the PR author identity", prompt)
 
     def test_decision_request_without_findings_can_reach_public_merge_reason(self):
         evaluation = self.evaluation() | {

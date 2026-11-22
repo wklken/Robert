@@ -43,7 +43,11 @@ def verify(coordinator, report, report_sha, finding_ids, disposition):
     key = hashlib.sha256(input_text.encode()).hexdigest()
     input_path = coordinator.prompt(f"final-review-inputs-{key}.json", input_text)
     coordinator.final_review = {**inputs, "input_path": str(input_path)}
-    prompt = coordinator.prompt(f"verify-final-{key}.md", render_prompt(final_review_input(inputs, input_path)).text)
+    prompt = coordinator.prompt(
+        f"verify-final-{key}.md",
+        render_prompt(final_review_input(inputs, input_path)).text,
+        stage="verify_final",
+    )
 
     def validate(output, _model):
         if clean_head(tree) != final:

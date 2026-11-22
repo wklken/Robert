@@ -7,6 +7,7 @@ from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 from robert_agent.work import queries as work_queries
+from robert_agent.work import decision_owner
 from robert_agent.adapters.git.remotes import github_owner
 from robert_agent.delivery import values as publication_values
 import json
@@ -42,6 +43,7 @@ def for_result(conn, task_id, attempt_id, workstream_id, *, observe=True, comman
         "workstream_id": workstream_id,
         "repo": row[0],
         "github_account": row[7],
+        "decision_owner": decision_owner.for_workstream(conn, workstream_id, row[7]),
         "base_branch": row[1],
         "worktree_path": row[2] or "",
         "branch_name": row[3] or "",

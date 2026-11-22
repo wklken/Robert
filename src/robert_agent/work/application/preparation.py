@@ -36,6 +36,7 @@ from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import lifecycle as work_application_lifecycle
 from robert_agent.work.application import participants
 from robert_agent.work.application import source_events
+from robert_agent.work import decision_owner
 from robert_agent.context import attempt as attempt_context
 from robert_agent.context import prompts as render_prompt
 from robert_agent.context.worker_prompt import worker_prompt_input
@@ -257,6 +258,9 @@ def _refresh_prepared_task_locked(
     github_context["current_event_fingerprint"] = event["event_fingerprint"]
     runtime_context = attempt_context.runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
+    runtime_context["decision_owner"] = decision_owner.for_workstream(
+        conn, event["workstream_id"], repo["github_account"]
+    )
     attach_tapd_discussions(conn, runtime_context, event["workstream_id"], related_events)
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
@@ -535,6 +539,9 @@ def create_task_attempt_and_prompt(
         event.get("public_ref") if workstream_id == event["source_key"] else None,
     )
     origin_type = event.get("provider") or SourceProvider.GITHUB.value
+    runtime_context["decision_owner"] = decision_owner.record(
+        conn, workstream_id, event, repo["github_account"], run_now
+    )
     item = work_items.ensure_github_work_item(
         conn,
         repo_id=repo_id,

@@ -5,6 +5,7 @@ import shlex
 import sys
 
 from robert_agent.context.prompt_contract import ContextItem, OutputContract, PromptInput
+from robert_agent.context.decision_owner import context_item as decision_owner_context
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, SourceProvider, TaskKind
 
@@ -444,6 +445,9 @@ def worker_prompt_input(
 
     if context.get("backport"):
         authority["backport"] = context["backport"]
+
+    if not web and not discussions:
+        items.append(decision_owner_context(context.get("decision_owner")))
 
     guidance = ["worker-boundaries"]
     current = (context.get("github_context") or {}).get("current_event_fingerprint")

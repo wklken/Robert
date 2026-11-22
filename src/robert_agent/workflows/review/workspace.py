@@ -202,7 +202,7 @@ def _build_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, 
             raise ValueError("existing round snapshot identity does not match")
         if _trigger(github_context).get("trigger_event_fingerprint") != saved.get("trigger_event_fingerprint"):
             raise ValueError("existing round trigger identity does not match")
-        verify_snapshot(saved)
+        verify_snapshot(saved, require_current_prompt=True)
         return saved
     tree.parent.mkdir(parents=True, exist_ok=True)
     context.mkdir(parents=True)
@@ -262,7 +262,8 @@ def _reviewer_text(manifest):
     ).text
 
 
-def verify_snapshot(manifest):
+def verify_snapshot(manifest, *, require_current_prompt=False):
+    """Verify frozen bytes against the manifest, or check an unregistered snapshot before adoption."""
     tree = Path(manifest["worktree_path"])
     try:
         if _git(tree, "rev-parse", "HEAD").strip() != manifest["head_sha"]:
@@ -287,7 +288,7 @@ def verify_snapshot(manifest):
             path = review_files.safe_path(manifest["prompt_path"], manifest["artifact_root"])
             if review_files.sha256_file(path) != manifest["prompt_sha256"]:
                 raise ValueError("review prompt hash changed")
-            if path.read_text(encoding="utf-8") != _reviewer_text(manifest):
+            if require_current_prompt and path.read_text(encoding="utf-8") != _reviewer_text(manifest):
                 raise ValueError("review prompt no longer matches the built-in template")
             saved = json.loads(Path(manifest["context_dir"], "manifest.json").read_text(encoding="utf-8"))
             if saved != manifest:
@@ -314,7 +315,7 @@ def freeze_context(manifest):
         expected_files = set(manifest["files"]) | {str(Path(manifest["context_dir"]) / name) for name in PRIMARY_FILES}
         if set(saved.get("files", {})) != expected_files:
             raise ValueError("frozen manifest has unexpected context files")
-        verify_snapshot(saved)
+        verify_snapshot(saved, require_current_prompt=True)
         return saved
     context = Path(manifest["context_dir"])
     summary = review_files.safe_path(context / "context-summary.md", manifest["artifact_root"])

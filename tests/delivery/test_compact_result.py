@@ -15,6 +15,23 @@ from tests.support.compact_result import CompactResultFixture
 
 
 class CompactResultTests(CompactResultFixture):
+    def test_single_review_mentions_original_owner_separately_from_pr_author(self):
+        for owner, mention in (({"login": "Alice"}, "Alice"), (None, "wklken")):
+            with self.subTest(owner=owner):
+                envelope = self.envelope("t", "a")
+                envelope["output_type"] = "pr_review_comment"
+                settings = self.settings()
+                settings["action_scope"].update(
+                    sources=[{"source_type": "pull_request", "number": 1}],
+                    pr_authors={"https://github.com/x/y/pull/1": "robert-bot"},
+                    decision_owner=owner,
+                )
+                result = result_contract.normalize(envelope, settings)
+                action = result["planned_github_actions"][0]
+                self.assertEqual(action["pr_author_login"], "robert-bot")
+                self.assertTrue(action["body"].startswith(f"@{mention}\n\n"))
+                self.assertEqual(action["decision_owner_login"], mention)
+
     def test_classification_without_route_normalizes_to_waiting(self):
         for origin in ("github", "web"):
             for route in (None, "", " \n\t"):

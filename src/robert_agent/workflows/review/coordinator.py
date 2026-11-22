@@ -29,6 +29,7 @@ from robert_agent.execution.stages import (
 )
 from robert_agent.execution.rounds import SLOT_STORES
 from robert_agent.delivery.application import submission as worker_result
+from robert_agent.work import decision_owner
 
 
 def same_revision(manifest, pr):
@@ -64,7 +65,9 @@ class ReviewStages(StageCoordinator):
     def prepare_context(self):
         review_workspace.verify_snapshot(self.manifest)
         if not self.manifest.get("frozen"):
-            prompt = self.prompt("prepare-prompt.md", render_prompt(review_prepare_input(self.manifest)).text)
+            prompt = self.prompt(
+                "prepare-prompt.md", render_prompt(review_prepare_input(self.manifest)).text, stage="prepare"
+            )
 
             def validate(output, model):
                 summary = review_files.safe_path(output / "context-summary.md", self.manifest["artifact_root"])
@@ -150,6 +153,7 @@ class ReviewStages(StageCoordinator):
         prompt = self.prompt(
             f"synthesis-prompt-{inputs['sha256']}.md",
             render_prompt(prompt_input).text,
+            stage="synthesis",
         )
 
         def validate(output, model):
@@ -198,6 +202,10 @@ class Coordinator(ReviewStages):
                     )
                     if not self.manifest.get("frozen"):
                         self.manifest["github_account"] = repo["github_account"]
+                        with store.connect(self.db_path) as conn:
+                            self.manifest["decision_owner"] = decision_owner.for_workstream(
+                                conn, self.session["workstream_id"], repo["github_account"]
+                            )
                         self.manifest["worker_config_sha256"] = hashlib.sha256(
                             json.dumps(self.request["workers"], sort_keys=True).encode()
                         ).hexdigest()

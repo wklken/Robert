@@ -180,6 +180,7 @@ class Coordinator(ReviewStages):
             )
             self.manifest["candidate"] = candidate
             self.manifest["github_account"] = self.repo["github_account"]
+            self.manifest["decision_owner"] = self.scope.get("decision_owner")
             if not self.manifest["frozen"]:
                 files.atomic_json(Path(self.manifest["context_dir"]) / "manifest.json", self.manifest)
             self.save_manifest()
@@ -248,6 +249,7 @@ class Coordinator(ReviewStages):
                     operator_reply=reply,
                 )
             ).text,
+            stage="address_findings",
         )
 
         def validate(output, _model):

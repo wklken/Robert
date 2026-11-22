@@ -351,7 +351,7 @@ def _audit_expected_actions(output_type, actual_types):
     return None
 
 
-def _audit_pr_review_author_mention(result):
+def _audit_pr_review_author_mention(result, action_scope):
     if result.get("output_type") != OutputType.PR_REVIEW_COMMENT:
         return None
     comment_actions = [
@@ -363,8 +363,14 @@ def _audit_pr_review_author_mention(result):
         pr_author_login = _string_value(action, "pr_author_login")
         if not pr_author_login:
             return "pr_review_comment comment action requires pr_author_login"
-        required_mention = f"@{pr_author_login}"
-        if required_mention not in _string_value(action, "body"):
+        decision_login = _string_value(action, "decision_owner_login")
+        if decision_login and action_scope is not None and "decision_owner" in action_scope:
+            expected = (action_scope.get("decision_owner") or {}).get("login") or "wklken"
+            if decision_login != expected:
+                return "pr_review_comment decision owner does not match the confirmed request owner"
+        # Historical normalized results have only the author field.
+        required_mention = f"@{decision_login or pr_author_login}"
+        if not re.search(re.escape(required_mention) + r"(?![A-Za-z0-9-])", _string_value(action, "body")):
             return f"pr_review_comment comment body must mention {required_mention}"
     return None
 
@@ -799,7 +805,7 @@ def audit_result(
             "safe_error": expected_action_error,
         }
 
-    pr_review_author_error = _audit_pr_review_author_mention(result)
+    pr_review_author_error = _audit_pr_review_author_mention(result, action_scope)
     if pr_review_author_error:
         return {
             "ok": False,
