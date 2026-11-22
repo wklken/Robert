@@ -20,8 +20,10 @@ async page => {
     started_at: "2026-11-22T14:12:07+08:00", finished_at: "2026-11-22T14:20:00+08:00", duration_seconds: 473,
     verification: { passed: 12, failed: 1, skipped: 1 },
     usage: {
-      scope: "request", run_count: 3, token_run_count: 2, input_tokens: 4470, output_tokens: 1300,
-      cached_input_tokens: 142, cache_creation_input_tokens: 0, cost_run_count: 1, reported_cost_usd: 0.012,
+      scope: "request", run_count: 3, token_run_count: 2, billing_token_run_count: 2,
+      input_tokens: 4470, uncached_input_tokens: 4288, output_tokens: 1300,
+      cached_input_tokens: 142, cache_creation_input_tokens: 40, cost_run_count: 1, reported_cost_usd: 0.012, reported_cost_cny: "0.0805572",
+      usd_to_cny: "6.7131", fx_date: "2026-11-20", fx_source: "cfets_reference",
     },
   }}));
 
@@ -36,9 +38,14 @@ async page => {
   if (content.includes("…")) throw new Error("Receipt appended a truncation marker to the generated summary");
   await receipt.getByRole("heading", { name: "验证记录" }).waitFor();
   await receipt.getByRole("heading", { name: "请求链路用量" }).waitFor();
-  await receipt.getByText("输入 4,470 · 输出 1,300").waitFor();
-  await receipt.getByText("有 Token 记录 2/3 · 有费用记录 1/3 次运行").waitFor();
+  await receipt.getByText("普通输入", {exact: true}).waitFor();
+  await receipt.getByText("4,288", {exact: true}).waitFor();
+  await receipt.getByText("缓存写入", {exact: true}).waitFor();
+  await receipt.getByText("40", {exact: true}).waitFor();
+  await receipt.getByText("输入/输出 2/3 · 四类齐全 2/3 · 费用 1/3 次运行").waitFor();
   await receipt.getByText(/0[.]012/).waitFor();
+  await receipt.getByText(/0[.]080557/).waitFor();
+  await receipt.getByText("1 美元 = 6.7131 元 · 官方中间价 · 2026-11-20").waitFor();
   await receipt.getByRole("link", { name: "交付 PR" }).waitFor();
   await receipt.getByRole("link", { name: "看板详情" }).waitFor();
   await receipt.getByRole("button", { name: "复制为图片" }).click();

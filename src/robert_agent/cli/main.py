@@ -279,6 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     web_run.add_argument("--writable", action="store_true")
     web_run.add_argument("--allow-remote", action="store_true")
     web_run.add_argument("--json", action="store_true")
+    web.add_receipt_fx_arguments(web_run)
 
     openclaw_parser = subparsers.add_parser(
         "openclaw",
@@ -556,6 +557,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 web_argv.extend(["--config", args.config])
             if args.public_origin is not None:
                 web_argv.extend(["--public-origin", args.public_origin])
+            if args.receipt_fx_rate is not None:
+                web_argv.extend(["--receipt-fx-rate", args.receipt_fx_rate])
+            if args.receipt_fx_date is not None:
+                web_argv.extend(["--receipt-fx-date", args.receipt_fx_date])
             if args.writable:
                 web_argv.append("--writable")
             if args.allow_remote:

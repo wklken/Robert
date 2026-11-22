@@ -228,7 +228,12 @@ class CompletedWorkTests(BoardReadModelFixture):
                         "usage": {
                             "usage_available": True,
                             "source": "cbc_stream_json",
-                            "usage": {"input_tokens": 11, "output_tokens": 4, "cache_read_input_tokens": 6},
+                            "usage": {
+                                "input_tokens": 11,
+                                "output_tokens": 4,
+                                "cache_read_input_tokens": 6,
+                                "cache_creation_input_tokens": 0,
+                            },
                             "total_cost_usd": 0.012,
                         }
                     }
@@ -245,7 +250,12 @@ class CompletedWorkTests(BoardReadModelFixture):
             json.dumps(
                 {
                     "type": "turn.completed",
-                    "usage": {"input_tokens": 30, "cached_input_tokens": 8, "output_tokens": 9},
+                    "usage": {
+                        "input_tokens": 30,
+                        "cached_input_tokens": 8,
+                        "cache_write_input_tokens": 5,
+                        "output_tokens": 9,
+                    },
                 }
             )
             + "\n"
@@ -277,10 +287,12 @@ class CompletedWorkTests(BoardReadModelFixture):
                 "scope": "request",
                 "run_count": 3,
                 "token_run_count": 2,
+                "billing_token_run_count": 2,
                 "input_tokens": 47,
+                "uncached_input_tokens": 28,
                 "output_tokens": 13,
                 "cached_input_tokens": 14,
-                "cache_creation_input_tokens": 0,
+                "cache_creation_input_tokens": 5,
                 "cost_run_count": 1,
                 "reported_cost_usd": 0.012,
             },

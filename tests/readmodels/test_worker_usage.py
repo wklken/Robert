@@ -46,3 +46,22 @@ class WorkerUsageTests(TemporaryWorkspace):
 
         self.assertFalse(parsed["usage_available"], parsed)
         self.assertEqual(parsed["source"], "no_result_event")
+
+    def test_receipt_marks_unreported_cache_write_and_uncached_input_as_unknown(self):
+        from robert_agent.readmodels import usage
+
+        metadata = {
+            "usage": {
+                "usage_available": True,
+                "source": "codex_json",
+                "usage": {"input_tokens": 30, "cached_input_tokens": 8, "output_tokens": 9},
+            }
+        }
+        attempt = {"metadata_json": json.dumps(metadata), "lineage": "request"}
+        counts = usage.summarize_receipt_usage(self.root, [(attempt, [])])
+        self.assertEqual(counts["input_tokens"], 30)
+        self.assertEqual(counts["output_tokens"], 9)
+        self.assertEqual(counts["cached_input_tokens"], 8)
+        self.assertIsNone(counts["cache_creation_input_tokens"])
+        self.assertIsNone(counts["uncached_input_tokens"])
+        self.assertEqual(counts["billing_token_run_count"], 0)

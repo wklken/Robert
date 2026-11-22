@@ -22,11 +22,14 @@ const labels = {
     receiptMissing: "This result is no longer available. Close the receipt and refresh the timeline.",
     receiptEmptySummary: "No short summary was generated.", receiptHiddenSummary: "The summary contains sensitive information.",
     receiptNoChecks: "No checks were recorded.", passed: "Passed", failed: "Failed", skipped: "Skipped",
-    receiptRequestUsage: "Request usage", receiptTaskUsage: "Task usage", receiptTokens: "Tokens",
-    receiptTokenBreakdown: (input, output) => `Input ${input} · Output ${output}`,
-    receiptCache: "Cached input", receiptCacheBreakdown: (read, write) => `Read ${read} · Write ${write}`,
-    receiptReportedCost: "Reported cost", receiptUsageMissing: "Unreported",
-    receiptUsageCoverage: (tokens, cost, runs) => `Runs with token counts ${tokens}/${runs} · cost ${cost}/${runs}`,
+    receiptRequestUsage: "Request usage", receiptTaskUsage: "Task usage",
+    receiptInputTokens: "Input total", receiptUncachedTokens: "Ordinary input", receiptOutputTokens: "Output",
+    receiptCacheRead: "Cache read", receiptCacheWrite: "Cache write",
+    receiptReportedCost: "Reported USD", receiptCostCny: "Estimated CNY", receiptUsageMissing: "Unreported",
+    receiptFxReference: (rate, date, source) => `1 USD = ${rate} CNY · ${source} · ${date}`,
+    receiptFxCfets: "CFETS reference", receiptFxOperator: "Operator reference",
+    receiptUsageCoverage: (tokens, billing, cost, runs) =>
+      `Runs with input/output ${tokens}/${runs} · all four types ${billing}/${runs} · cost ${cost}/${runs}`,
     copyReceiptImage: "Copy as image", receiptImagePreparing: "Preparing image…",
     receiptImageCopied: "Image copied. You can paste it into chat.",
     receiptImageBlocked: "Clipboard access is unavailable. Download the image to share it.",
@@ -56,11 +59,14 @@ const labels = {
     receiptMissing: "这条结果已不可用。关闭小票后可刷新时间线。",
     receiptEmptySummary: "这次执行未生成短摘要。", receiptHiddenSummary: "摘要含敏感信息，已隐藏。",
     receiptNoChecks: "这次执行未记录验证项。", passed: "通过", failed: "失败", skipped: "跳过",
-    receiptRequestUsage: "请求链路用量", receiptTaskUsage: "本任务用量", receiptTokens: "Token",
-    receiptTokenBreakdown: (input, output) => `输入 ${input} · 输出 ${output}`,
-    receiptCache: "输入缓存", receiptCacheBreakdown: (read, write) => `读 ${read} · 写 ${write}`,
-    receiptReportedCost: "已上报费用", receiptUsageMissing: "未上报",
-    receiptUsageCoverage: (tokens, cost, runs) => `有 Token 记录 ${tokens}/${runs} · 有费用记录 ${cost}/${runs} 次运行`,
+    receiptRequestUsage: "请求链路用量", receiptTaskUsage: "本任务用量",
+    receiptInputTokens: "输入合计", receiptUncachedTokens: "普通输入", receiptOutputTokens: "输出",
+    receiptCacheRead: "缓存读取", receiptCacheWrite: "缓存写入",
+    receiptReportedCost: "已上报美元", receiptCostCny: "人民币折算", receiptUsageMissing: "未上报",
+    receiptFxReference: (rate, date, source) => `1 美元 = ${rate} 元 · ${source} · ${date}`,
+    receiptFxCfets: "官方中间价", receiptFxOperator: "运营参考汇率",
+    receiptUsageCoverage: (tokens, billing, cost, runs) =>
+      `输入/输出 ${tokens}/${runs} · 四类齐全 ${billing}/${runs} · 费用 ${cost}/${runs} 次运行`,
     copyReceiptImage: "复制为图片", receiptImagePreparing: "正在生成图片…",
     receiptImageCopied: "图片已复制，可粘贴到群聊。",
     receiptImageBlocked: "浏览器未允许写入剪贴板，可下载图片后分享。",
@@ -269,21 +275,30 @@ function receiptUsage(usage, text) {
   }
   const figures = element("dl", "receipt-lines");
   const number = new Intl.NumberFormat(language);
-  const haveTokens = usage.token_run_count || usage.input_tokens || usage.output_tokens;
-  const tokens = haveTokens
-    ? text.receiptTokenBreakdown(number.format(usage.input_tokens), number.format(usage.output_tokens))
-    : text.receiptUsageMissing;
-  receiptLine(figures, text.receiptTokens, tokens);
-  if (usage.cached_input_tokens || usage.cache_creation_input_tokens) {
-    receiptLine(figures, text.receiptCache, text.receiptCacheBreakdown(
-      number.format(usage.cached_input_tokens), number.format(usage.cache_creation_input_tokens),
-    ));
+  for (const [label, count] of [
+    [text.receiptInputTokens, usage.input_tokens],
+    [text.receiptUncachedTokens, usage.uncached_input_tokens],
+    [text.receiptCacheRead, usage.cached_input_tokens],
+    [text.receiptCacheWrite, usage.cache_creation_input_tokens],
+    [text.receiptOutputTokens, usage.output_tokens],
+  ]) {
+    receiptLine(figures, label, count == null ? text.receiptUsageMissing : number.format(count));
   }
-  const cost = usage.reported_cost_usd;
-  receiptLine(figures, text.receiptReportedCost, cost == null ? text.receiptUsageMissing
-    : new Intl.NumberFormat(language, { style: "currency", currency: "USD", maximumFractionDigits: 6 }).format(cost));
-  const coverage = text.receiptUsageCoverage(usage.token_run_count, usage.cost_run_count, usage.run_count);
-  section.append(figures, element("p", "receipt-usage-coverage", coverage));
+  const usd = usage.reported_cost_usd;
+  const cny = usage.reported_cost_cny;
+  const money = (value, currency) => value == null ? text.receiptUsageMissing :
+    new Intl.NumberFormat(language, { style: "currency", currency, maximumFractionDigits: 6 }).format(value);
+  receiptLine(figures, text.receiptCostCny, money(cny, "CNY"));
+  receiptLine(figures, text.receiptReportedCost, money(usd, "USD"));
+  const coverage = text.receiptUsageCoverage(
+    usage.token_run_count, usage.billing_token_run_count ?? 0, usage.cost_run_count, usage.run_count,
+  );
+  section.append(figures);
+  if (cny != null) {
+    const source = usage.fx_source === "operator_reference" ? text.receiptFxOperator : text.receiptFxCfets;
+    section.append(element("p", "receipt-usage-coverage", text.receiptFxReference(usage.usd_to_cny, usage.fx_date, source)));
+  }
+  section.append(element("p", "receipt-usage-coverage", coverage));
   return section;
 }
 

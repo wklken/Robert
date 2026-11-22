@@ -11,11 +11,13 @@ from contextlib import closing
 from pathlib import Path
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence.queries import sqlite_master
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from importlib.resources import files
 import ipaddress
 import json
+import re
 import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -80,6 +82,49 @@ def validate_server_options(host, writable, allow_remote):
 
 
 @dataclass(frozen=True)
+class ReceiptExchangeRate:
+    usd_to_cny: Decimal
+    published_on: date
+    source: str
+
+    def apply(self, usage):
+        usd = usage["reported_cost_usd"]
+        return {
+            **usage,
+            "reported_cost_cny": format(Decimal(str(usd)) * self.usd_to_cny, "f") if usd is not None else None,
+            "usd_to_cny": format(self.usd_to_cny, "f"),
+            "fx_date": self.published_on.isoformat(),
+            "fx_source": self.source,
+        }
+
+
+# CFETS midpoint published on 2026-11-20. This is a dated display reference.
+DEFAULT_RECEIPT_FX = ReceiptExchangeRate(Decimal("6.7131"), date(2026, 11, 20), "cfets_reference")
+
+
+def add_receipt_fx_arguments(parser):
+    parser.add_argument("--receipt-fx-rate", help="CNY per USD for receipt estimates. Requires --receipt-fx-date.")
+    parser.add_argument("--receipt-fx-date", help="Reference date (YYYY-MM-DD) for --receipt-fx-rate.")
+
+
+def _receipt_exchange_rate(rate, published_on):
+    if rate is None and published_on is None:
+        return DEFAULT_RECEIPT_FX
+    if rate is None or published_on is None:
+        raise ValueError("--receipt-fx-rate and --receipt-fx-date must be given together.")
+    try:
+        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", rate) or len(rate) > 32:
+            raise ValueError("invalid decimal notation")
+        amount = Decimal(rate)
+        rate_date = date.fromisoformat(published_on)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("Receipt exchange rate requires a positive decimal and a YYYY-MM-DD date.") from exc
+    if amount <= 0 or rate_date.isoformat() != published_on:
+        raise ValueError("Receipt exchange rate requires a positive decimal and a YYYY-MM-DD date.")
+    return ReceiptExchangeRate(amount, rate_date, "operator_reference")
+
+
+@dataclass(frozen=True)
 class ControlContext:
     db_path: str
     operator_identity: str
@@ -90,6 +135,7 @@ class ControlContext:
     writes_enabled: bool
     write_error: str | None
     proposal_enabled: bool = False
+    receipt_fx: ReceiptExchangeRate = DEFAULT_RECEIPT_FX
 
 
 def _query_limit(query, default=50):
@@ -217,7 +263,8 @@ def build_http_response(path, db_path, control_context=None):
             )
         if payload is None:
             return _json_response({"ok": False, "status": "not_found"}, 404)
-        return _json_response(payload)
+        exchange_rate = control_context.receipt_fx if control_context else DEFAULT_RECEIPT_FX
+        return _json_response({**payload, "usage": exchange_rate.apply(payload["usage"])})
     if route.startswith("/api/work-items/"):
         raw_suffix = route[len("/api/work-items/") :]
         events_route = raw_suffix.endswith("/events")
@@ -852,6 +899,7 @@ def main(argv=None):
     parser.add_argument("--writable", action="store_true")
     parser.add_argument("--allow-remote", action="store_true")
     parser.add_argument("--json", action="store_true")
+    add_receipt_fx_arguments(parser)
     args = parser.parse_args(argv)
     options = validate_server_options(
         args.host,
@@ -871,6 +919,7 @@ def main(argv=None):
         )
     try:
         _allowed_web_origins(args.host, args.port, args.public_origin)
+        receipt_fx = _receipt_exchange_rate(args.receipt_fx_rate, args.receipt_fx_date)
     except ValueError as exc:
         return emit({"ok": False, "status": "failed_input", "safe_error": str(exc)}, 3)
     if args.config:
@@ -941,7 +990,7 @@ def main(argv=None):
             )
     if args.json:
         return emit({"ok": True, "status": "ready", "data": dashboard.build_dashboard_data(db_path)})
-    serve(db_path, args.host, args.port, control_context=control_context)
+    serve(db_path, args.host, args.port, control_context=replace(control_context, receipt_fx=receipt_fx))
     return 0
 
 

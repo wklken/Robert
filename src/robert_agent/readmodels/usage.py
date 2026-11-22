@@ -27,12 +27,16 @@ def _as_number(value, default=0):
         return default
 
 
-def _usage_value(usage, *keys):
+def _reported_tokens(usage, *keys):
     for key in keys:
         value = usage.get(key)
         if value is not None:
-            return _as_number(value)
-    return 0
+            return _as_number(value, None)
+    return None
+
+
+def _usage_value(usage, *keys):
+    return _reported_tokens(usage, *keys) or 0
 
 
 def _first_usage_block(usage_payload):
@@ -138,11 +142,13 @@ def _add_usage_totals(totals, usage_payload):
         block,
         "cache_creation_input_tokens",
         "cacheCreationInputTokens",
+        "cache_write_input_tokens",
     )
     totals["total_cache_read_input_tokens"] += _usage_value(
         block,
         "cache_read_input_tokens",
         "cacheReadInputTokens",
+        "cached_input_tokens",
     )
     cost = usage_payload.get("total_cost_usd")
     if type(cost) in (int, float) and 0 <= cost <= sys.float_info.max:
@@ -217,37 +223,55 @@ def _attempt_usage_payloads(root, attempts):
                 yield _registered_log_usage(root, dispatch.get("stdout_path"))
 
 
+def _receipt_tokens(payload):
+    block = _first_usage_block(payload)
+    inputs = _reported_tokens(block, "input_tokens", "inputTokens")
+    outputs = _reported_tokens(block, "output_tokens", "outputTokens")
+    cached = _reported_tokens(block, "cache_read_input_tokens", "cacheReadInputTokens", "cached_input_tokens")
+    created = _reported_tokens(
+        block, "cache_creation_input_tokens", "cacheCreationInputTokens", "cache_write_input_tokens"
+    )
+    uncached = None
+    source = payload.get("source")
+    if source == "cbc_stream_json" and inputs is not None:
+        uncached = inputs
+        # Claude-style reports list reads and writes outside regular input.
+        inputs += (cached or 0) + (created or 0)
+    elif source == "codex_json" and None not in (inputs, cached, created):
+        # Codex input already includes both cached buckets.
+        remaining = inputs - cached - created
+        if remaining >= 0:
+            uncached = remaining
+    return {
+        "input_tokens": inputs,
+        "uncached_input_tokens": uncached,
+        "output_tokens": outputs,
+        "cached_input_tokens": cached,
+        "cache_creation_input_tokens": created,
+    }
+
+
 def summarize_receipt_usage(root, attempts):
     attempts = tuple(attempts)
     totals = {
         "scope": "request" if any(attempt["lineage"] for attempt, _ in attempts) else "task",
         "run_count": 0,
         "token_run_count": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cached_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
+        "billing_token_run_count": 0,
+        **_receipt_tokens({}),
         "cost_run_count": 0,
         "reported_cost_usd": None,
     }
     for payload in _attempt_usage_payloads(root, attempts):
         totals["run_count"] += 1
-        block = _first_usage_block(payload)
-        inputs = _usage_value(block, "input_tokens", "inputTokens")
-        outputs = _usage_value(block, "output_tokens", "outputTokens")
-        cached = _usage_value(block, "cache_read_input_tokens", "cacheReadInputTokens", "cached_input_tokens")
-        created = _usage_value(block, "cache_creation_input_tokens", "cacheCreationInputTokens")
-        # Claude-style cache counts are separate input buckets. Codex's
-        # cached_input_tokens is already included in its input_tokens.
-        totals["input_tokens"] += inputs + (cached + created if payload.get("source") == "cbc_stream_json" else 0)
-        totals["output_tokens"] += outputs
-        totals["cached_input_tokens"] += cached
-        totals["cache_creation_input_tokens"] += created
-        if all(
-            _as_number(block.get(snake, block.get(camel)), None) is not None
-            for snake, camel in (("input_tokens", "inputTokens"), ("output_tokens", "outputTokens"))
-        ):
+        tokens = _receipt_tokens(payload)
+        for bucket, count in tokens.items():
+            if count is not None:
+                totals[bucket] = (totals[bucket] or 0) + count
+        if tokens["input_tokens"] is not None and tokens["output_tokens"] is not None:
             totals["token_run_count"] += 1
+            if all(count is not None for count in tokens.values()):
+                totals["billing_token_run_count"] += 1
         cost = payload.get("total_cost_usd")
         current_cost = totals["reported_cost_usd"] or 0.0
         if type(cost) in (int, float) and 0 <= cost <= sys.float_info.max - current_cost:
