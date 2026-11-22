@@ -12,6 +12,7 @@ from robert_agent.foundation.question_choices import option_lines
 
 EVENT_LABELS = {
     "pr_remediation_needs_evidence": "CI 自动修复缺少失败详情",
+    "agent_receipt_digest": "工作交付小票",
     "execution_delayed": "任务进度延迟",
     "worker_resume_prepared": "已准备恢复执行",
     "worker_stale": "执行进程心跳异常",
@@ -249,10 +250,12 @@ def render_message(payload, *, contextual_replies=False):
     return "\n".join(lines)
 
 
-def send(payload, *, config=None, command=None, runner=subprocess.run, receipt=None):
+def send(payload, *, config=None, command=None, runner=subprocess.run, receipt=None, media_paths=()):
     command = command or os.environ.get("ROBERT_NOTIFICATION_COMMAND")
     presentation = None
     if command:
+        if media_paths:
+            return False
         argv = shlex.split(command) if isinstance(command, str) else list(command)
         kwargs = {"input": json.dumps(payload, ensure_ascii=False), "timeout": 5}
     else:
@@ -275,6 +278,8 @@ def send(payload, *, config=None, command=None, runner=subprocess.run, receipt=N
         ]
         if settings.get("thread"):
             argv += ["--thread-id", settings["thread"]]
+        for media_path in media_paths:
+            argv += ["--media", os.fspath(media_path)]
         if payload.get("selectable_choices") and settings["channel"] in {"telegram", "discord", "slack"}:
             presentation = _choice_presentation(payload)
             if presentation:

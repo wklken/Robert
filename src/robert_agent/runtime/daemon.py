@@ -35,6 +35,7 @@ from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.runtime import loop as loop_engine
 from robert_agent.configuration import command as validate_config
 from robert_agent.delivery.application import notifications as notify
+from robert_agent.delivery.application import receipt_notifications
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
@@ -898,6 +899,9 @@ def run_once_decision(
         notify.deliver_pending(
             context.db_path, config=context.runtime_config, now=now, repo_ids=context.repo_ids or [context.repo_id]
         )
+        receipt_notifications.deliver_pending(
+            context.runtime_config, now=now, repo_ids=context.repo_ids or [context.repo_id]
+        )
     repo_ids = context.repo_ids or [context.repo_id]
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         local_work = loop_engine.has_runnable_local_work(
@@ -1029,6 +1033,8 @@ def _background_decision(context, *, now, child_runner=run_child_json):
             message_transport.configured(context.runtime_config)
             and execution_notifications.has_pending_local_delivery(conn, repo_ids, now, config=context.runtime_config)
         )
+        if not pending_delivery and not context.dry_run:
+            pending_delivery = receipt_notifications.has_due(conn, context.runtime_config, now, repo_ids=repo_ids)
         refresh_pending = wakeup.has_due_context_refresh(conn, repo_ids, now)
     due = context.startup_live_poll_pending or (
         context.next_live_poll_at is not None and _parse_time(now) >= _parse_time(context.next_live_poll_at)

@@ -59,6 +59,24 @@ def refresh_remediation_notice(conn, notification_id, metadata_json):
     return statements.write(conn, stmt, {"metadata_json": metadata_json})
 
 
+def record_receipt_event(conn, notification_id, task_id, kind, occurred_at, metadata_json):
+    notice = tables["notifications"]
+    return statements.write(
+        conn,
+        insert(notice)
+        .values(
+            notification_id=notification_id,
+            task_id=task_id,
+            notification_type=kind,
+            channel="receipt",
+            status="recorded",
+            created_at=occurred_at,
+            metadata_json=metadata_json,
+        )
+        .on_conflict_do_nothing(index_elements=[notice.c.notification_id]),
+    )
+
+
 def insert_workflow_attention_notification(conn, notification_id, value_2, now, value_4):
     stmt = insert(tables["notifications"]).values(
         {

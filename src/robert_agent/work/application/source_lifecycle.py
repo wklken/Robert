@@ -34,7 +34,7 @@ from robert_agent.adapters.github import sources as github_sources
 from robert_agent.persistence import transactions as transactions
 from robert_agent.execution.application import monitor
 from robert_agent.work.application import commands as work_items
-from robert_agent.work import control_queries, tapd_notices, tapd_policy
+from robert_agent.work import control_queries, receipt_events, tapd_notices, tapd_policy
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.execution import operations as execution_operations
 from robert_agent.execution import ownership as execution_ownership
@@ -89,6 +89,9 @@ def record_remote_terminal_state(
     workstream_lifecycle,
     audit_type,
     run_now,
+    *,
+    receipt_config=None,
+    repository="",
 ):
     from robert_agent.delivery.lock import task_publication_lock
 
@@ -106,6 +109,8 @@ def record_remote_terminal_state(
         workstream_lifecycle,
         audit_type,
         run_now,
+        receipt_config,
+        repository,
     )
     if not task_id or not database:
         return _record_remote_terminal_state_locked(*args)
@@ -168,6 +173,8 @@ def _record_remote_terminal_state_locked(
     workstream_lifecycle,
     audit_type,
     run_now,
+    receipt_config=None,
+    repository="",
 ):
     if (
         source_type == SourceType.PULL_REQUEST
@@ -320,6 +327,8 @@ def _record_remote_terminal_state_locked(
     if source_type == SourceType.PULL_REQUEST:
         kind = tapd_policy.PR_MERGED_NOTICE if audit_type == "remote_pr_merged" else tapd_policy.PR_CLOSED_NOTICE
         tapd_notices.record_pr_notices(conn, workstream_id, kind, (number,), run_now)
+        if audit_type == "remote_pr_merged":
+            receipt_events.record_merge(conn, receipt_config, repo_id, repository, remote_state)
     item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
     if item and source_type in _TICKET_SOURCE_TYPES and item["origin_source_id"] == source_id:
         facts = control_queries.lifecycle_facts(conn, item)
@@ -539,7 +548,15 @@ def _reconcile_tapd_reviews(conn, repo_id, repo, runner, run_now, settings):
             db_write_github_sources.record_tapd_review_sync(conn, source_id, closed_at)
 
 
-def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now, *, tapd_settings=None, tapd_only=False):
+def reconcile_remote_source_states(
+    conn, repo_id, repo, runner, run_now, *, tapd_settings=None, tapd_only=False, receipt_config=None
+):
+    receipt_signal = receipt_events.receipt_settings(receipt_config)
+    merge_receipt_options = (
+        {"receipt_config": receipt_config, "repository": repo["full_name"]}
+        if receipt_signal and "pr_merged" in receipt_signal[0]
+        else {}
+    )
     rows = work_queries.remote_source_rows(conn, repo_id)
     reconciled = 0
     for workstream_id, task_id, source_id, source_key, source_type, number, provider, _state in rows:
@@ -593,6 +610,7 @@ def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now, *, tapd
                 workstream_lifecycle,
                 audit_type,
                 run_now,
+                **(merge_receipt_options if audit_type == "remote_pr_merged" else {}),
             )
             if not recorded:
                 source_succeeded = True
