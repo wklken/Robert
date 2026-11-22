@@ -493,7 +493,16 @@ def normalize(envelope, settings):
                         "Trusted PR author is unavailable.",
                     )
                     action["pr_author_login"] = login
-                    action["body"] = f"@{login}\n\n" + action["body"]
+                    owner = scope.get("decision_owner") or {}
+                    decision_login = owner.get("login") or "wklken"
+                    _require(
+                        isinstance(decision_login, str)
+                        and bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", decision_login)),
+                        field + ".body",
+                        "Confirmed decision owner is invalid.",
+                    )
+                    action["decision_owner_login"] = decision_login
+                    action["body"] = f"@{decision_login}\n\n" + action["body"]
                 action["body"] += "\n\n" + comment_marker(envelope["task_id"], envelope["attempt_id"], index)
         elif kind == GitHubActionType.OPEN_PR.value:
             for source in ("repo", "branch_name", "base_branch"):

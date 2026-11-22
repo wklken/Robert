@@ -146,7 +146,7 @@ def prepare(repo, data_dir, round_id, event, workers, source):
             or manifest.get("event", {}).get("event_fingerprint") != event["event_fingerprint"]
         ):
             raise ValueError("vote manifest identity changed")
-        verify_snapshot(manifest)
+        verify_snapshot(manifest, require_current_prompt=True)
         if manifest["event"] == event:
             return manifest
         if manifest.get("frozen"):
@@ -217,13 +217,14 @@ def add_issue_code(manifest, repo):
     vote_files.atomic_json(Path(manifest["context_dir"]) / "manifest.json", manifest)
 
 
-def verify_snapshot(manifest):
+def verify_snapshot(manifest, *, require_current_prompt=False):
+    """Verify frozen bytes against the manifest, or check an unregistered snapshot before adoption."""
     for name, expected in manifest["files"].items():
         path = vote_files.safe_path(name, manifest["artifact_root"])
         if vote_files.digest(path) != expected:
             raise ValueError("vote context file changed")
     if manifest.get("code_manifest"):
-        review_workspace.verify_snapshot(manifest["code_manifest"])
+        review_workspace.verify_snapshot(manifest["code_manifest"], require_current_prompt=require_current_prompt)
     elif manifest.get("source_worktree"):
         tree = Path(manifest["source_worktree"])
         if (
@@ -234,9 +235,13 @@ def verify_snapshot(manifest):
         ):
             raise ValueError("vote source worktree changed")
     if manifest.get("frozen"):
+        prompt = vote_files.safe_path(manifest["prompt_path"], manifest["artifact_root"])
         if (
-            vote_files.digest(manifest["prompt_path"]) != manifest["prompt_sha256"]
-            or Path(manifest["prompt_path"]).read_text() != render_prompt(vote_cast_input(manifest)).text
+            vote_files.digest(prompt) != manifest["prompt_sha256"]
+            or (
+                require_current_prompt
+                and prompt.read_text(encoding="utf-8") != render_prompt(vote_cast_input(manifest)).text
+            )
             or vote_files._read_json(Path(manifest["context_dir"]) / "manifest.json") != manifest
         ):
             raise ValueError("frozen vote manifest or prompt changed")
@@ -259,7 +264,7 @@ def freeze(manifest, prepared):
         "ballot_spec_sha256": vote_files.digest(path),
         "frozen": True,
     }
-    prompt = Path(manifest["artifact_root"]) / "voter-prompt.md"
+    prompt = vote_files.safe_path(Path(manifest["artifact_root"]) / "voter-prompt.md", manifest["artifact_root"])
     content = render_prompt(vote_cast_input(frozen)).text
     if prompt.exists() and prompt.read_text() != content:
         raise ValueError("existing voter prompt differs")

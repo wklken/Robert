@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from robert_agent.context.prompt_contract import ContextItem, OutputContract, PromptInput
+from robert_agent.context.decision_owner import context_item as decision_owner_context
 
 
 _REVIEW_DIR = "ROBERT_REVIEW_OUTPUT_DIR"
@@ -80,7 +81,12 @@ def _review_input(stage, manifest, output, *, prepared=False, extra=(), values=N
         _identity(manifest),
         output,
         authority={"source_access": "read-only", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
-        context_items=(*_snapshot_context(manifest, "review snapshot", files), source, *extra),
+        context_items=(
+            *_snapshot_context(manifest, "review snapshot", files),
+            source,
+            decision_owner_context(manifest.get("decision_owner")),
+            *extra,
+        ),
         values=values or {},
     )
 
@@ -199,7 +205,7 @@ def _vote_input(stage, manifest, output, *, frozen=False, extra=()):
             "allowed_github_actions": [],
             "output_directory": _VOTE_DIR,
         },
-        context_items=(*items, *extra),
+        context_items=(*items, decision_owner_context(manifest.get("decision_owner")), *extra),
     )
 
 
@@ -288,6 +294,7 @@ def address_findings_input(manifest, candidate_path, report_path, report_sha, de
         output,
         authority={"source_access": "assigned worktree", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
         context_items=(
+            decision_owner_context(manifest.get("decision_owner")),
             _file_item(
                 "candidate",
                 "Original implementation and verification handoff",

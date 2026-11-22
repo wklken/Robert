@@ -101,7 +101,7 @@ class TapdPromptTests(unittest.TestCase):
         task = {"task_id": "task-1", "attempt_id": "attempt-1", "workstream_id": "github:o/r#1"}
         prompt_input = worker_prompt_input(task, routes.ROUTES["comment-analysis"], [{"event_fingerprint": "c:1"}], {})
         self.assertNotIn("tapd", prompt_input.guidance)
-        self.assertEqual([item.id for item in prompt_input.context_items], ["request"])
+        self.assertEqual([item.id for item in prompt_input.context_items], ["request", "decision-owner"])
 
 
 if __name__ == "__main__":
