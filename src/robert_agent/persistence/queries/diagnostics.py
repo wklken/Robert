@@ -31,6 +31,8 @@ REPO_ACTION_COUNTERS = (
     "current_state_closed_skip_count",
 )
 
+PUBLISH_ACTION_COUNTERS = ("pending_count", "published_count", "skipped_count", "failed_count", "finalized_task_count")
+
 
 def _zero(document, key):
     path = sql_constant("$." + key)
@@ -109,10 +111,7 @@ def compactable_runs(conn, batch_size, *, excluded_run_ids=()):
         func.json_type(summary, sql_constant("$.publish_result.ok")) == "true",
     ]
     predicates.extend(_zero(summary, key) for key in RUN_ACTION_COUNTERS)
-    predicates.extend(
-        _zero(summary, "publish_result." + key)
-        for key in ("pending_count", "published_count", "skipped_count", "failed_count", "finalized_task_count")
-    )
+    predicates.extend(_zero(summary, "publish_result." + key) for key in PUBLISH_ACTION_COUNTERS)
     for table in (steps, repo_steps):
         predicates.append(
             ~select(1)

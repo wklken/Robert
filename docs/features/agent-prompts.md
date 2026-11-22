@@ -66,8 +66,10 @@ Robert 控制器的文件路径补读历史，因此请求材料在其输入中�
 | 监督 | diagnose / decide | 各自既有 JSON 结果，stdout 返回 |
 | 受限维护 | maintenance.repair | compact-v1 new_pr JSON，由 broker 绑定身份并提交 |
 
-helper 的 recorded/deferred 表示持久交接成功，Worker 随后停止修改并退出；最终
-审计和发布仍由控制器执行。原生阶段在规定目录原子写入结果文件，stdout/stderr
+Worker 读取 helper 输出的 JSON 状态。进程退出码 0 也可能携带校验失败。
+`recorded` 表示结果已入库，`deferred` 表示已持久保存、等待入库。收到这两类确认后，
+Worker 停止修改并退出，最终审计和发布仍由控制器执行。审查候选的 `candidate_saved`
+表示候选文件已保存，随后由审查控制器处理。原生阶段在规定目录原子写入结果文件，stdout/stderr
 仅作诊断。stdout 阶段输出一个 JSON 对象后退出，不调用 helper 或等待其确认。
 
 输入不足的处理也服从阶段结果契约：普通 Worker 可以提交 waiting_for_user；投票

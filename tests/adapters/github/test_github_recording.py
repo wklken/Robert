@@ -32,6 +32,7 @@ class GitHubRecordingTests(unittest.TestCase):
 
         recorder = recording.RecordingRunner(runner, max_job_log_chars=80)
         recorder(args, check=True)
-        self.assertEqual(list(recorder.responses.values()), [None])
-        with self.assertRaises(subprocess.CalledProcessError):
+        [payload] = recorder.responses.values()
+        self.assertEqual(json.loads(payload), {"evidence_status": "blocked_secret"})
+        with self.assertRaises(recording.JobLogBlocked):
             recording.ReplayRunner(recorder.responses)(args, check=True)

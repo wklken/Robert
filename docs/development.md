@@ -37,6 +37,10 @@ robert init
 Production defaults remain `~/.config/robert/config.yml` and
 `~/.local/share/robert/`.
 
+The runtime defines the execution order in Python. The packaged `workflow.yml`
+illustrates that order. Low-level cycle, loop and daemon commands retain
+`--workflow` as a compatibility path check. Its contents are descriptive.
+
 ## Testing
 
 Run focused tests first, then the complete gate:
