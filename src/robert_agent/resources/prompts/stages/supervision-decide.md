@@ -23,4 +23,4 @@ Base the decision on supplied evidence IDs. Consider `[truncated]` and `omitted_
 - Give a concise, evidence-based `reason` and a nonempty list of supporting `evidence_ids`.
 - Describe the observable result in `expected_progress`. Do not claim the selected action already happened.
 - Set `recheck_seconds` to an integer from ${min_recheck} to ${max_recheck}.
-- Give a user-facing `message` for `ask_user` and `notify_user`; otherwise use an empty string. Keep each text field within ${max_text_chars} characters.
+- Give a user-facing `message` for `ask_user` and `notify_user`; otherwise use an empty string. For `ask_user`, add a `choices` list for that message. Omit `choices` for other actions. Keep each text field within ${max_text_chars} characters.

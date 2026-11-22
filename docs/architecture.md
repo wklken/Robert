@@ -77,6 +77,10 @@ robert_agent/
 定义 TAPD 主机、项目键、单据 URL、来源键和评论 fingerprint 的语法，供配置、适配器、
 来源 owner 和发布合同共用。
 
+[`foundation/question_choices.py`](../src/robert_agent/foundation/question_choices.py) 提供有序选项的共享格式和校验。
+Worker 结果和原生阶段在进入等待前校验新提问。看板和 OpenClaw 的点选复用版本化回复命令，
+从当前问题记录解析选项，发布与监督继续使用各自的授权边界。
+
 稳定领域能力、纯策略、适配器和读模型不依赖应用用例、具体 workflow、runtime 或接口。
 领域 `application/` 与具体 workflow 属于应用层，按明确的模块依赖组合能力；跨领域
 调度放在外层组合入口。公共函数/类型/常量归实际 owner；不靠延迟 import、动态查找、
@@ -102,6 +106,8 @@ robert_agent/
   验证本地 session 身份并按字节位置倒序读取。页面展开时加载，历史分页不推进执行状态。
 - workbench 列表读取当前任务的最新尝试、阶段和结果，在分页后补充看板生命周期。
   列表仍扫描轻量任务标识以保留全库搜索、计数和筛选项；完整尝试与工件历史由详情页读取。
+- `readmodels.timeline` 从已完成任务、审核结果和发布记录投影日、周、月工作清单，并沿工作流来源关联原始需求。
+- `work.receipt_events` 记录关键交付节点，`delivery.application.receipt_notifications` 将独立小票按批投递到已授权的 OpenClaw 目标。
 - `context.memory_policy` 定义项目记忆的大小和脱敏约束，供提交、审计和入库共用。
 
 [架构门禁](../tests/architecture/test_architecture_boundaries.py) 检查无环、层次方向、根目录合同和

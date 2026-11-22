@@ -901,6 +901,7 @@ def execute_command(
     expected_event_id=None,
     idempotency_key,
     body="",
+    choice=None,
     routing_mode=None,
     requested_worker=None,
     title=None,
@@ -925,6 +926,16 @@ def execute_command(
     if expected_event_id is not None:
         expected_event_id = validate_text(expected_event_id, "expected_event_id", 128, required=True)
     body = validate_text(body, "body", MAX_REPLY)
+    if choice is not None and (
+        type(choice) is not int
+        or choice < 1
+        or command != WorkCommand.REPLY
+        or expected_event_id is None
+        or body.strip()
+        or dependency is not None
+        or dependency_resume is not None
+    ):
+        raise WorkItemValidationError("Choose one option for the current question or supply a written reply.")
     if abandon_review_run_ids is None:
         abandon_review_run_ids = []
     if not isinstance(abandon_review_run_ids, list):
@@ -1171,6 +1182,11 @@ def execute_command(
                         "The attention item changed. Review the latest question or failure before continuing."
                     )
                 question_metadata = _decode_json(unresolved["metadata_json"], {}) if unresolved else {}
+                if choice is not None:
+                    options = messaging.selectable_choices(question_metadata.get("choices", []))
+                    if unresolved["event_type"] != "operator_question" or choice > len(options):
+                        raise WorkItemValidationError("The selected option is unavailable.")
+                    body = options[choice - 1]["label"]
                 if dependency is not None or dependency_resume is not None:
                     question_task_id = question_metadata.get("task_id")
                     parent = db_records.first(db_read_tasks.find_record_by_task_id(conn, question_task_id))

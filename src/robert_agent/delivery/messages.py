@@ -126,6 +126,19 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
             return None
         payload.update(attention)
         payload["actions"] = messaging.actions_for(attention["event_type"], attention["kind"])
+        if "reply" in payload["actions"] and messaging.selectable_choices(attention["choices"]):
+            payload["selectable_choices"] = True
+            payload["required_action"] = "请选择一个方案，也可以填写自己的答复。"
+    elif kind == "supervision_question" and metadata.get("decision_id") == notification_id:
+        choices = messaging.selectable_choices(metadata.get("choices", []))
+        if choices:
+            payload.update(
+                summary=metadata.get("required_action"),
+                required_action="请选择一个方案，也可以填写自己的答复。",
+                choices=choices,
+                selectable_choices=True,
+                actions=["reply"],
+            )
     if kind == "supervision_decision_unavailable":
         payload["summary"] = (
             metadata.get("summary") or "自动决策调用连续失败。这是全局监督服务告警，Kanban 不会生成任务确认项。"

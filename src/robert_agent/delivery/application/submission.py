@@ -1,3 +1,4 @@
+from robert_agent.foundation import question_choices
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
 from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
@@ -29,6 +30,7 @@ from uuid import uuid4
 from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 from robert_agent.persistence import execution_control as execution_store
 from robert_agent.execution import spool as result_spool
+from robert_agent.delivery import policies
 from robert_agent.delivery.application import validation as result_validation
 from robert_agent.delivery import contract as result_contract
 from robert_agent.delivery.application import audit as audit_result
@@ -96,27 +98,9 @@ def _validate_verification(verification):
 def _validate_operator_question(question):
     if question is None:
         return None, None
-    if not isinstance(question, dict):
-        return None, "operator_question must be an object"
-    if question.get("kind") not in {
-        "clarification",
-        "scope_decision",
-        "completion_acceptance",
-    }:
-        return None, "operator_question.kind is invalid"
-    summary = question.get("summary")
-    if not isinstance(summary, str) or not summary.strip() or len(summary) > 2000:
-        return None, "operator_question.summary is invalid"
-    choices = question.get("choices", [])
-    if not isinstance(choices, list) or len(choices) > 5:
-        return None, "operator_question.choices is invalid"
-    for choice in choices:
-        if not isinstance(choice, dict):
-            return None, "operator_question choices must be objects"
-        if not isinstance(choice.get("id"), str) or not choice["id"]:
-            return None, "operator_question choice id is required"
-        if not isinstance(choice.get("label"), str) or not choice["label"]:
-            return None, "operator_question choice label is required"
+    error = policies.validate_operator_question({"operator_question": question})
+    if error:
+        return None, error
     return question, None
 
 
@@ -232,7 +216,7 @@ def _review_required():
 def _prepare(db_path, envelope):
     with closing(db_database.connect(db_path, timeout=0.1)) as conn:
         settings, rejection = result_validation.context(
-            conn, envelope["task_id"], envelope["attempt_id"], allow_completed=False
+            conn, envelope["task_id"], envelope["attempt_id"], allow_completed=False, include_question_contract=True
         )
         if rejection:
             return None, rejection
@@ -246,9 +230,11 @@ def _prepare(db_path, envelope):
             return None, _review_required()
         try:
             normalized = result_contract.normalize(envelope, settings)
+            result_validation.validate_question_submission(normalized, settings)
         except result_contract.InvalidSubmission as exc:
             response = exc.response()
         else:
+            settings.pop(question_choices.REQUIRED_FLAG)
             checked = audit_result.audit_result(normalized, final=False, **settings)
             if checked["ok"]:
                 if any(

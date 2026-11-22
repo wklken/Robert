@@ -15,6 +15,7 @@ from robert_agent.readmodels import board
 from robert_agent.runtime import cycle as run_once
 from robert_agent.runtime import loop
 from robert_agent.work.application import commands, tapd_scan
+from tests.support.work_items import example_choices
 from tests.support.tapd import STORY, comment
 from tests.support.tapd_cycle import TapdCycleCase
 from tests.support.repository_cycle import _verification_evidence
@@ -40,7 +41,11 @@ class TapdOperatorReplyTests(TapdCycleCase):
                         {"type": "comment", "body": "Local fix preserved; which target branch?"}
                     ],
                     "consumed_event_fingerprints": ["tapd-comment:tapd.example/100/1"],
-                    "operator_question": {"kind": "scope_decision", "summary": "Which target branch?"},
+                    "operator_question": {
+                        "kind": "scope_decision",
+                        "summary": "Which target branch?",
+                        "choices": example_choices(),
+                    },
                     "verification": [_verification_evidence()],
                     "handoff": "Local fix preserved; waiting for the target branch.",
                     "used_skills": [],

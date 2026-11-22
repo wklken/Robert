@@ -337,6 +337,44 @@ def find_for_deliver_pending(conn, now, limit, repo_ids=None, *, messaging_repo_
     return statements.read(conn, stmt)
 
 
+def receipt_events(conn, *, destination, after, now, kinds, repo_ids, messaging_settings, limit):
+    sqlite.register_timestamp_after(conn)
+    notice = tables["notifications"].c
+    query = (
+        select(
+            notice.notification_id, notice.notification_type, notice.created_at, notice.metadata_json, notice.task_id
+        )
+        .where(
+            notice.channel == "receipt",
+            notice.notification_type.in_(kinds),
+            func.json_extract(notice.metadata_json, "$.destination") == destination,
+            func.json_extract(notice.metadata_json, "$.repo_id").in_(repo_ids),
+            func.json_extract(notice.metadata_json, "$.delivery.batch_id").is_(None),
+            _dispatch_identity(messaging_settings),
+            func.python_timestamp_after(notice.created_at, after) == 1,
+            func.python_timestamp_after(notice.created_at, now) == 0,
+        )
+        .order_by(notice.created_at, notice.notification_id)
+        .limit(limit)
+    )
+    return statements.read(conn, query)
+
+
+def latest_receipt_digest(conn, destination):
+    notice = tables["notifications"].c
+    return statements.read(
+        conn,
+        select(notice.created_at)
+        .where(
+            notice.channel == "receipt",
+            notice.notification_type == "agent_receipt_digest",
+            func.json_extract(notice.metadata_json, "$.destination") == destination,
+        )
+        .order_by(notice.created_at.desc())
+        .limit(1),
+    )
+
+
 def update_failure(conn, kind, key):
     query1 = (
         select(sql_constant(1))

@@ -2,6 +2,7 @@
 
 from robert_agent.context.worker_prompt import worker_prompt_input
 from tests.support import TEST_ROOT
+from robert_agent.delivery.policies import validate_operator_question
 from robert_agent.delivery.application import lane as delivery_lane
 from robert_agent.adapters.github import budget as github_budget
 from contextlib import closing
@@ -40,6 +41,8 @@ class CompactCallerTests(unittest.TestCase):
                     sample.get("runtime_context", {}).get("origin_type", "github"),
                 )
                 self.assertNotIn("<!-- robert-", prompt)
+                if sample["route_result"]["expected_output"] == "waiting_for_user":
+                    self.assertIsNone(validate_operator_question(submission, require_choices=True))
 
     def test_classify_requires_explicit_kind(self):
         result = {

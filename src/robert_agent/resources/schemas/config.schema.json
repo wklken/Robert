@@ -752,6 +752,25 @@
         },
         "dispatch_enabled": {"type": "boolean", "default": false},
         "contextual_replies": {"type": "boolean", "default": false},
+        "receipts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean", "default": false},
+            "send_after": {"type": "string", "minLength": 1},
+            "chromium": {"type": "string", "minLength": 1, "default": "chromium"},
+            "events": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "default": ["pr_opened", "report_delivered"],
+              "items": {
+                "type": "string",
+                "enum": ["pr_opened", "report_delivered", "pr_updated", "pr_reviewed", "pr_merged"]
+              }
+            }
+          }
+        },
         "send_after": {
           "type": "string",
           "minLength": 1,

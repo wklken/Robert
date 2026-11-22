@@ -205,12 +205,38 @@ export default definePluginEntry({
       acceptsArgs: true, requireAuth: true,
       handler: async (ctx) => {
         if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
-        const match = String(ctx.args ?? "").trim().match(/^(\\S+)\\s+(\\d+)\\s+(reply|approve|retry|retry_publish|cancel|ack)(?:\\s+([\\s\\S]*))?$/);
-        if (!match) return { text: "Usage: /robert-respond <message-id> <version> <action> [answer]", isError: true };
-        const [, notification_id, rawVersion, action, body = ""] = match;
+        const args = String(ctx.args ?? "").trim();
+        const button = args.match(/^([ad])([A-Za-z0-9_-]{22}):(\\d+):([1-5x])$/);
+        const typed = args.match(/^(\\S+)\\s+(\\d+)\\s+(reply|approve|retry|retry_publish|cancel|ack|pick)(?:\\s+([\\s\\S]*))?$/);
+        if (!button && !typed) return { text: "Usage: /robert-respond <message-id> <version> <action> [answer]", isError: true };
+        let notification_id, rawVersion, action, body, choice;
+        if (button) {
+          const [, prefix, encoded, version, selected] = button;
+          const identifier = Buffer.from(encoded, "base64url");
+          if (identifier.toString("base64url") !== encoded)
+            return { text: "Invalid question reference.", isError: true };
+          notification_id = (prefix === "a" ? "attention-wie-" : "decision-") + identifier.toString("hex");
+          rawVersion = version;
+          action = selected === "x" ? "custom_reply" : "reply";
+          if (action === "reply") choice = Number(selected);
+          body = "";
+        } else {
+          [, notification_id, rawVersion, action, body = ""] = typed;
+          if (action === "pick") {
+            if (!/^[1-5]$/.test(body)) return { text: "Choose an option number from 1 to 5.", isError: true };
+            choice = Number(body);
+            action = "reply";
+            body = "";
+          }
+        }
         const version = Number(rawVersion);
         if (!Number.isSafeInteger(version)) return { text: "Invalid version.", isError: true };
-        return runConfigured(["messages", "respond", "--output", "json"], { ...identity(ctx), notification_id, version, action, body });
+        const result = await runConfigured(["messages", "respond", "--output", "json"],
+          { ...identity(ctx), notification_id, version, action, body, choice }, button != null || choice !== undefined);
+        if (!button && choice === undefined) return result;
+        if (result.ok && result.status === "awaiting_custom_reply") return { text: result.message };
+        if (result.ok) return { text: "Robert 已收到你的选择。" };
+        return { text: result.safe_error ?? "Robert 未提交答复。", isError: true };
       },
     });
     api.registerCommand({

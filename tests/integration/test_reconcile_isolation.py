@@ -1,6 +1,7 @@
 """Remote terminal facts and failures must not stall unrelated GitHub work."""
 
 from contextlib import closing
+import json
 import sqlite3
 import subprocess
 from unittest import mock
@@ -16,6 +17,45 @@ from tests.support.reconcile_isolation import ReconcileIsolationFixture
 
 
 class ReconcileIsolationTests(ReconcileIsolationFixture):
+    def test_configured_merge_records_one_receipt_at_the_confirmed_merge_time(self):
+        self.seed()
+        config = {
+            "messaging": {
+                "enabled": True,
+                "provider": "openclaw",
+                "repos": ["example/backend"],
+                "send_after": "2026-10-28T07:00:00Z",
+                "receipts": {
+                    "enabled": True,
+                    "send_after": "2026-10-28T07:00:00Z",
+                    "events": ["pr_merged"],
+                },
+            }
+        }
+
+        def runner(args, **kwargs):
+            response = self.remote(args, **kwargs)
+            payload = json.loads(response.stdout)
+            payload.update(html_url="https://github.com/example/backend/pull/123", title="Merged delivery")
+            return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            for now in ("2026-10-28T07:15:00Z", "2026-10-28T07:20:00Z"):
+                source_lifecycle.reconcile_remote_source_states(
+                    conn,
+                    "repo:example/backend",
+                    {"full_name": "example/backend"},
+                    runner,
+                    now,
+                    receipt_config=config,
+                )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT notification_type, created_at FROM notifications WHERE channel='receipt'"
+                ).fetchall(),
+                [("pr_merged", "2026-10-28T07:10:33+00:00")],
+            )
+
     def test_completed_or_attention_binding_records_merged_source_idempotently(self):
         task = self.seed()
         for binding_status in ("terminal", "attention"):

@@ -1,5 +1,9 @@
 """Pre-submit checks; diagnostics never reserve a final result slot."""
 
+from robert_agent.foundation import question_choices
+from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.delivery import policies
+from robert_agent.security.redaction import redact_text
 from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
 from robert_agent.foundation.contracts.work import TaskLifecycle
 
@@ -22,7 +26,7 @@ from robert_agent.workflows import routes as route
 from robert_agent.delivery import contract as result_contract
 
 
-def context(conn, task_id, attempt_id, *, include_scope=True, allow_completed=True):
+def context(conn, task_id, attempt_id, *, include_scope=True, allow_completed=True, include_question_contract=False):
     row = db_records.first(db_read_tasks.find_for_context(conn, task_id, attempt_id))
     if not row:
         return None, {"ok": False, "status": "rejected_by_supervisor"}
@@ -68,11 +72,45 @@ def context(conn, task_id, attempt_id, *, include_scope=True, allow_completed=Tr
         "origin_type": action_scope.origin_type(conn, task_id, row[0]),
         "task_kind": row[1],
         "review_input_policy": metadata.get("review_input_policy", "required"),
+        **(
+            {
+                question_choices.REQUIRED_FLAG: question_choices.PROMPT_RESOURCE
+                in attempt_metadata.get("prompt_contract", {}).get("resources", {})
+            }
+            if include_question_contract
+            else {}
+        ),
         "remediation_context": episode,
         "action_scope": action_scope.for_result(conn, task_id, attempt_id, row[0], observe=False)
         if include_scope
         else None,
     }, None
+
+
+def require_answerable_question(question):
+    """Validate the human-facing question before persisting a new waiting state."""
+    error = policies.validate_operator_question({"operator_question": question}, require_choices=True)
+    if error:
+        raise result_contract.InvalidSubmission("operator_question", error, "question_not_deliverable")
+    fields = [question["summary"]]
+    for choice in question["choices"]:
+        fields.extend((choice["label"], choice["tradeoff"]))
+    if any(not (safe := redact_text(text))["ok"] or safe["text"] != text for text in fields):
+        raise result_contract.InvalidSubmission(
+            "operator_question", "Question text and choices must already be safe to share.", "question_not_deliverable"
+        )
+
+
+def validate_question_submission(result, settings):
+    if settings.get(question_choices.REQUIRED_FLAG) and (
+        result["output_type"] == OutputType.WAITING_FOR_USER
+        or (
+            result["output_type"] == OutputType.CLASSIFICATION_RESULT
+            and settings["origin_type"] == "web"
+            and result.get("recommended_route") == "waiting-for-user"
+        )
+    ):
+        require_answerable_question(result.get("operator_question"))
 
 
 def failure(audit):

@@ -10,4 +10,6 @@ Verify the final commit with the checks required by the repository. Return its f
 
 ## Delivery
 
+If any disposition is needs_decision, include a top-level choices list. Frame each option as a complete answer to the pending finding IDs and their reason.
+
 Write dispositions.json.tmp under the output directory and rename it to dispositions.json once complete.

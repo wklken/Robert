@@ -196,6 +196,20 @@ def actions_for_tasks(conn, task_ids):
     return _for_ids(conn, query, action.task_id, task_ids)
 
 
+def timeline_actions_for_results(conn, result_ids):
+    action = tables["github_actions"].c
+    published_at = func.json_extract(valid_json_or_empty(action.metadata_json), "$.publish.published_at")
+    query = select(
+        action.result_id,
+        action.action_type,
+        action.target_url,
+        action.audit_status,
+        action.publish_status,
+        published_at.label("published_at"),
+    ).order_by(action.created_at, action.action_id)
+    return _for_ids(conn, query, action.result_id, result_ids)
+
+
 def artifacts_for_tasks(conn, task_ids=None, *, attempt_id=None):
     artifact = tables["artifacts"].c
     query = select(

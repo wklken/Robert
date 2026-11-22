@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Completion timeline · Robert</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/robert-favicon.svg">
+  <link rel="stylesheet" href="/assets/github-shell.css">
+  <link rel="stylesheet" href="/assets/timeline.css">
+  <script>
+    const themeChoice = localStorage.getItem("robertWorkbenchTheme") || "system";
+    document.documentElement.dataset.colorMode = themeChoice === "system"
+      ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+      : themeChoice;
+  </script>
+  <script src="/assets/receipt-image.js" defer></script>
+  <script src="/assets/timeline.js" defer></script>
+</head>
+<body>
+  <header class="global-bar">
+    <a class="brand" href="/" aria-label="Robert">
+      <img class="brand-mark" src="/assets/robert-favicon.svg" alt="">
+      <span>Robert</span>
+    </a>
+    <div class="global-actions">
+      <label class="theme-control"><span class="sr-only" data-i18n="theme">Theme</span>
+        <select id="theme-select">
+          <option value="system" data-i18n="system">System</option>
+          <option value="light" data-i18n="light">Light</option>
+          <option value="dark" data-i18n="dark">Dark</option>
+        </select>
+      </label>
+      <label class="shell-select"><span class="sr-only" data-i18n="language">Language</span>
+        <select id="language-select"><option value="en">English</option><option value="zh">中文</option></select>
+      </label>
+    </div>
+  </header>
+  <header class="repo-header">
+    <nav class="underline-nav" aria-label="Workbench" data-i18n-aria="navigation">
+      <a class="underline-nav-item" href="/work" data-i18n="navWork">Work</a>
+      <a class="underline-nav-item" href="/board" data-i18n="navBoard">Board</a>
+      <a class="underline-nav-item" href="/work?bucket=history" data-i18n="navHistory">History</a>
+      <a class="underline-nav-item selected" href="/timeline" aria-current="page" data-i18n="navTimeline">Timeline</a>
+      <a class="underline-nav-item" href="/operations" data-i18n="navOperations">Operations</a>
+      <a class="underline-nav-item" href="/operations#knowledge" data-i18n="navKnowledge">Knowledge</a>
+    </nav>
+  </header>
+  <main class="timeline-shell">
+    <header class="timeline-heading">
+      <div>
+        <h1 data-i18n="title">Completion timeline</h1>
+        <p id="timeline-summary" class="timeline-summary"></p>
+      </div>
+      <button id="copy-list" class="shell-button primary copy-button" type="button" disabled>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+          <rect x="5" y="5" width="8.5" height="9" rx="1.2"/><path d="M10 3V2.5a1 1 0 0 0-1-1H3.5a1 1 0 0 0-1 1V9a1 1 0 0 0 1 1H4"/>
+        </svg>
+        <span data-i18n="copy">Copy work list</span>
+      </button>
+    </header>
+    <section class="timeline-controls" aria-label="Timeline filters" data-i18n-aria="filters">
+      <div class="period-switch" role="group" aria-label="Period" data-i18n-aria="period">
+        <button type="button" data-view="day" aria-pressed="false" data-i18n="day">Day</button>
+        <button type="button" data-view="week" aria-pressed="true" data-i18n="week">Week</button>
+        <button type="button" data-view="month" aria-pressed="false" data-i18n="month">Month</button>
+      </div>
+      <div class="date-controls">
+        <div class="date-arrows">
+          <button id="previous-period" class="shell-button" type="button" aria-label="Previous period" data-i18n-aria="previous" disabled>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="m10 4-4 4 4 4"/></svg>
+          </button>
+          <button id="next-period" class="shell-button" type="button" aria-label="Next period" data-i18n-aria="next" disabled>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>
+          </button>
+        </div>
+        <button id="today" class="shell-button" type="button" data-i18n="today">Today</button>
+        <label><span class="sr-only" data-i18n="jump">Jump to date</span><input id="jump-date" type="date" min="0002-01-01" max="9998-12-31" required></label>
+      </div>
+      <label class="repository-picker"><span class="sr-only" data-i18n="repository">Repository</span>
+        <select id="repository-filter"><option value="" data-i18n="allRepositories">All repositories</option></select>
+      </label>
+    </section>
+    <section class="timeline-period" aria-labelledby="period-title">
+      <h2 id="period-title" tabindex="-1"></h2>
+      <div id="activity-calendar" class="activity-calendar" hidden></div>
+    </section>
+    <p id="load-status" class="timeline-status" role="status"></p>
+    <button id="retry" class="shell-button" type="button" hidden data-i18n="retry">Retry</button>
+    <div id="completed-work"></div>
+    <p id="copy-feedback" class="sr-only" role="status"></p>
+  </main>
+  <dialog id="receipt-dialog" class="receipt-container" aria-labelledby="receipt-title">
+    <article class="receipt-paper">
+      <header class="receipt-header">
+        <div class="receipt-brand"><img src="/assets/robert-favicon.svg" alt="" width="28" height="28"> <span>Robert</span></div>
+        <div class="receipt-actions" data-receipt-control>
+          <button id="copy-receipt-image" class="shell-button" type="button" disabled data-i18n="copyReceiptImage">Copy as image</button>
+          <form method="dialog">
+            <button class="receipt-close" autofocus data-i18n-aria="close" aria-label="Close" type="submit">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
+            </button>
+          </form>
+        </div>
+      </header>
+      <div class="receipt-image-feedback" data-receipt-control>
+        <p id="receipt-image-status" role="status"></p>
+        <a id="receipt-image-download" download="robert-receipt.png" hidden data-i18n="saveReceiptImage">Download PNG</a>
+      </div>
+      <p class="receipt-kicker" data-i18n="receipt">Agent receipt</p>
+      <h2 id="receipt-title" class="receipt-title"></h2>
+      <dl id="receipt-facts" class="receipt-lines"></dl>
+      <p id="receipt-status" class="receipt-status" role="status" data-receipt-control hidden></p>
+      <button id="receipt-retry" class="shell-button" type="button" data-receipt-control hidden data-i18n="retry">Retry</button>
+      <div id="receipt-details" hidden></div>
+      <section id="receipt-deliveries" class="receipt-section" hidden aria-labelledby="receipt-delivery-title">
+        <h3 id="receipt-delivery-title" data-i18n="receiptEvidence">Request and deliveries</h3>
+        <ul id="receipt-links"></ul>
+      </section>
+      <footer id="receipt-reference"></footer>
+    </article>
+  </dialog>
+  <dialog id="copy-dialog" aria-labelledby="copy-dialog-title">
+    <h2 id="copy-dialog-title" data-i18n="copy">Copy work list</h2>
+    <label><span data-i18n="manualCopy">Select and copy the Markdown below.</span><textarea id="copy-text" rows="10" readonly></textarea></label>
+    <form method="dialog"><button class="shell-button" data-i18n="close">Close</button></form>
+  </dialog>
+</body>
+</html>

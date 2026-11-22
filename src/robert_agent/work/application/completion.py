@@ -28,7 +28,7 @@ from robert_agent.delivery import results
 from robert_agent.execution import workspace as assigned_workspace
 from robert_agent.work import source_policy
 from robert_agent.work.application import commands as work_items
-from robert_agent.work import control_queries
+from robert_agent.work import control_queries, receipt_events
 from robert_agent.work.application import handoff as pending_handoff
 from robert_agent.work.application import lifecycle as work_application_lifecycle
 from robert_agent.work.application import preparation
@@ -604,6 +604,16 @@ def finalize_accepted_result(
         payload["consumed_event_fingerprints"],
     )
     db_write_tasks.update_for_finish_parent_for_child(conn, run_now, payload["task_id"])
+    if not dry_run and config_result:
+        receipt_events.record_completed(
+            conn,
+            config_result,
+            repo_id,
+            repo["full_name"],
+            workstream_id,
+            work_item_row[0] if work_item_row else None,
+            payload,
+        )
     if work_item_row and work_item_row[1] == "web" and payload["output_type"] == OutputType.LOCAL_RESULT:
         work_items.record_system_event(
             conn,

@@ -82,7 +82,10 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_pure_policies_have_no_application_dependencies(self):
         self.assert_dependencies("robert_agent.work.policies", {"robert_agent.foundation.contracts.work"})
-        self.assert_dependencies("robert_agent.delivery.policies", {"robert_agent.foundation.contracts.delivery"})
+        self.assert_dependencies(
+            "robert_agent.delivery.policies",
+            {"robert_agent.foundation.contracts.delivery", "robert_agent.foundation.question_choices"},
+        )
         self.assert_dependencies(
             "robert_agent.work.inputs", {"robert_agent.work.errors", "robert_agent.foundation.contracts.work"}
         )
@@ -114,6 +117,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 self.assertEqual(node.module, "urllib.parse", (name, node.lineno))
             if isinstance(node, ast.Import):
                 self.assertEqual([alias.name for alias in node.names], ["re"], (name, node.lineno))
+
+    def test_shared_question_choices_have_no_domain_dependencies(self):
+        self.assert_dependencies("robert_agent.foundation.question_choices", ())
 
     def test_leaf_capabilities_do_not_import_their_callers(self):
         lower = (
