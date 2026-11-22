@@ -11,7 +11,7 @@ from robert_agent.foundation import errors as run_errors
 from robert_agent.execution.application import facts
 from robert_agent.execution import workspace as assigned_workspace
 from robert_agent.work.application import admission as work_admission
-from robert_agent.work.application import dispatch_admission
+from robert_agent.work.application import dispatch_admission, proposal_admission
 from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import completion
 from robert_agent.work.application import github_requests
@@ -63,6 +63,19 @@ def admit_requests(
         dispatch_queue=dispatch_queue,
         dispatch_budget=dispatch_budget,
         prompt_paths=prompt_paths,
+    )
+    admitted.update(
+        proposal_admission.prepare(
+            conn,
+            config=config_result,
+            repo=repo,
+            repo_id=repo_id,
+            now=run_now,
+            dispatch_queue=dispatch_queue,
+            dispatch_budget=dispatch_budget,
+            prompt_paths=prompt_paths,
+            dry_run=dry_run,
+        )
     )
     known_workstreams.update(admitted)
     active_workstreams.update(admitted)

@@ -129,3 +129,14 @@ messaging:
   #   send_after: "2026-11-22T09:00:00+08:00"  # Set the receipt activation time.
   #   events: [pr_opened, report_delivered]
   #   chromium: chromium
+
+# Discover proposals in explicitly selected sources. See docs/features/proposer.md.
+proposer:
+  enabled: false
+  publish_comments: false
+  github_repositories: []
+  github_assignees: []
+  tapd_projects: []
+  tapd_assignees: []
+  # gateway_metadata: /path/to/local-messages-gateway.json
+  # model: your-local-gateway-model

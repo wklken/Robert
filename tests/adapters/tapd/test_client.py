@@ -31,7 +31,7 @@ def comment(comment_id, created, *, entry_type="stories", author="alice", entry_
     }
 
 
-class TapdClientTests(unittest.TestCase):
+class TapdClientFixture(unittest.TestCase):
     def setUp(self):
         scratch = TemporaryDirectory()
         self.addCleanup(scratch.cleanup)
@@ -53,6 +53,8 @@ class TapdClientTests(unittest.TestCase):
             return response
         return subprocess.CompletedProcess(command, 0, json.dumps(response).encode(), b"")
 
+
+class TapdClientTests(TapdClientFixture):
     def test_author_scan_reads_each_type_until_the_boundary_with_scoped_process_options(self):
         self.responses = [
             page(1, [comment("12", "2026-11-20 10:00:00"), comment("11", "2026-11-20 09:00:00")], limit=2),
@@ -179,6 +181,81 @@ class TapdClientTests(unittest.TestCase):
                 with self.assertRaises(TapdError) as raised:
                     self.client.add_comment(WORKSPACE, "bug", "1120001234000000202", "正文")
                 self.assertTrue(raised.exception.effect_unknown)
+
+
+class TapdCandidateTests(TapdClientFixture):
+    def detail(self, external_id=STORY, **extra):
+        return {
+            "id": external_id,
+            "workspace_id": WORKSPACE,
+            "name": "a story",
+            "status": "open",
+            "created": "2026-11-20 10:00:00",
+            "owner": "",
+            **extra,
+        }
+
+    def test_recent_fetches_full_details_and_filters_precise_interval(self):
+        from datetime import datetime, timezone
+
+        self.responses = [
+            page(1, [{"id": STORY}, {"id": "1120001234000000100"}]),
+            self.detail(),
+            self.detail("1120001234000000100", created="2026-11-14 10:00:00"),
+        ]
+        found = self.client.recent_items(
+            WORKSPACE,
+            "story",
+            since=datetime(2026, 11, 15, tzinfo=timezone.utc),
+            until=datetime(2026, 11, 22, tzinfo=timezone.utc),
+        )
+        self.assertEqual([row.external_id for row in found], [STORY])
+        self.assertEqual(found[0].owners, ())
+        self.assertEqual(found[0].created, "2026-11-20 10:00:00")
+        self.assertIn("--order=created desc", self.calls[0][0])
+
+    def test_owner_metadata_keeps_unknown_and_uses_bug_current_owner(self):
+        absent = self.detail()
+        del absent["owner"]
+        self.responses = [absent, self.detail(owner="alice;bob;"), self.detail(current_owner="alice", owner=None)]
+        self.assertIsNone(self.client.get_item(WORKSPACE, "story", STORY).owners)
+        self.assertEqual(self.client.get_item(WORKSPACE, "story", STORY).owners, ("alice", "bob"))
+        self.assertEqual(self.client.get_item(WORKSPACE, "bug", STORY).owners, ("alice",))
+
+    def test_recent_rejects_missing_created_and_wrong_order(self):
+        from datetime import datetime, timezone
+
+        missing = self.detail()
+        del missing["created"]
+        self.responses = [page(1, [{"id": STORY}]), missing]
+        with self.assertRaises(TapdError) as raised:
+            self.client.recent_items(
+                WORKSPACE,
+                "story",
+                since=datetime(2026, 11, 15, tzinfo=timezone.utc),
+                until=datetime(2026, 11, 22, tzinfo=timezone.utc),
+            )
+        self.assertEqual(raised.exception.code, "invalid_response")
+
+    def test_recent_reports_truncated_pages_and_bad_order(self):
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+
+        since = datetime(2026, 11, 15, tzinfo=timezone.utc)
+        until = datetime(2026, 11, 22, tzinfo=timezone.utc)
+        with patch("robert_agent.adapters.tapd.client.PAGE_LIMIT", 1):
+            self.responses = [page(1, [{"id": STORY}], limit=1), self.detail()]
+            with self.assertRaises(TapdError) as raised:
+                self.client.recent_items(WORKSPACE, "story", since=since, until=until, max_pages=1)
+            self.assertEqual(raised.exception.code, "scan_limit")
+        self.responses = [
+            page(1, [{"id": STORY}, {"id": "1120001234000000100"}]),
+            self.detail(created="2026-11-19 10:00:00"),
+            self.detail("1120001234000000100"),
+        ]
+        with self.assertRaises(TapdError) as raised:
+            self.client.recent_items(WORKSPACE, "story", since=since, until=until)
+        self.assertEqual(raised.exception.code, "invalid_response")
 
 
 if __name__ == "__main__":

@@ -823,6 +823,21 @@
         }
       }
     },
+    "proposer": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean", "default": false},
+        "publish_comments": {"type": "boolean", "default": false},
+        "github_repositories": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []},
+        "github_assignees": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []},
+        "tapd_projects": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []},
+        "tapd_assignees": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []},
+        "gateway_metadata": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
     "tapd": {
       "type": "object",
       "default": {},

@@ -5,7 +5,7 @@ from robert_agent.foundation.contracts.work import SourceProvider
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_sources as db_read_github_sources
 from robert_agent.security import authorization as authorize
-from robert_agent.work import dispatch_requests
+from robert_agent.work import dispatch_requests, proposal_requests
 from robert_agent.work import tapd_policy
 from robert_agent.adapters.github import discovery as discover
 
@@ -54,6 +54,8 @@ def refresh_pending_events(events, pending, covered, repo):
 
 
 def reauthorize_saved_request(event, repo, *, known_workstreams=(), conn=None, config=None, already_running=False):
+    if event.get("proposal_id"):
+        return proposal_requests.reauthorize(conn, config, event, already_running=already_running)
     if event.get("provider") == SourceProvider.TAPD:
         source_id = values.github_source_id(event["source_key"])
         state = db_records.first(db_read_github_sources.find_state_by_source_id(conn, source_id)) if conn else None

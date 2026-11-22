@@ -745,3 +745,49 @@ CREATE INDEX IF NOT EXISTS idx_github_actions_recent ON github_actions(created_a
 CREATE INDEX IF NOT EXISTS idx_notifications_recent ON notifications(created_at DESC, notification_id DESC);
 CREATE INDEX IF NOT EXISTS idx_worker_results_recent ON worker_results(created_at DESC, result_id DESC);
 CREATE INDEX IF NOT EXISTS idx_github_events_recent ON github_events(event_at DESC, event_id DESC);
+
+CREATE TABLE IF NOT EXISTS proposals (
+  proposal_id TEXT PRIMARY KEY NOT NULL,
+  source_identity TEXT NOT NULL UNIQUE,
+  repo_id TEXT NOT NULL REFERENCES repos(repo_id),
+  status TEXT NOT NULL CHECK (status IN ('evaluated', 'pending', 'held', 'discarded', 'approved', 'admitted', 'blocked')),
+  version INTEGER NOT NULL,
+  revision INTEGER NOT NULL,
+  source_key TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  blocked_reason TEXT NOT NULL DEFAULT '',
+  work_item_id TEXT REFERENCES work_items(work_item_id) ON DELETE SET NULL,
+  workstream_id TEXT REFERENCES workstreams(workstream_id) ON DELETE SET NULL,
+  task_id TEXT REFERENCES tasks(task_id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (version >= revision AND revision >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_proposals_status_updated ON proposals(status, updated_at, proposal_id);
+
+CREATE TABLE IF NOT EXISTS proposal_revisions (
+  proposal_id TEXT NOT NULL REFERENCES proposals(proposal_id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  source_json TEXT NOT NULL,
+  report_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (proposal_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS proposal_decisions (
+  proposal_id TEXT NOT NULL REFERENCES proposals(proposal_id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  revision INTEGER NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('approve', 'hold', 'discard')),
+  actor TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (proposal_id, version),
+  UNIQUE (proposal_id, idempotency_key)
+);
+
+CREATE TABLE IF NOT EXISTS proposal_scans (
+  slot TEXT PRIMARY KEY NOT NULL,
+  completed_at TEXT NOT NULL
+);
