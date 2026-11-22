@@ -4,50 +4,25 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Completion timeline · Robert</title>
-  <link rel="icon" type="image/svg+xml" href="/assets/robert-favicon.svg">
+  <title>Robert · Completion timeline</title>
+  <!-- workbench-head -->
   <link rel="stylesheet" href="/assets/github-shell.css">
   <link rel="stylesheet" href="/assets/timeline.css">
-  <script>
-    const themeChoice = localStorage.getItem("robertWorkbenchTheme") || "system";
-    document.documentElement.dataset.colorMode = themeChoice === "system"
-      ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
-      : themeChoice;
-  </script>
   <script src="/assets/receipt-image.js" defer></script>
   <script src="/assets/timeline.js" defer></script>
 </head>
 <body>
   <header class="global-bar">
-    <a class="brand" href="/" aria-label="Robert">
-      <img class="brand-mark" src="/assets/robert-favicon.svg" alt="">
-      <span>Robert</span>
-    </a>
+    <!-- workbench-brand -->
     <div class="global-actions">
-      <label class="theme-control"><span class="sr-only" data-i18n="theme">Theme</span>
-        <select id="theme-select">
-          <option value="system" data-i18n="system">System</option>
-          <option value="light" data-i18n="light">Light</option>
-          <option value="dark" data-i18n="dark">Dark</option>
-        </select>
-      </label>
-      <label class="shell-select"><span class="sr-only" data-i18n="language">Language</span>
-        <select id="language-select"><option value="en">English</option><option value="zh">中文</option></select>
-      </label>
+      <!-- workbench-preferences -->
     </div>
   </header>
   <header class="repo-header">
-    <nav class="underline-nav" aria-label="Workbench" data-i18n-aria="navigation">
-      <a class="underline-nav-item" href="/work" data-i18n="navWork">Work</a>
-      <a class="underline-nav-item" href="/board" data-i18n="navBoard">Board</a>
-      <a class="underline-nav-item" href="/work?bucket=history" data-i18n="navHistory">History</a>
-      <a class="underline-nav-item selected" href="/timeline" aria-current="page" data-i18n="navTimeline">Timeline</a>
-      <a class="underline-nav-item" href="/operations" data-i18n="navOperations">Operations</a>
-      <a class="underline-nav-item" href="/operations#knowledge" data-i18n="navKnowledge">Knowledge</a>
-    </nav>
+    <!-- workbench-navigation -->
   </header>
-  <main class="timeline-shell">
-    <header class="timeline-heading">
+  <main class="workbench-page">
+    <header class="workbench-page-heading">
       <div>
         <h1 data-i18n="title">Completion timeline</h1>
         <p id="timeline-summary" class="timeline-summary"></p>
@@ -109,7 +84,7 @@
       </div>
       <p class="receipt-kicker" data-i18n="receipt">Agent receipt</p>
       <h2 id="receipt-title" class="receipt-title"></h2>
-      <dl id="receipt-facts" class="receipt-lines"></dl>
+      <p id="receipt-facts" class="receipt-meta"></p>
       <p id="receipt-status" class="receipt-status" role="status" data-receipt-control hidden></p>
       <button id="receipt-retry" class="shell-button" type="button" data-receipt-control hidden data-i18n="retry">Retry</button>
       <div id="receipt-details" hidden></div>
@@ -117,7 +92,6 @@
         <h3 id="receipt-delivery-title" data-i18n="receiptEvidence">Request and deliveries</h3>
         <ul id="receipt-links"></ul>
       </section>
-      <footer id="receipt-reference"></footer>
     </article>
   </dialog>
   <dialog id="copy-dialog" aria-labelledby="copy-dialog-title">

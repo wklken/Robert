@@ -1,7 +1,4 @@
-.timeline-shell { max-width: 1180px; margin: 0 auto; padding: 36px 28px 64px; }
-.timeline-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
-.timeline-heading h1 { margin: 0; font-size: clamp(26px, 4vw, 36px); line-height: 1.2; letter-spacing: -.025em; }
-.timeline-summary { margin: 7px 0 0; color: var(--fgColor-muted); }
+.timeline-summary { margin: 4px 0 0; color: var(--fgColor-muted); }
 .copy-button { gap: 7px; min-height: 36px; padding: 6px 12px; white-space: nowrap; }
 .timeline-controls {
   display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
@@ -122,26 +119,17 @@
 }
 .receipt-close:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
 .receipt-kicker { margin: 12px 0 3px; color: var(--receipt-muted); font-size: 12px; }
-.receipt-title { margin: 0 0 16px; font-size: clamp(21px, 5vw, 26px); line-height: 1.25; }
-.receipt-lines { margin: 0; }
-.receipt-line {
-  display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.6fr);
-  align-items: baseline; gap: 12px; padding: 3px 0;
-}
-.receipt-line dt { color: var(--receipt-muted); }
-.receipt-line dd {
-  margin: 0; text-align: right; font-weight: 550; font-variant-numeric: tabular-nums;
-}
-#receipt-details > .receipt-lines, .receipt-section, #receipt-reference {
-  margin-top: 13px; padding-top: 12px; border-top: 1px dashed var(--receipt-rule);
-}
+.receipt-title { margin: 0 0 5px; font-size: clamp(21px, 5vw, 26px); line-height: 1.25; }
+.receipt-meta, .receipt-verification { color: var(--receipt-muted); font-size: 12px; }
+.receipt-meta { margin: 0; }
+.receipt-verification { margin: 8px 0 0; }
+.receipt-section { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--receipt-rule); }
 .receipt-section h3 { margin: 0 0 5px; font-size: 13px; font-weight: 700; }
 .receipt-section p, .receipt-section ul { margin: 0; }
 .receipt-section ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 13px; }
 .receipt-section a { color: var(--receipt-link); text-decoration: underline; text-underline-offset: 2px; }
 .receipt-summary { white-space: pre-wrap; }
-.receipt-status, #receipt-reference { color: var(--receipt-muted); }
-#receipt-reference { font: 11px/1.45 ui-monospace, "SFMono-Regular", "Consolas", monospace; }
+.receipt-status { color: var(--receipt-muted); }
 #receipt-retry { color: var(--receipt-ink); border-color: var(--receipt-rule); }
 @media (max-width: 480px) {
   .receipt-paper { padding-inline: 18px; }
@@ -172,8 +160,6 @@
   .month .activity-day:first-of-type { grid-column-start: var(--first-weekday); }
 }
 @media (max-width: 650px) {
-  .timeline-shell { padding: 24px 14px 40px; }
-  .timeline-heading { flex-wrap: wrap; margin-bottom: 16px; }
   .timeline-controls { gap: 8px; }
   .repository-picker { margin-left: 0; }
   .timeline-day { grid-template-columns: 1fr; gap: 2px; }

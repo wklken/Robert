@@ -3,9 +3,7 @@
 const byId = (id) => document.getElementById(id);
 const labels = {
   en: {
-    title: "Completion timeline", theme: "Theme", system: "System", light: "Light", dark: "Dark",
-    language: "Language", navigation: "Workbench", navWork: "Work", navBoard: "Board",
-    navHistory: "History", navTimeline: "Timeline", navOperations: "Operations", navKnowledge: "Knowledge",
+    title: "Completion timeline",
     filters: "Timeline filters", period: "Period", day: "Day", week: "Week", month: "Month",
     previous: "Previous period", next: "Next period", today: "Today", jump: "Jump to date",
     repository: "Repository", allRepositories: "All repositories", retry: "Retry",
@@ -17,13 +15,12 @@ const labels = {
     requirement: "Work item", board: "Board details", tapd: "TAPD",
     comment: "Published comment", open_pr: "Pull request", push_existing_pr: "Updated pull request",
     submit_pr_review: "PR review", delivery: "Delivery",
-    receipt: "Agent receipt", receiptEvidence: "Request and deliveries", receiptCompleted: "Completed",
-    receiptOutput: "Result", receiptAttempt: "Attempt", receiptStart: "Started", receiptElapsed: "Attempt duration",
-    receiptWorker: "Worker", receiptModel: "Model", receiptSummary: "Work summary", receiptChecks: "Verification",
-    receiptLoading: "Loading execution details…", receiptError: "Couldn't load execution details.",
+    receipt: "Agent receipt", receiptEvidence: "Request and deliveries", receiptSummary: "What was done",
+    receiptChecks: "Verification", receiptLoading: "Loading receipt…", receiptError: "Couldn't load the receipt.",
     receiptMissing: "This result is no longer available. Close the receipt and refresh the timeline.",
     receiptEmptySummary: "No summary was recorded.", receiptHiddenSummary: "The summary contains sensitive information.",
-    receiptNoChecks: "No checks were recorded.", passed: "Passed", failed: "Failed", skipped: "Skipped",
+    receiptNoChecks: "No checks recorded",
+    passed: (n) => `${n} passed`, failed: (n) => `${n} failed`, skipped: (n) => `${n} skipped`,
     copyReceiptImage: "Copy as image", receiptImagePreparing: "Preparing image…",
     receiptImageCopied: "Image copied. You can paste it into chat.",
     receiptImageBlocked: "Clipboard access is unavailable. Download the image to share it.",
@@ -35,9 +32,7 @@ const labels = {
     },
   },
   zh: {
-    title: "工作完成时间线", theme: "主题", system: "跟随系统", light: "浅色", dark: "深色",
-    language: "语言", navigation: "工作台", navWork: "工作", navBoard: "任务看板",
-    navHistory: "历史", navTimeline: "时间线", navOperations: "运行状态", navKnowledge: "知识",
+    title: "工作完成时间线",
     filters: "时间线筛选", period: "时间粒度", day: "日", week: "周", month: "月",
     previous: "上一段时间", next: "下一段时间", today: "今天", jump: "跳转日期",
     repository: "仓库", allRepositories: "全部仓库", retry: "重试",
@@ -48,13 +43,12 @@ const labels = {
     requirement: "需求", board: "看板详情", tapd: "TAPD",
     comment: "已发布评论", open_pr: "交付 PR", push_existing_pr: "已更新 PR",
     submit_pr_review: "PR 评审", delivery: "交付物",
-    receipt: "Agent 收据", receiptEvidence: "原始需求与交付物", receiptCompleted: "完成于",
-    receiptOutput: "结果", receiptAttempt: "执行尝试", receiptStart: "开始于", receiptElapsed: "本次尝试用时",
-    receiptWorker: "执行 Agent", receiptModel: "模型", receiptSummary: "处理摘要", receiptChecks: "验证记录",
-    receiptLoading: "正在加载执行详情…", receiptError: "无法加载执行详情。",
+    receipt: "Agent 收据", receiptEvidence: "原始需求与交付物", receiptSummary: "处理摘要",
+    receiptChecks: "验证", receiptLoading: "正在加载收据…", receiptError: "无法加载收据。",
     receiptMissing: "这条结果已不可用。关闭小票后可刷新时间线。",
     receiptEmptySummary: "这次执行未记录摘要。", receiptHiddenSummary: "摘要含敏感信息，已隐藏。",
-    receiptNoChecks: "这次执行未记录验证项。", passed: "通过", failed: "失败", skipped: "跳过",
+    receiptNoChecks: "未记录验证",
+    passed: (n) => `${n} 项通过`, failed: (n) => `${n} 项失败`, skipped: (n) => `${n} 项跳过`,
     copyReceiptImage: "复制为图片", receiptImagePreparing: "正在生成图片…",
     receiptImageCopied: "图片已复制，可粘贴到群聊。",
     receiptImageBlocked: "浏览器未允许写入剪贴板，可下载图片后分享。",
@@ -69,9 +63,7 @@ const labels = {
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-const darkMode = matchMedia("(prefers-color-scheme: dark)");
-let language = localStorage.getItem("robertLanguage") === "zh" ? "zh" : "en";
-let theme = localStorage.getItem("robertWorkbenchTheme") || "system";
+let language;
 let state;
 let period;
 let status;
@@ -108,20 +100,10 @@ function navigate(changes, reload = true) {
   else render();
 }
 
-function setTheme() {
-  document.documentElement.dataset.colorMode = theme === "system" ? (darkMode.matches ? "dark" : "light") : theme;
-  byId("theme-select").value = theme;
-}
-
 function translate() {
-  const text = labels[language];
   clock = new Intl.DateTimeFormat(language, { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-  document.documentElement.lang = language;
-  document.title = `${text.title} · Robert`;
-  document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = text[node.dataset.i18n]; });
-  document.querySelectorAll("[data-i18n-aria]").forEach((node) => {
-    node.setAttribute("aria-label", text[node.dataset.i18nAria]);
-  });
+  document.title = `Robert · ${labels[language].title}`;
+  RobertShell.translate(language, labels[language]);
 }
 
 function dateLabel(date, options) {
@@ -240,59 +222,28 @@ function boardPath(entry) {
   return `/board?item=${encodeURIComponent(entry.work_item_id)}`;
 }
 
-function receiptLine(list, label, value) {
-  if (value === null || value === "") return;
-  const line = element("div", "receipt-line");
-  line.append(element("dt", "", label), element("dd", "", String(value)));
-  list.append(line);
-}
-
 function receiptTime(instant) {
   return new Intl.DateTimeFormat(language, {
     timeZone: timezone, year: "numeric", month: "short", day: "numeric",
-    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23", timeZoneName: "short",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   }).format(new Date(instant));
-}
-
-function receiptDuration(seconds) {
-  const elapsed = Math.round(seconds);
-  const units = [
-    [Math.floor(elapsed / 3600), "hour"],
-    [Math.floor(elapsed / 60) % 60, "minute"],
-    [elapsed % 60, "second"],
-  ];
-  return units.filter(([value, unit]) => value > 0 || (unit === "second" && elapsed === 0))
-    .map(([value, unit]) => new Intl.NumberFormat(language, { style: "unit", unit }).format(value)).join(" ");
 }
 
 function renderReceiptDetails(receipt) {
   const text = labels[language];
   const details = byId("receipt-details");
-  const execution = element("dl", "receipt-lines");
-  receiptLine(execution, text.receiptAttempt, `#${receipt.attempt}`);
-  receiptLine(execution, text.receiptWorker, receipt.worker);
-  receiptLine(execution, text.receiptModel, receipt.model);
-  if (receipt.started_at) receiptLine(execution, text.receiptStart, receiptTime(receipt.started_at));
-  if (receipt.duration_seconds !== null) {
-    receiptLine(execution, text.receiptElapsed, receiptDuration(receipt.duration_seconds));
-  }
-
   const summary = element("section", "receipt-section");
   const summaryText = receipt.summary
     ? receipt.summary + (receipt.summary_truncated ? "…" : "")
     : receipt.summary_redacted ? text.receiptHiddenSummary : text.receiptEmptySummary;
   summary.append(element("h3", "", text.receiptSummary), element("p", "receipt-summary", summaryText));
 
-  const verification = element("section", "receipt-section");
-  const checks = element("dl", "receipt-lines receipt-checks");
-  for (const status of ["passed", "failed", "skipped"]) {
-    if (receipt.verification[status]) receiptLine(checks, text[status], receipt.verification[status]);
-  }
-  verification.append(
-    element("h3", "", text.receiptChecks),
-    checks.childElementCount ? checks : element("p", "", text.receiptNoChecks),
-  );
-  details.replaceChildren(execution, summary, verification);
+  const checks = ["passed", "failed", "skipped"]
+    .filter((status) => receipt.verification[status])
+    .map((status) => text[status](receipt.verification[status]));
+  const verification = element("p", "receipt-verification",
+    checks.length ? [text.receiptChecks, ...checks].join(" · ") : text.receiptNoChecks);
+  details.replaceChildren(summary, verification);
   details.hidden = false;
 }
 
@@ -379,11 +330,9 @@ function openReceipt(entry, opener) {
   const dialog = byId("receipt-dialog");
   byId("receipt-title").textContent = titleFor(entry);
   byId("receipt-details").hidden = true;
-  const facts = byId("receipt-facts");
-  facts.replaceChildren();
-  receiptLine(facts, text.repository, projectFor(entry));
-  receiptLine(facts, text.receiptCompleted, receiptTime(entry.completed_at));
-  receiptLine(facts, text.receiptOutput, outputLabel(entry));
+  byId("receipt-facts").textContent = [
+    projectFor(entry), receiptTime(entry.completed_at), outputLabel(entry),
+  ].filter(Boolean).join(" · ");
 
   const links = byId("receipt-links");
   links.replaceChildren();
@@ -396,7 +345,6 @@ function openReceipt(entry, opener) {
   for (const delivery of entry.deliveries) append(deliveryLabel(delivery), delivery.url);
   if (entry.work_item_id) append(text.board, boardPath(entry));
   byId("receipt-deliveries").hidden = !links.childElementCount;
-  byId("receipt-reference").textContent = `Task ${entry.task_id}`;
   byId("receipt-retry").onclick = () => loadReceipt(entry);
   opener.focus();
   dialog.showModal();
@@ -606,19 +554,12 @@ function start() {
     receiptRequest?.abort();
     resetReceiptImageFeedback();
   });
-  byId("language-select").value = language;
-  byId("language-select").addEventListener("change", (event) => {
-    language = event.target.value;
-    localStorage.setItem("robertLanguage", language);
+  RobertShell.bindPreferences((choice) => {
+    language = choice;
+    resetCopyFeedback();
     translate();
     render();
   });
-  byId("theme-select").addEventListener("change", (event) => {
-    theme = event.target.value;
-    localStorage.setItem("robertWorkbenchTheme", theme);
-    setTheme();
-  });
-  darkMode.addEventListener("change", setTheme);
   window.addEventListener("popstate", () => {
     const previous = state;
     state = readLocation();
@@ -626,8 +567,6 @@ function start() {
     if (state.view !== previous.view || state.date !== previous.date) load();
     else render();
   });
-  setTheme();
-  translate();
   load();
 }
 

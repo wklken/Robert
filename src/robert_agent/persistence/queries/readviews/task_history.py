@@ -196,7 +196,7 @@ def actions_for_tasks(conn, task_ids):
     return _for_ids(conn, query, action.task_id, task_ids)
 
 
-def timeline_actions_for_results(conn, result_ids):
+def timeline_actions_for_results(conn, result_ids, *, include_body=False):
     action = tables["github_actions"].c
     published_at = func.json_extract(valid_json_or_empty(action.metadata_json), "$.publish.published_at")
     query = select(
@@ -207,6 +207,9 @@ def timeline_actions_for_results(conn, result_ids):
         action.publish_status,
         published_at.label("published_at"),
     ).order_by(action.created_at, action.action_id)
+    if include_body:
+        body = func.json_extract(valid_json_or_empty(action.metadata_json), "$.body")
+        query = query.add_columns(body.label("body"))
     return _for_ids(conn, query, action.result_id, result_ids)
 
 

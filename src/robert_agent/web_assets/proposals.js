@@ -5,10 +5,46 @@ const message = document.getElementById("proposal-message");
 const list = document.getElementById("proposal-list");
 const detail = document.getElementById("proposal-detail");
 
-const statusLabel = {
-  pending: "待决策", held: "暂缓", discarded: "已放弃",
-  approved: "已批准，待受理", admitted: "已受理", blocked: "待复核",
+const labels = {
+  en: {
+    status: "Status", pending: "Needs decision", held: "On hold", discarded: "Discarded",
+    approved: "Approved, awaiting admission", admitted: "Admitted", blocked: "Needs review", all: "All",
+    loading: "Loading proposals…", empty: "No proposals with this status.", back: "Back to proposals",
+    loadFailed: "Couldn't load proposals.", decisionFailed: "Couldn't save the decision.", notFound: "Proposal not found.",
+    source: "View source ticket", summary: "Recommendation", scope: "Scope", exclusions: "Exclusions",
+    verification: "Acceptance checks", risks: "Risks", evidence: "Code evidence", decisions: "Decision history",
+    execution: "Execution progress", relatedPR: "View linked PR", board: "View on board", feedback: "Ticket updates",
+    reason: "Decision note", optionalReason: "Optional note",
+    action_approve: "Approve", action_hold: "Hold", action_discard: "Discard",
+    work_queued: "Queued", work_running: "Running", work_publishing: "Publishing", work_waiting_for_user: "Needs clarification",
+    work_in_review: "Awaiting PR review", work_pr_merged: "PR merged", work_pr_closed: "PR closed",
+    work_completed: "Completed", work_canceled: "Canceled", work_failed: "Failed",
+    event_created: "Proposal created", event_admitted: "Admitted", event_operator_question: "Clarification",
+    event_execution_failed: "Needs attention", event_completed: "Completed", event_pr_opened: "PR awaiting review",
+    event_pr_merged: "PR merged", event_unmerged_pr_closed: "PR closed",
+    receipt_pending: "Pending delivery", receipt_sent: "Posted", receipt_failed: "Delivery failed", receipt_skipped: "Skipped",
+  },
+  zh: {
+    status: "状态", pending: "待决策", held: "暂缓", discarded: "已放弃",
+    approved: "已批准，待受理", admitted: "已受理", blocked: "待复核", all: "全部",
+    loading: "正在读取提案…", empty: "该状态暂无提案。", back: "返回提案列表",
+    loadFailed: "无法读取提案。", decisionFailed: "无法保存决策。", notFound: "找不到该提案。",
+    source: "查看原单据", summary: "建议", scope: "处理范围", exclusions: "排除项",
+    verification: "验收", risks: "风险", evidence: "代码证据", decisions: "决策记录",
+    execution: "执行进度", relatedPR: "查看关联 PR", board: "查看工作看板", feedback: "单据回评",
+    reason: "决策备注", optionalReason: "备注（可选）",
+    action_approve: "处理", action_hold: "暂缓", action_discard: "放弃",
+    work_queued: "已入队", work_running: "运行中", work_publishing: "发布中", work_waiting_for_user: "待澄清",
+    work_in_review: "等待 PR 评审", work_pr_merged: "PR 已合并", work_pr_closed: "PR 已关闭",
+    work_completed: "已完成", work_canceled: "已取消", work_failed: "执行失败",
+    event_created: "新提案", event_admitted: "受理", event_operator_question: "澄清",
+    event_execution_failed: "待检查", event_completed: "完成", event_pr_opened: "PR 待评审",
+    event_pr_merged: "PR 合并", event_unmerged_pr_closed: "PR 关闭",
+    receipt_pending: "待投递", receipt_sent: "已回评", receipt_failed: "投递失败", receipt_skipped: "已跳过",
+  },
 };
+
+let language;
 
 function node(tag, text, className) {
   const element = document.createElement(tag);
@@ -17,18 +53,46 @@ function node(tag, text, className) {
   return element;
 }
 
+function translatedNode(tag, key, fallback = "") {
+  const element = node(tag, fallback);
+  if (Object.hasOwn(labels.en, key)) element.dataset.i18n = key;
+  return element;
+}
+
+function appendJoined(element, ...parts) {
+  parts.filter(Boolean).forEach((part, index) => {
+    if (index) element.append(" · ");
+    element.append(part);
+  });
+  return element;
+}
+
+function translate() {
+  RobertShell.translate(language, labels[language]);
+}
+
+function showMessage(target, key, diagnostic) {
+  target.replaceChildren(translatedNode("span", key));
+  if (diagnostic) target.append(" ", diagnostic);
+  translate();
+}
+
 async function request(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.safe_error || "读取请求失败。");
+  if (!response.ok) {
+    const error = new Error(data.safe_error || "");
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 
-function sourceLink(value) {
+function sourceLink(value, label) {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" || url.username || url.password) return null;
-    const link = node("a", "查看原单据");
+    const link = translatedNode("a", label);
     link.href = url.href;
     return link;
   } catch {
@@ -39,16 +103,15 @@ function sourceLink(value) {
 function showDetail(proposal) {
   detail.replaceChildren(
     node("h2", proposal.title),
-    node("p", [proposal.proposal_id, "v" + proposal.revision, statusLabel[proposal.status]].join(" · "), "proposal-meta"),
+    appendJoined(node("p", undefined, "proposal-meta"), proposal.proposal_id, `v${proposal.revision}`,
+      translatedNode("span", proposal.status, proposal.status)),
   );
-  const source = sourceLink(proposal.source_url);
+  const source = sourceLink(proposal.source_url, "source");
   if (source) detail.append(source);
   if (proposal.blocked_reason) detail.append(node("p", proposal.blocked_reason));
   const report = proposal.report;
-  for (const [field, label] of Object.entries({
-    summary: "建议", scope: "处理范围", exclusions: "排除项", verification: "验收", risks: "风险",
-  })) {
-    if (report[field]) detail.append(node("h3", label), node("p", report[field]));
+  for (const field of ["summary", "scope", "exclusions", "verification", "risks"]) {
+    if (report[field]) detail.append(translatedNode("h3", field), node("p", report[field]));
   }
   if (report.commit) {
     const commit = node("p");
@@ -62,29 +125,22 @@ function showDetail(proposal) {
       entry.append(node("code", item.path + ":" + item.line), document.createTextNode(" " + item.reason));
       evidence.append(entry);
     }
-    detail.append(node("h3", "代码证据"), evidence);
+    detail.append(translatedNode("h3", "evidence"), evidence);
   }
   if (proposal.decisions?.length) {
     const history = node("ul");
     for (const decision of proposal.decisions) {
-      history.append(node("li", [decision.actor, decision.action, decision.reason, decision.created_at].filter(Boolean).join(" · ")));
+      history.append(appendJoined(node("li"), decision.actor,
+        translatedNode("span", `action_${decision.action}`, decision.action), decision.reason, decision.created_at));
     }
-    detail.append(node("h3", "决策记录"), history);
+    detail.append(translatedNode("h3", "decisions"), history);
   }
   if (proposal.work) {
-    detail.append(node("h3", "执行进度"), node("p", ({
-      queued: "已入队", running: "运行中", publishing: "发布中", waiting_for_user: "待澄清",
-      in_review: "等待 PR 评审", pr_merged: "PR 已合并", pr_closed: "PR 已关闭",
-      completed: "已完成", canceled: "已取消", failed: "执行失败",
-    }[proposal.work.state] || proposal.work.state || "")));
-    if (proposal.work.pr?.url) {
-      const pr = sourceLink(proposal.work.pr.url);
-      if (pr) {
-        pr.textContent = "查看关联 PR";
-        detail.append(pr);
-      }
-    }
-    const board = node("a", "查看工作看板");
+    detail.append(translatedNode("h3", "execution"),
+      translatedNode("p", `work_${proposal.work.state}`, proposal.work.state));
+    const pr = sourceLink(proposal.work.pr?.url, "relatedPR");
+    if (pr) detail.append(pr);
+    const board = translatedNode("a", "board");
     board.href = "/board?item=" + encodeURIComponent(proposal.work_item_id);
     detail.append(node("p"));
     detail.lastChild.append(board);
@@ -92,32 +148,34 @@ function showDetail(proposal) {
   if (proposal.feedback?.length) {
     const receipts = node("ul");
     for (const receipt of proposal.feedback) {
-      const label = {created: "新提案", admitted: "受理", operator_question: "澄清", execution_failed: "待检查",
-        completed: "完成", pr_opened: "PR 待评审", pr_merged: "PR 合并", unmerged_pr_closed: "PR 关闭"}[receipt.event];
-      const status = {pending: "待投递", sent: "已回评", failed: "投递失败", skipped: "已跳过"}[receipt.status];
-      receipts.append(node("li", [label, status].filter(Boolean).join(" · ")));
+      receipts.append(appendJoined(node("li"),
+        translatedNode("span", `event_${receipt.event}`, receipt.event),
+        translatedNode("span", `receipt_${receipt.status}`, receipt.status)));
     }
-    detail.append(node("h3", "单据回评"), receipts);
+    detail.append(translatedNode("h3", "feedback"), receipts);
   }
   detail.hidden = false;
 }
 
 function showActions(proposal, session) {
   if (!session?.proposal_enabled || !session.writes_enabled || !session.allowed_repo_ids.includes(proposal.repo_id)) return;
-  const choices = proposal.status === "pending" ? {approve: "处理", hold: "暂缓", discard: "放弃"} :
-    proposal.status === "held" ? {approve: "处理", discard: "放弃"} :
-    proposal.status === "blocked" ? {discard: "放弃"} : {};
-  if (!Object.keys(choices).length) return;
+  const choices = {
+    pending: ["approve", "hold", "discard"],
+    held: ["approve", "discard"],
+    blocked: ["discard"],
+  }[proposal.status];
+  if (!choices) return;
   const actions = node("div", undefined, "proposal-actions");
   const reason = node("input");
-  reason.placeholder = "备注（可选）";
-  reason.setAttribute("aria-label", "决策备注");
+  reason.dataset.i18nPlaceholder = "optionalReason";
+  reason.dataset.i18nAria = "reason";
   const feedback = node("p");
   feedback.setAttribute("role", "status");
   actions.append(reason);
   const requestKeys = new Map();
-  for (const [action, label] of Object.entries(choices)) {
-    const button = node("button", label);
+  for (const action of choices) {
+    const button = translatedNode("button", `action_${action}`);
+    button.className = action === "approve" ? "shell-button primary" : "shell-button";
     button.type = "button";
     button.addEventListener("click", async () => {
       for (const item of actions.querySelectorAll("button")) item.disabled = true;
@@ -131,7 +189,7 @@ function showActions(proposal, session) {
         });
         render(updated, session);
       } catch (error) {
-        feedback.textContent = error.message;
+        showMessage(feedback, "decisionFailed", error.status && error.message);
         for (const item of actions.querySelectorAll("button")) item.disabled = false;
       }
     });
@@ -145,6 +203,7 @@ function render(proposal, session) {
   clearTimeout(refresh);
   showDetail(proposal);
   showActions(proposal, session);
+  translate();
   if (proposal.status === "approved" || (proposal.status === "admitted" && (
     !proposal.work?.terminal ||
     proposal.feedback?.some(receipt => receipt.status === "pending")
@@ -163,9 +222,11 @@ async function load() {
       ]);
       render(proposal, session);
       message.replaceChildren();
-      const back = node("a", "返回提案列表");
+      const back = translatedNode("a", "back");
       back.href = "/proposals";
+      message.removeAttribute("data-i18n");
       message.append(back);
+      translate();
       return;
     }
     const status = filter.value;
@@ -175,17 +236,27 @@ async function load() {
       const entry = node("li");
       const link = node("a", proposal.title);
       link.href = "/proposals?id=" + encodeURIComponent(proposal.proposal_id);
-      entry.append(link, node("p", [proposal.repository, statusLabel[proposal.status], proposal.created_at].join(" · "), "proposal-meta"));
+      entry.append(link, appendJoined(node("p", undefined, "proposal-meta"), proposal.repository,
+        translatedNode("span", proposal.status, proposal.status), proposal.created_at));
       if (proposal.report.summary) entry.append(node("p", proposal.report.summary));
       return entry;
     });
     list.replaceChildren(...entries);
-    message.textContent = entries.length ? "" : "该状态暂无提案。";
+    message.removeAttribute("data-i18n");
+    message.replaceChildren();
+    if (!entries.length) message.append(translatedNode("span", "empty"));
+    translate();
   } catch (error) {
-    message.textContent = error.message;
+    message.removeAttribute("data-i18n");
+    showMessage(message, id && error.status === 404 ? "notFound" : "loadFailed", error.status && error.message);
   }
 }
 
 if (new URLSearchParams(window.location.search).has("id")) filter.closest("label").hidden = true;
 filter.addEventListener("change", load);
+RobertShell.bindPreferences((choice) => {
+  language = choice;
+  document.title = choice === "zh" ? "Robert · 提案" : "Robert · Proposals";
+  translate();
+});
 load();
