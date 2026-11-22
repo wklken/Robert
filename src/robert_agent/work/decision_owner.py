@@ -24,6 +24,7 @@ def from_event(event, github_account):
         or event.get("authorization_status") not in {"authorized_trigger", "accepted_context"}
         or not event.get("drives_execution")
         or event.get("actor_kind") == "github_system"
+        or event.get("event_type") == "proposal_approved"
         or event.get("authorization_lookup_complete") is False
         or event.get("body_authorization_complete") is False
     ):

@@ -23,7 +23,8 @@ from robert_agent.configuration import command as validate_config
 from robert_agent.readmodels import board
 from robert_agent.readmodels import agent_session
 from robert_agent.work.application import commands as work_items
-from robert_agent.readmodels import workbench
+from robert_agent.work.application import proposal_commands
+from robert_agent.readmodels import proposals, workbench
 from robert_agent.foundation.commands import emit
 
 
@@ -32,6 +33,9 @@ WEB_ASSETS = {
     "/": ("board.html", "text/html; charset=utf-8"),
     "/work": ("index.html", "text/html; charset=utf-8"),
     "/board": ("board.html", "text/html; charset=utf-8"),
+    "/proposals": ("proposals.html", "text/html; charset=utf-8"),
+    "/assets/proposals.js": ("proposals.js", "text/javascript; charset=utf-8"),
+    "/assets/proposals.css": ("proposals.css", "text/css; charset=utf-8"),
     "/favicon.ico": ("robert-favicon.svg", "image/svg+xml"),
     "/assets/robert-favicon.svg": ("robert-favicon.svg", "image/svg+xml"),
     "/assets/robert-logo.svg": ("robert-logo.svg", "image/svg+xml"),
@@ -80,6 +84,7 @@ class ControlContext:
     csrf_token: str
     writes_enabled: bool
     write_error: str | None
+    proposal_enabled: bool = False
 
 
 def _query_limit(query, default=50):
@@ -101,6 +106,17 @@ def build_http_response(path, db_path, control_context=None):
         except OSError:
             return 404, {"content-type": "text/plain; charset=utf-8"}, b"not found\n"
         return 200, {"content-type": content_type}, payload
+    if route == "/api/proposals" or route.startswith("/api/proposals/"):
+        query = parse_qs(parsed.query)
+        status = (query.get("status") or ["pending"])[0]
+        if status != "all" and status not in proposals.VISIBLE_STATES:
+            return _json_response({"status": "failed_validation", "safe_error": "invalid proposal status"}, 400)
+        repo_ids = control_context.allowed_repo_ids if control_context and control_context.writes_enabled else None
+        if route == "/api/proposals":
+            rows = proposals.read(db_path, status=None if status == "all" else status, repo_ids=repo_ids)
+            return _json_response({"proposals": rows})
+        rows = proposals.read(db_path, proposal_id=unquote(route.removeprefix("/api/proposals/")), repo_ids=repo_ids)
+        return _json_response(rows[0]) if rows else _json_response({"status": "not_found"}, 404)
     if route == "/api/session":
         context = control_context
         payload = {
@@ -108,6 +124,7 @@ def build_http_response(path, db_path, control_context=None):
             "write_error": context.write_error if context else "Start with --config to enable writes.",
             "csrf_token": context.csrf_token if context else None,
             "operator_identity": context.operator_identity if context else None,
+            "proposal_enabled": bool(context and context.proposal_enabled),
             "allowed_repo_ids": sorted(context.allowed_repo_ids) if context else [],
             "allowed_workers": sorted(context.allowed_workers) if context else [],
         }
@@ -463,6 +480,38 @@ def _handle_task_retrigger_post(route, body, db_path, control_context, headers):
         )
 
 
+def _handle_proposal_post(route, body, db_path, control_context, headers):
+    if error := _control_request_error(control_context, headers, json_required=True):
+        return error
+    if not control_context.writes_enabled or not control_context.proposal_enabled:
+        return _json_response({"status": "unavailable", "safe_error": "proposal decisions are disabled"}, 503)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_response({"status": "failed_validation", "safe_error": "invalid JSON body"}, 422)
+    if not isinstance(payload, dict):
+        return _json_response({"status": "failed_validation", "safe_error": "JSON body must be an object"}, 422)
+    proposal_id = unquote(route.removeprefix("/api/proposals/").removesuffix("/decisions"))
+    try:
+        proposal_commands.decide(
+            db_path,
+            proposal_id,
+            context=_work_item_context(control_context),
+            action=payload.get("action"),
+            expected_version=payload.get("expected_version"),
+            idempotency_key=headers.get("x-idempotency-key"),
+            reason=payload.get("reason", ""),
+        )
+    except work_items.WorkItemNotFoundError:
+        return _json_response({"status": "not_found"}, 404)
+    except work_items.WorkItemValidationError as exc:
+        return _json_response({"status": "failed_validation", "safe_error": str(exc)}, 422)
+    except work_items.WorkItemConflictError as exc:
+        return _json_response({"status": "conflict", "safe_error": str(exc)}, 409)
+    items = proposals.read(db_path, proposal_id=proposal_id, repo_ids=control_context.allowed_repo_ids)
+    return _json_response(items[0]) if items else _json_response({"status": "not_found"}, 404)
+
+
 def handle_dashboard_post(path, body, db_path, control_context=None, request_headers=None):
     route = urlsplit(path).path
     if len(body) > 64 * 1024:
@@ -471,6 +520,8 @@ def handle_dashboard_post(path, body, db_path, control_context=None, request_hea
             413,
         )
     headers = _lower_headers(request_headers)
+    if route.startswith("/api/proposals/") and route.endswith("/decisions"):
+        return _handle_proposal_post(route, body, db_path, control_context, headers)
     if route == "/api/work-items" or (route.startswith("/api/work-items/") and route.endswith("/commands")):
         return _handle_work_item_post(route, body, db_path, control_context, headers)
     if route.startswith("/api/tasks/") and route.endswith("/retrigger"):
@@ -715,6 +766,7 @@ def build_control_context_from_config(
         csrf_token=csrf_token or secrets.token_urlsafe(32),
         writes_enabled=True,
         write_error=None,
+        proposal_enabled=config_result.get("proposer", {}).get("enabled", False),
     )
 
 

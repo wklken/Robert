@@ -32,7 +32,7 @@ from robert_agent.delivery.application import tapd_comments
 from robert_agent.delivery import intents as intent_facts
 from robert_agent.delivery import queries as publication_queries
 from robert_agent.delivery import values as publication_values
-from robert_agent.persistence.queries import dispatch_requests
+from robert_agent.persistence.queries import dispatch_requests, proposals as proposal_queries
 
 PUBLISH_COMMAND_TIMEOUT_SECONDS = 60
 
@@ -125,8 +125,10 @@ def publish_ready_actions(
                 continue
             action = ready[0]
             with closing(db_database.connect(db_path)) as auth_conn:
-                dispatch_bound = dispatch_requests.for_task(auth_conn, action["task_id"]) is not None
-            action_config = {} if config is None and dispatch_bound else config
+                requires_config = dispatch_requests.for_task(
+                    auth_conn, action["task_id"]
+                ) is not None or proposal_queries.task_bound(auth_conn, action["task_id"])
+            action_config = {} if config is None and requires_config else config
             # Consume the request before this pass, including reconciliation
             # failures, so a failed attempt never leaves retry disabled.
             with closing(db_database.connect(db_path)) as retry_conn, retry_conn:

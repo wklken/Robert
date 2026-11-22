@@ -1,11 +1,13 @@
 """Bounded Issue creation and remote recovery reads through gh."""
 
+from datetime import datetime
 import json
 import os
 import re
 from urllib.parse import urlencode, urlsplit
 
 from robert_agent.foundation.commands import run_command
+from robert_agent.foundation.timestamps import utc_timestamp
 
 
 def _endpoint(repo):
@@ -72,3 +74,110 @@ def find_created(repo, request_id, actor, since, *, runner=None):
                 matches.append(_issue(repo, value))
     # An empty result is deliberately not proof of absence after an uncertain POST.
     return matches
+
+
+def _number(number):
+    if type(number) is not int or number <= 0:
+        raise ValueError("invalid Issue number")
+    return str(number)
+
+
+def _candidate(repo, value):
+    if not isinstance(value, dict) or not isinstance(value.get("user"), dict):
+        raise ValueError("GitHub returned incomplete Issue metadata")
+    value = _issue(repo, value)
+    assignees = value.get("assignees")
+    if (
+        not isinstance(assignees, list)
+        or any(
+            not isinstance(actor, dict) or not isinstance(actor.get("login"), str) or not actor["login"]
+            for actor in assignees
+        )
+        or value.get("state") not in {"open", "closed"}
+        or not isinstance(value.get("title"), str)
+        or value.get("body") is not None
+        and not isinstance(value.get("body"), str)
+        or utc_timestamp(value.get("created_at")) is None
+    ):
+        raise ValueError("GitHub returned incomplete Issue metadata")
+    return value
+
+
+def _window(since, until):
+    if (
+        not isinstance(since, datetime)
+        or not isinstance(until, datetime)
+        or since.utcoffset() is None
+        or until.utcoffset() is None
+        or since > until
+    ):
+        raise ValueError("invalid Issue discovery interval")
+
+
+def _pages(endpoint, max_pages, runner):
+    if type(max_pages) is not int or not 1 <= max_pages <= 100:
+        raise ValueError("invalid page limit")
+    separator = "&" if "?" in endpoint else "?"
+    for number in range(1, max_pages + 1):
+        rows = _json(["gh", "api", f"{endpoint}{separator}per_page=100&page={number}"], runner)
+        if not isinstance(rows, list) or len(rows) > 100 or any(not isinstance(row, dict) for row in rows):
+            raise ValueError("GitHub returned invalid Issue page")
+        yield rows
+        if len(rows) < 100:
+            return
+    raise ValueError("GitHub Issue scan page limit reached")
+
+
+def list_recent(repo, *, since, until, max_pages=10, runner=None):
+    """Read complete created-desc Issue pages within an aware, inclusive interval."""
+    _window(since, until)
+    found, seen = [], set()
+    previous = None
+    pages = _pages(_endpoint(repo) + "?state=open&sort=created&direction=desc", max_pages, runner)
+    for rows in pages:
+        older = False
+        for raw in rows:
+            created = utc_timestamp(raw.get("created_at"))
+            if created is None or previous is not None and created > previous:
+                raise ValueError("GitHub returned invalid Issue ordering")
+            previous = created
+            if created < since:
+                older = True
+                continue
+            if "pull_request" in raw:
+                continue
+            row = _candidate(repo, raw)
+            if row["id"] in seen:
+                raise ValueError("GitHub returned duplicate Issue")
+            seen.add(row["id"])
+            if created <= until and row["state"] == "open":
+                found.append(row)
+        if older:
+            pages.close()
+            break
+    return tuple(found)
+
+
+def get(repo, number, *, runner=None):
+    """Fetch current state and assignees for one existing Issue."""
+    row = _candidate(repo, _json(["gh", "api", f"{_endpoint(repo)}/{_number(number)}"], runner))
+    if row["number"] != number:
+        raise ValueError("GitHub returned another Issue")
+    return row
+
+
+def discussion(repo, number, *, max_pages=10, exclude_author=None, runner=None):
+    """Read bounded, complete comment bodies in their server order."""
+    bodies, seen = [], set()
+    endpoint = f"{_endpoint(repo)}/{_number(number)}/comments"
+    for rows in _pages(endpoint, max_pages, runner):
+        for row in rows:
+            if type(row.get("id")) is not int or row["id"] in seen or not isinstance(row.get("body"), str):
+                raise ValueError("GitHub returned invalid Issue comment")
+            seen.add(row["id"])
+            actor = row.get("user")
+            login = actor.get("login") if isinstance(actor, dict) else None
+            if exclude_author and isinstance(login, str) and login.casefold() == exclude_author.casefold():
+                continue
+            bodies.append(row["body"])
+    return tuple(bodies)

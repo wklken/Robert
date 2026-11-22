@@ -1,6 +1,7 @@
 """TAPD CLI protocol: explicit workspace, fixed directory, bounded pages and safe errors."""
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -49,6 +50,8 @@ class TapdItem:
     workitem_type_id: str | None
     archived: bool | None
     url: str | None
+    created: str | None = None
+    owners: tuple[str, ...] | None = None
 
 
 def _id(value, code="invalid_input"):
@@ -62,6 +65,24 @@ def _text(row, name, *, required=False):
     if (value is not None and not isinstance(value, str)) or (required and not value):
         raise TapdError("invalid_response")
     return value
+
+
+def _owners(raw, name):
+    # The CLI drops empty strings through omitempty. Absence remains unknown,
+    # because this protocol cannot distinguish an ACL omission from empty.
+    value = _text(raw, name)
+    if value is None:
+        return None
+    return tuple(owner.strip() for owner in re.split(r"[;,|]", value) if owner.strip())
+
+
+def _created(value):
+    if not isinstance(value, str) or not _TIME.fullmatch(value):
+        raise TapdError("invalid_response")
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=8)))
+    except ValueError:
+        raise TapdError("invalid_response") from None
 
 
 def _comment(raw, workspace_id, entry_type, *, entry_id=None, author=None):
@@ -201,7 +222,47 @@ class TapdClient:
             workitem_type_id=_text(raw, "workitem_type_id"),
             archived=None if archived is None else archived == "1",
             url=_text(raw, "url"),
+            created=_text(raw, "created"),
+            owners=_owners(raw, "owner" if kind == "story" else "current_owner"),
         )
+
+    def recent_items(self, workspace_id, kind, *, since, until, max_pages=10):
+        """Fetch full details in created-desc order; TAPD timestamps use UTC+08:00."""
+        if (
+            kind not in _ENTRY_TYPES
+            or type(max_pages) is not int
+            or not 1 <= max_pages <= 100
+            or not isinstance(since, datetime)
+            or not isinstance(until, datetime)
+            or since.utcoffset() is None
+            or until.utcoffset() is None
+            or since > until
+        ):
+            raise TapdError("invalid_input")
+        found, seen = [], set()
+        previous = None
+        pages = self._pages(
+            workspace_id, [kind, "list", "--order=created desc"], page_size=PAGE_LIMIT, max_pages=max_pages
+        )
+        for rows in pages:
+            for raw in rows:
+                if not isinstance(raw, dict):
+                    raise TapdError("invalid_response")
+                external_id = _id(raw.get("id"), "invalid_response")
+                if external_id in seen:
+                    raise TapdError("duplicate_record")
+                seen.add(external_id)
+                item = self.get_item(workspace_id, kind, external_id)
+                created = _created(item.created)
+                if previous is not None and created > previous:
+                    raise TapdError("invalid_response")
+                previous = created
+                if created < since:
+                    pages.close()
+                    return tuple(found)
+                if created <= until:
+                    found.append(item)
+        return tuple(found)
 
     def terminal_states(self, workspace_id, kind, workitem_type_id=None):
         if kind not in _ENTRY_TYPES or (kind == "story" and workitem_type_id is None):

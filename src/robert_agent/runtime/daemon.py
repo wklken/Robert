@@ -1,4 +1,5 @@
 from robert_agent.work import dispatch_requests as issue_dispatch
+from robert_agent.work.application import proposal_scan
 from robert_agent.persistence import errors as db_errors
 from robert_agent.persistence.queries import notifications as db_read_notifications
 from robert_agent.supervision import health as supervision_health
@@ -35,6 +36,7 @@ from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.runtime import loop as loop_engine
 from robert_agent.configuration import command as validate_config
 from robert_agent.delivery.application import notifications as notify
+from robert_agent.delivery.application import proposal_feedback
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +73,7 @@ class DaemonContext:
     runtime_config: dict | None = None
     next_health_at: float = 0.0
     publisher_retry_at: float = 0.0
+    proposer_retry_at: float = 0.0
     background_lanes: dict | None = None
     scan_context_refresh: bool = False
     context_refresh_retry_at: float = 0.0
@@ -977,6 +980,8 @@ def _poll_background_lanes(context, *, now):
         result = lane.poll()
         if result is not None:
             _record_control_outcome(context, name, result, now=now)
+            if name == "proposer":
+                context.proposer_retry_at = time.monotonic() + (60 if result.get("ok") else 300)
             if name == "publish":
                 context.publisher_retry_at = time.monotonic() + (5 if result.get("ok") else 30)
             if name == "scan" and context.scan_context_refresh:
@@ -1025,11 +1030,19 @@ def _background_decision(context, *, now, child_runner=run_child_json):
         )
         if ((context.runtime_config or {}).get("tapd") or {}).get("enabled"):
             pending_publish = pending_publish or bool(db_read_notifications.find_pending_tapd(conn, now, 1))
+        pending_publish = pending_publish or proposal_feedback.due(conn, context.runtime_config or {}, now)
         pending_delivery = bool(
             message_transport.configured(context.runtime_config)
             and execution_notifications.has_pending_local_delivery(conn, repo_ids, now, config=context.runtime_config)
         )
         refresh_pending = wakeup.has_due_context_refresh(conn, repo_ids, now)
+        proposer_due = (
+            "proposer" in lanes
+            and not context.dry_run
+            and not local_work
+            and time.monotonic() >= context.proposer_retry_at
+            and proposal_scan.due(conn, context.runtime_config or {}, now)
+        )
     due = context.startup_live_poll_pending or (
         context.next_live_poll_at is not None and _parse_time(now) >= _parse_time(context.next_live_poll_at)
     )
@@ -1055,6 +1068,8 @@ def _background_decision(context, *, now, child_runner=run_child_json):
         if context.dry_run:
             publish_command.append("--dry-run")
         lanes["publish"].start(publish_command, timeout_seconds=context.daemon_config["local_drain_timeout_seconds"])
+    if proposer_due and lanes["proposer"].process is None and not _control_blocked(context, "proposer"):
+        lanes["proposer"].start(command + ["--proposals"], timeout_seconds=600)
     if local_work:
         if _control_blocked(context, "local"):
             return {"ok": True, "decision": "control_attention"}
@@ -1150,6 +1165,8 @@ def _resident_loop(
     context.background_lanes = {
         name: ControlLane(context.db_path, name, context.daemon_run_id) for name in ("scan", "publish")
     }
+    if (context.runtime_config or {}).get("proposer", {}).get("enabled") and not context.dry_run:
+        context.background_lanes["proposer"] = ControlLane(context.db_path, "proposer", context.daemon_run_id)
     try:
         try:
             listener = listener_factory(context.db_path)

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Proposals · Robert</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/assets/github-shell.css">
+  <link rel="stylesheet" href="/assets/proposals.css">
+  <script src="/assets/proposals.js" defer></script>
+</head>
+<body>
+  <header class="proposal-header">
+    <a class="proposal-brand" href="/"><img src="/assets/robert-logo.svg" alt="">Robert</a>
+    <nav class="proposal-nav" aria-label="主导航">
+      <a href="/work">Work</a>
+      <a href="/board">Board</a>
+      <a href="/proposals" aria-current="page">Proposals</a>
+      <a href="/operations">Operations</a>
+    </nav>
+  </header>
+  <main class="proposal-page">
+    <div class="proposal-toolbar">
+      <h1>提案</h1>
+      <label>状态
+        <select id="proposal-filter">
+          <option value="pending">待决策</option>
+          <option value="held">暂缓</option>
+          <option value="approved">已批准，待受理</option>
+          <option value="admitted">已受理</option>
+          <option value="blocked">待复核</option>
+          <option value="discarded">已放弃</option>
+          <option value="all">全部</option>
+        </select>
+      </label>
+    </div>
+    <p id="proposal-message" role="status">正在读取提案…</p>
+    <ul id="proposal-list" class="proposal-list"></ul>
+    <article id="proposal-detail" class="proposal-detail" hidden></article>
+  </main>
+</body>
+</html>

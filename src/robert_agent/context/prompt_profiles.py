@@ -32,6 +32,7 @@ STAGES = {
     "vote.prepare": StageProfile("atomic-files", ("prepared_request",), boundary="vote"),
     "vote.cast": StageProfile("atomic-files", ("ballot",), boundary="vote"),
     "vote.synthesize": StageProfile("atomic-files", ("synthesis",), boundary="vote"),
+    "proposer.evaluate": StageProfile("stdout-json", ("proposal_assessment",), tools=False),
     "supervision.diagnose": StageProfile("stdout-json", ("diagnosis",), tools=False),
     "supervision.decide": StageProfile("stdout-json", ("decision",), tools=False),
 }

@@ -195,7 +195,28 @@ def _normalize(config, path, skip_external):
         if set(messaging["repos"]) - {repo["full_name"] for repo in result["repos"]}:
             raise ValueError("messaging.repos must reference configured repositories")
     result["tapd"] = tapd_config.normalize(config["tapd"], repositories={repo["full_name"] for repo in result["repos"]})
+    result["proposer"] = _proposer(config["proposer"], result)
     return result
+
+
+def _proposer(setting, config):
+    github = set(setting["github_repositories"])
+    known = {repo["full_name"] for repo in config["repos"]}
+    tapd = set(setting["tapd_projects"])
+    known_tapd = {f"{project['host']}/{project['workspace_id']}" for project in config["tapd"]["projects"]}
+    if github - known or tapd - known_tapd:
+        raise ValueError("proposer sources must reference configured GitHub repositories and TAPD projects")
+    if setting["enabled"]:
+        if not (github or tapd) or not setting.get("gateway_metadata") or not setting.get("model"):
+            raise ValueError("proposer requires configured sources, gateway_metadata and model")
+        if tapd and not config["tapd"]["enabled"]:
+            raise ValueError("proposer.tapd_projects requires TAPD integration")
+        setting["gateway_metadata"] = str(Path(setting["gateway_metadata"]).expanduser())
+    for field in ("github_assignees", "tapd_assignees"):
+        if any(value != value.strip() for value in setting[field]):
+            raise ValueError(f"proposer.{field} must use exact account names")
+    setting["github_assignees"] = [login.casefold() for login in setting["github_assignees"]]
+    return setting
 
 
 def validate_config(config_path, skip_external=False):

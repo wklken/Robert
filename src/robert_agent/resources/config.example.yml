@@ -123,3 +123,14 @@ messaging:
   dispatch_enabled: false
   # Before enabling, set send_after to the current time with an explicit timezone.
   # Retain that value on normal restarts; only newer notifications are delivered.
+
+# Discover proposals in explicitly selected sources. See docs/features/proposer.md.
+proposer:
+  enabled: false
+  publish_comments: false
+  github_repositories: []
+  github_assignees: []
+  tapd_projects: []
+  tapd_assignees: []
+  # gateway_metadata: /path/to/local-messages-gateway.json
+  # model: your-local-gateway-model

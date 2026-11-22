@@ -426,3 +426,69 @@ class PrCiObservation(Base):
         UniqueConstraint("source_kind", "external_id", "attempt_no"),
         Index("idx_pr_ci_observations_episode", "episode_id", "completed_at"),
     )
+
+
+class Proposal(Base):
+    __tablename__ = "proposals"
+
+    proposal_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    source_identity: Mapped[str] = mapped_column(Text, unique=True)
+    repo_id: Mapped[str] = mapped_column(Text, ForeignKey("repos.repo_id"))
+    status: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer)
+    revision: Mapped[int] = mapped_column(Integer)
+    source_key: Mapped[str] = mapped_column(Text)
+    fingerprint: Mapped[str] = mapped_column(Text)
+    blocked_reason: Mapped[str] = mapped_column(Text, server_default="")
+    work_item_id: Mapped[str | None] = mapped_column(Text, ForeignKey("work_items.work_item_id", ondelete="SET NULL"))
+    workstream_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("workstreams.workstream_id", ondelete="SET NULL")
+    )
+    task_id: Mapped[str | None] = mapped_column(Text, ForeignKey("tasks.task_id", ondelete="SET NULL"))
+    created_at: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('evaluated', 'pending', 'held', 'discarded', 'approved', 'admitted', 'blocked')"),
+        CheckConstraint("version >= revision AND revision >= 0"),
+        Index("idx_proposals_status_updated", "status", "updated_at", "proposal_id"),
+    )
+
+
+class ProposalRevision(Base):
+    __tablename__ = "proposal_revisions"
+
+    proposal_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("proposals.proposal_id", ondelete="CASCADE"), primary_key=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_json: Mapped[str] = mapped_column(Text)
+    report_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+
+
+class ProposalDecision(Base):
+    __tablename__ = "proposal_decisions"
+
+    proposal_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("proposals.proposal_id", ondelete="CASCADE"), primary_key=True
+    )
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    action: Mapped[str] = mapped_column(Text)
+    actor: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("action IN ('approve', 'hold', 'discard')"),
+        UniqueConstraint("proposal_id", "idempotency_key"),
+    )
+
+
+class ProposalScan(Base):
+    __tablename__ = "proposal_scans"
+
+    slot: Mapped[str] = mapped_column(Text, primary_key=True)
+    completed_at: Mapped[str] = mapped_column(Text)

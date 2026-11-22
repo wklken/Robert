@@ -26,6 +26,7 @@ from robert_agent.execution.application import evidence
 from robert_agent.execution import workspace as assigned_workspace
 from robert_agent.work.application import admission as work_admission
 from robert_agent.persistence.queries import dispatch_requests as dispatch_queries
+from robert_agent.persistence.queries import proposals as proposal_queries
 from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import lifecycle as work_application_lifecycle
 from robert_agent.configuration import routes as route_config
@@ -492,8 +493,10 @@ def dispatch_queued_locked(
         with closing(db_database.connect(db_path)) as conn:
             native_review = native_rounds.session(conn, task_id=task_info["task_id"])
             candidate_review = pre_pr_review.session(conn, task_id=task_info["task_id"])
-            dispatch_bound = dispatch_queries.for_task(conn, task_info["task_id"]) is not None
-        if not native_review and (config_result or dispatch_bound):
+            requires_config = dispatch_queries.for_task(
+                conn, task_info["task_id"]
+            ) is not None or proposal_queries.task_bound(conn, task_info["task_id"])
+        if not native_review and (config_result or requires_config):
             with closing(db_database.connect(db_path)) as conn, conn:
                 if not work_admission.ordinary_dispatch_allowed(conn, task_info["task_id"], repo, config_result):
                     now = values.utc_now()

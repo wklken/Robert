@@ -175,24 +175,25 @@ def retry_seconds(value):
     return max(0, min(86400, seconds))
 
 
-def call(bundle, kind, endpoint, model, timeout):
+class RateLimited(ModelError):
+    def __init__(self, provider_error):
+        super().__init__("local model gateway rate limited the request")
+        self.provider_error = provider_error
+
+
+def request_json(*, instructions, evidence, endpoint, model, timeout, session_id):
+    """Return JSON from the local Messages gateway with no model tools."""
     endpoint = checked_endpoint(endpoint)
-    if (
-        not isinstance(bundle, dict)
-        or not all(name in bundle for name in ["bundle_id", "bundle_sha256", "instructions", "evidence"])
-        or not isinstance(bundle["instructions"], str)
-    ):
-        raise ModelError("invalid evidence bundle")
-    if kind == "decision" and not all(name in bundle for name in ["allowed_actions", "candidates"]):
-        raise ModelError("decision bundle is missing its action policy")
+    if len(json.dumps(evidence, ensure_ascii=False).encode()) > MAX_REQUEST_BYTES:
+        raise ModelError("model input exceeds the transport limit")
     payload = {
         "model": model,
         "max_tokens": 4096,
         "thinking": {"type": "disabled"},
         "tools": [],
         "tool_choice": {"type": "none"},
-        "system": bundle["instructions"],
-        "messages": [{"role": "user", "content": json.dumps(bundle, ensure_ascii=False)}],
+        "system": instructions,
+        "messages": [{"role": "user", "content": json.dumps(evidence, ensure_ascii=False)}],
     }
     request = Request(
         endpoint + "/v1/messages",
@@ -201,7 +202,7 @@ def call(bundle, kind, endpoint, model, timeout):
         headers={
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
-            "X-Claude-Code-Session-Id": "robert-supervision-" + bundle["bundle_id"],
+            "X-Claude-Code-Session-Id": session_id,
         },
     )
     try:
@@ -215,11 +216,7 @@ def call(bundle, kind, endpoint, model, timeout):
             delay = retry_seconds(error.headers.get("Retry-After"))
             if delay is not None:
                 provider_error["retry_after_seconds"] = delay
-            return {
-                "bundle_id": bundle["bundle_id"],
-                "bundle_sha256": bundle["bundle_sha256"],
-                "error": provider_error,
-            }
+            raise RateLimited(provider_error) from None
         finally:
             error.close()
     except HTTPException:
@@ -250,7 +247,36 @@ def call(bundle, kind, endpoint, model, timeout):
             raise ModelError("model response contains an unsupported or malformed content block")
     if not text or not "".join(text).strip():
         raise ModelError("model response contains no decision text")
-    return validate_result(load_json("".join(text)), bundle, kind)
+    return load_json("".join(text))
+
+
+def call(bundle, kind, endpoint, model, timeout):
+    endpoint = checked_endpoint(endpoint)
+    if (
+        not isinstance(bundle, dict)
+        or not all(name in bundle for name in ["bundle_id", "bundle_sha256", "instructions", "evidence"])
+        or not isinstance(bundle["instructions"], str)
+    ):
+        raise ModelError("invalid evidence bundle")
+    if kind == "decision" and not all(name in bundle for name in ["allowed_actions", "candidates"]):
+        raise ModelError("decision bundle is missing its action policy")
+
+    try:
+        result = request_json(
+            instructions=bundle["instructions"],
+            evidence=bundle,
+            endpoint=endpoint,
+            model=model,
+            timeout=timeout,
+            session_id="robert-supervision-" + bundle["bundle_id"],
+        )
+    except RateLimited as error:
+        return {
+            "bundle_id": bundle["bundle_id"],
+            "bundle_sha256": bundle["bundle_sha256"],
+            "error": error.provider_error,
+        }
+    return validate_result(result, bundle, kind)
 
 
 def main():

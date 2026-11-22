@@ -12,6 +12,7 @@
 | --- | --- |
 | [生命周期看板](web-lifecycle-board.md) | 状态含义、日常操作、异常恢复与交付证据 |
 | [OpenClaw Issue 派单](issue-dispatch.md) | 两步提交、自动分类、Issue/PR 交付与建单恢复 |
+| [Proposer](proposer.md) | 主动发现单据、提案审核、入队和回评 |
 | [TAPD 来源](tapd.md) | @ 触发、标签选仓库、回评、澄清回复与单据结束 |
 | [操作员消息](operator-messaging.md) | OpenClaw 通知、提问、受认证回复与渠道接入边界 |
 | [新 PR 发布前 Review](pre-pr-review.md) | 按仓库启用、审查恢复、意见处理和发布门禁 |
