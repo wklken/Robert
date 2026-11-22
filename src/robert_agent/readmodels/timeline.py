@@ -13,9 +13,9 @@ from robert_agent.foundation.contracts.delivery import (
     VerificationStatus,
 )
 from robert_agent.foundation.timestamps import utc_timestamp
-from robert_agent.foundation.values import json_list
+from robert_agent.foundation.values import json_list, json_object
 from robert_agent.persistence import database, records, transactions
-from robert_agent.persistence.queries import agent_sessions
+from robert_agent.persistence.queries import agent_sessions, sqlite_master
 from robert_agent.persistence.queries.readviews import task_history
 from robert_agent.persistence.queries.readviews import timeline as timeline_queries
 from robert_agent.readmodels import usage
@@ -152,6 +152,14 @@ def get_receipt(db_path, task_id, result_id, *, include_usage=True):
         if _published_actions(row["output_type"], actions) is None:
             return None
         attempts = list(_receipt_attempts(conn, task_id, row)) if include_usage else []
+        observations = (
+            timeline_queries.receipt_usage(
+                conn, {task_id, *(attempt["task_id"] for attempt, _ in attempts)}, row["result_created_at"]
+            )
+            if include_usage and sqlite_master.object_exists(conn, "model_usage")
+            else []
+        )
+        recorded = {(item["kind"], item["call_id"]): json_object(item["usage_json"]) for item in observations}
 
     started = utc_timestamp(row["started_at"])
     finished = utc_timestamp(row["finished_at"])
@@ -171,7 +179,11 @@ def get_receipt(db_path, task_id, result_id, *, include_usage=True):
         if started and finished and finished >= started
         else None,
         **(
-            {"usage": usage.summarize_receipt_usage(Path(db_path).expanduser().absolute().parent, attempts)}
+            {
+                "usage": usage.summarize_receipt_usage(
+                    Path(db_path).expanduser().absolute().parent, attempts, recorded=recorded
+                )
+            }
             if include_usage
             else {}
         ),

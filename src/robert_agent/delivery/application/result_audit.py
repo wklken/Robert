@@ -30,7 +30,7 @@ from robert_agent.execution import ownership as execution_ownership
 from robert_agent.execution import retry as retry_policy
 from robert_agent.foundation import commands as control_commands
 from robert_agent.foundation import values
-from robert_agent.readmodels import usage
+from robert_agent.adapters.processes import model_usage
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.work import wakeup
 from robert_agent.workflows import pr_remediation as remediation
@@ -39,10 +39,20 @@ import json
 import subprocess
 
 
-def _record_result_usage_status(conn, attempt_id, result_id):
+def _record_result_usage_status(conn, attempt_id, result_id, data_dir):
     attempt_row = db_records.first(db_read_attempts.find_metadata_json_by_attempt_id(conn, attempt_id))
     attempt_metadata = values.json_object(attempt_row[0] if attempt_row else None)
-    usage_status = usage.extract_attempt_usage(attempt_metadata)
+    dispatch = attempt_metadata.get("dispatch")
+    dispatch = dispatch if isinstance(dispatch, dict) else {}
+    observed = (
+        model_usage.read_dispatch(data_dir, dispatch)
+        if dispatch.get("worker_agent")
+        else model_usage.read_legacy_log(dispatch.get("stdout_path"))
+    )
+    if observed.get("usage_available"):
+        usage_status = observed
+    else:
+        usage_status = attempt_metadata.get("usage") or observed or model_usage.event_usage(None)
     if attempt_row and attempt_metadata.get("usage") != usage_status:
         attempt_metadata["usage"] = usage_status
         db_write_attempts.set_metadata_json_by_attempt_id(
@@ -126,7 +136,7 @@ def audit_completed_results(
         if gate["status"] == "blocked":
             continue
         claim = gate.get("claim")
-        _record_result_usage_status(conn, payload["attempt_id"], payload["result_id"])
+        _record_result_usage_status(conn, payload["attempt_id"], payload["result_id"], data_dir)
         ticket = work_queries.tapd_origin(conn, workstream_id)
         conn.commit()
         try:

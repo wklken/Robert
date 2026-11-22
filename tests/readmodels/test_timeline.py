@@ -298,6 +298,54 @@ class CompletedWorkTests(BoardReadModelFixture):
             },
         )
 
+    def test_receipt_counts_each_persisted_call_once_and_excludes_unrelated_or_later_calls(self):
+        from robert_agent.persistence.stores import model_usage
+
+        self.result("receipt", output="local_result")
+        self.result("other-request", output="local_result")
+        self.conn.execute(
+            "UPDATE attempts SET started_at='2026-10-30T00:00:00Z', metadata_json=? WHERE attempt_id='receipt-1'",
+            (json.dumps({"usage": {"usage_available": True, "usage": {"input_tokens": 99}}}),),
+        )
+        measured = {
+            "source": "gateway",
+            "usage_available": True,
+            "total_cost_usd": 0.001,
+            "usage": {
+                "input_tokens": 5,
+                "output_tokens": 2,
+                "cache_read_input_tokens": 4,
+                "cache_creation_input_tokens": 0,
+            },
+        }
+        self.conn.execute(
+            "INSERT INTO proposals(proposal_id, source_identity, repo_id, status, version, revision, source_key, "
+            "fingerprint, task_id, created_at, updated_at) VALUES ('p1', 'owned-source', 'repo-1', 'admitted', 1, 1, "
+            "'source', 'evidence', 'receipt', '2026-10-28', '2026-10-30')"
+        )
+        for kind, call, scope, date in (
+            ("worker", "receipt-1", "receipt", "2026-10-31"),
+            ("worker", "receipt-1", "receipt", "2026-10-31"),
+            ("decision", "eligible", "receipt", "2026-10-30"),
+            ("diagnosis", "prior", "receipt", "2026-10-29"),
+            ("diagnosis", "future", "receipt", "2026-11-01"),
+            ("diagnosis", "unrelated", "other-request", "2026-10-29"),
+            ("proposer", "same", "repo-1/owned-source", "2026-10-28"),
+            ("proposer", "wrong-repo", "repo-2/owned-source", "2026-10-28"),
+        ):
+            model_usage.record(self.conn, kind, call, scope, date, measured)
+        model_usage.record(self.conn, "diagnosis", "missing", "receipt", "2026-10-30", {})
+        self.conn.commit()
+        usage = get_receipt(self.db_path, "receipt", "receipt-1")["usage"]
+        self.assertEqual(usage["run_count"], 5)
+        self.assertEqual(usage["billing_token_run_count"], 4)
+        self.assertEqual(usage["uncached_input_tokens"], 20)
+        self.assertEqual(usage["cached_input_tokens"], 16)
+        self.assertEqual(usage["cache_creation_input_tokens"], 0)
+        self.assertEqual(usage["output_tokens"], 8)
+        self.assertEqual(usage["cost_run_count"], 4)
+        self.assertAlmostEqual(usage["reported_cost_usd"], 0.004)
+
     def test_historical_receipt_has_no_generated_summary(self):
         self.result("receipt")
         self.action("receipt", "https://github.com/example/repo/pull/2")

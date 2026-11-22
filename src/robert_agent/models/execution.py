@@ -174,3 +174,15 @@ class ExecutionFactReceipt(Base):
     subject_id: Mapped[str] = mapped_column(Text, primary_key=True)
     fact_id: Mapped[str] = mapped_column(Text, primary_key=True)
     evidence_json: Mapped[str | None] = mapped_column(Text)
+
+
+class ModelUsage(Base):
+    __tablename__ = "model_usage"
+
+    kind: Mapped[str] = mapped_column(Text, primary_key=True)
+    call_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    scope_id: Mapped[str] = mapped_column(Text)
+    recorded_at: Mapped[str] = mapped_column(Text)
+    usage_json: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (Index("idx_model_usage_scope", "kind", "scope_id", "recorded_at"),)

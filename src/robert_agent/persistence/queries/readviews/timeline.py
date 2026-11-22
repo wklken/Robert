@@ -196,3 +196,22 @@ def receipt_attempts(conn, task_id, attempt_no, result_created_at):
             )
         ),
     )
+
+
+def receipt_usage(conn, task_ids, result_created_at):
+    """Find task-bound measurements and pre-admission calls for its own proposal."""
+    usage, proposal = tables["model_usage"], tables["proposals"]
+    proposal_scopes = select(proposal.c.repo_id + "/" + proposal.c.source_identity).where(
+        proposal.c.task_id.in_(task_ids)
+    )
+    bound_to_task = (usage.c.kind.in_(("worker", "stage", "decision", "diagnosis"))) & (usage.c.scope_id.in_(task_ids))
+    auxiliary_cutoff = (usage.c.kind.in_(("worker", "stage"))) | (
+        func.julianday(usage.c.recorded_at) <= func.julianday(result_created_at)
+    )
+    return statements.read(
+        conn,
+        select(usage.c.kind, usage.c.call_id, usage.c.usage_json).where(
+            or_(bound_to_task, (usage.c.kind == "proposer") & (usage.c.scope_id.in_(proposal_scopes))),
+            auxiliary_cutoff,
+        ),
+    )

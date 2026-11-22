@@ -1,6 +1,8 @@
 from contextlib import closing
 from pathlib import Path
+import json
 import subprocess
+import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
@@ -128,6 +130,26 @@ class ProposalScanTests(unittest.TestCase):
             "2026-11-20 09:03:00",
             owners,
         )
+
+    def test_scan_records_gateway_usage_when_assessment_fails_validation(self):
+        def response(**kwargs):
+            kwargs["on_usage"](
+                {
+                    "source": "gateway",
+                    "usage_available": True,
+                    "usage": {"input_tokens": 12},
+                    "total_cost_usd": 0,
+                }
+            )
+            return {"schema_version": "invalid"}
+
+        self.model.side_effect = response
+        report = proposal_scan.scan(self.config, now="2026-11-22T01:00:00+00:00")
+        self.assertGreater(report["failed_evaluations"], 0)
+        with closing(sqlite3.connect(self.db)) as conn:
+            observed = conn.execute("SELECT usage_json FROM model_usage WHERE kind='proposer'").fetchall()
+        self.assertEqual(len(observed), report["failed_evaluations"])
+        self.assertTrue(all(json.loads(row[0])["usage"]["input_tokens"] == 12 for row in observed))
 
     def test_pinned_issues_and_tapd_tickets_become_deduplicated_proposals(self):
         report = proposal_scan.scan(self.config, now="2026-11-22T01:00:00+00:00")

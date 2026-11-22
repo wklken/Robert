@@ -1,5 +1,7 @@
 """SQLite connection settings and catalog operations, never business policy."""
 
+from pathlib import Path
+
 from robert_agent.persistence import errors
 from robert_agent.foundation.timestamps import timestamp_after
 
@@ -36,6 +38,10 @@ def table_info(conn, name):
 
 def database_list(conn):
     return execute_control(conn, "PRAGMA database_list")
+
+
+def main_database_path(conn):
+    return next((Path(row[2]) for row in database_list(conn) if row[1] == "main" and row[2]), None)
 
 
 def page_count(conn):

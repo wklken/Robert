@@ -4,13 +4,11 @@ from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 
-import json
 from robert_agent.foundation.values import json_object
-from robert_agent.adapters.processes import session_history
+from robert_agent.adapters.processes import model_usage
 import math
-import os
 import sys
-from pathlib import Path
+from itertools import chain
 
 
 def _as_number(value, default=0):
@@ -47,68 +45,6 @@ def _first_usage_block(usage_payload):
     return {}
 
 
-def parse_cbc_stream_json_lines(lines):
-    final_result = None
-    for line in lines:
-        text = line.strip()
-        if not text:
-            continue
-        try:
-            event = json.loads(text)
-        except ValueError:
-            continue
-        if isinstance(event, dict) and event.get("type") in {"result", "turn.completed"}:
-            final_result = event
-    return _usage_from_event(final_result)
-
-
-def _usage_from_event(final_result):
-    if not final_result:
-        return {"usage_available": False, "source": "no_result_event"}
-    provider_data = final_result.get("providerData") or {}
-    usage = final_result.get("usage") or {}
-    provider_usage = provider_data.get("usage") if isinstance(provider_data, dict) else {}
-    provider_raw_usage = provider_data.get("rawUsage") if isinstance(provider_data, dict) else {}
-    total_cost = final_result.get("total_cost_usd")
-    available = any(
-        [
-            isinstance(usage, dict) and bool(usage),
-            isinstance(provider_usage, dict) and bool(provider_usage),
-            isinstance(provider_raw_usage, dict) and bool(provider_raw_usage),
-            total_cost is not None,
-        ]
-    )
-    return {
-        "usage_available": bool(available),
-        "source": "codex_json" if final_result.get("type") == "turn.completed" else "cbc_stream_json",
-        "usage": usage if isinstance(usage, dict) else {},
-        "provider_usage": provider_usage if isinstance(provider_usage, dict) else {},
-        "provider_raw_usage": provider_raw_usage if isinstance(provider_raw_usage, dict) else {},
-        "total_cost_usd": total_cost,
-        "duration_ms": final_result.get("duration_ms"),
-        "num_turns": final_result.get("num_turns"),
-        "model": final_result.get("model"),
-        "subtype": final_result.get("subtype"),
-    }
-
-
-def parse_cbc_stream_json(text):
-    return parse_cbc_stream_json_lines(text.splitlines())
-
-
-def load_usage_from_log(path):
-    if not path:
-        return {"usage_available": False, "source": "missing"}
-    path_obj = Path(path)
-    try:
-        text = path_obj.read_text(encoding="utf-8")
-    except OSError:
-        return {"usage_available": False, "source": "missing", "path": str(path_obj)}
-    result = parse_cbc_stream_json(text)
-    result["path"] = str(path_obj)
-    return result
-
-
 def extract_attempt_usage(attempt_metadata):
     if not isinstance(attempt_metadata, dict):
         return {"usage_available": False, "source": "missing_metadata"}
@@ -116,7 +52,8 @@ def extract_attempt_usage(attempt_metadata):
     if isinstance(usage_payload, dict):
         return usage_payload
     dispatch = attempt_metadata.get("dispatch") or {}
-    return load_usage_from_log(dispatch.get("stdout_path"))
+    path = dispatch.get("stdout_path")
+    return model_usage.read_legacy_log(path) or {"usage_available": False, "source": "missing"}
 
 
 def _result_counts(conn):
@@ -181,46 +118,30 @@ def summarize_usage_payloads(usage_payloads):
     }
 
 
-def _registered_log_usage(root, path):
-    if not isinstance(path, str) or not path:
-        return {}
-    try:
-        with session_history.open_history(root, path, trusted_root_alias=True) as stream:
-            end = session_history.complete_end(stream, os.fstat(stream.fileno()).st_size)
-            for _, line in session_history.reverse_lines(stream, end):
-                if line is None:
-                    continue
-                event = session_history.json_object(line)
-                if event.get("type") in ("result", "turn.completed"):
-                    return _usage_from_event(event)
-    except (OSError, ValueError):
-        pass
-    return {}
-
-
 def _launched(dispatch, started_at):
     return bool(started_at or dispatch.get("pid"))
 
 
-def _attempt_usage_payloads(root, attempts):
+def _attempt_usage_payloads(root, attempts, recorded):
     for attempt, model_runs in attempts:
         metadata = json_object(attempt["metadata_json"])
         dispatch = metadata.get("dispatch")
         dispatch = dispatch if isinstance(dispatch, dict) else {}
-        saved = metadata.get("usage")
+        saved = recorded.get(("worker", attempt["attempt_id"])) or metadata.get("usage")
         saved = saved if isinstance(saved, dict) else {}
-        if not model_runs and (saved.get("usage_available") or _launched(dispatch, attempt["started_at"])):
+        coordinator = dispatch.get("model_coordinator", bool(model_runs) and not saved.get("usage_available"))
+        if not coordinator and (saved.get("usage_available") or _launched(dispatch, attempt["started_at"])):
             # Native coordinators are subprocess wrappers. Their model runs are
             # counted below, so an unmetered wrapper adds no extra model call.
             yield (
                 saved
                 if saved.get("usage_available")
-                else (_registered_log_usage(root, dispatch.get("stdout_path")) if attempt["finished_at"] else {})
+                else (model_usage.read_dispatch(root, dispatch) if attempt["finished_at"] else {})
             )
         for run in model_runs:
             dispatch = json_object(run["dispatch_json"])
             if _launched(dispatch, run["started_at"]):
-                yield _registered_log_usage(root, dispatch.get("stdout_path"))
+                yield recorded.get(("stage", run["run_id"])) or model_usage.read_dispatch(root, dispatch)
 
 
 def _receipt_tokens(payload):
@@ -233,7 +154,7 @@ def _receipt_tokens(payload):
     )
     uncached = None
     source = payload.get("source")
-    if source == "cbc_stream_json" and inputs is not None:
+    if source in {"cbc_stream_json", "gateway", "opencode"} and inputs is not None:
         uncached = inputs
         # Claude-style reports list reads and writes outside regular input.
         inputs += (cached or 0) + (created or 0)
@@ -242,17 +163,21 @@ def _receipt_tokens(payload):
         remaining = inputs - cached - created
         if remaining >= 0:
             uncached = remaining
-    return {
+    buckets = {
         "input_tokens": inputs,
         "uncached_input_tokens": uncached,
         "output_tokens": outputs,
         "cached_input_tokens": cached,
         "cache_creation_input_tokens": created,
     }
+    # Budget enforcement still uses the exact integer from the worker. Keep
+    # out-of-range counters out of the browser's numeric aggregate.
+    return {name: value if value is None or value <= sys.maxsize else None for name, value in buckets.items()}
 
 
-def summarize_receipt_usage(root, attempts):
+def summarize_receipt_usage(root, attempts, *, recorded=None):
     attempts = tuple(attempts)
+    recorded = recorded or {}
     totals = {
         "scope": "request" if any(attempt["lineage"] for attempt, _ in attempts) else "task",
         "run_count": 0,
@@ -262,7 +187,8 @@ def summarize_receipt_usage(root, attempts):
         "cost_run_count": 0,
         "reported_cost_usd": None,
     }
-    for payload in _attempt_usage_payloads(root, attempts):
+    auxiliary = (payload for (kind, _), payload in recorded.items() if kind not in {"worker", "stage"})
+    for payload in chain(_attempt_usage_payloads(root, attempts, recorded), auxiliary):
         totals["run_count"] += 1
         tokens = _receipt_tokens(payload)
         for bucket, count in tokens.items():
@@ -270,12 +196,13 @@ def summarize_receipt_usage(root, attempts):
                 totals[bucket] = (totals[bucket] or 0) + count
         if tokens["input_tokens"] is not None and tokens["output_tokens"] is not None:
             totals["token_run_count"] += 1
-            if all(count is not None for count in tokens.values()):
+            if not payload.get("partial") and all(count is not None for count in tokens.values()):
                 totals["billing_token_run_count"] += 1
         cost = payload.get("total_cost_usd")
         current_cost = totals["reported_cost_usd"] or 0.0
         if type(cost) in (int, float) and 0 <= cost <= sys.float_info.max - current_cost:
-            totals["cost_run_count"] += 1
+            if not payload.get("partial_cost"):
+                totals["cost_run_count"] += 1
             totals["reported_cost_usd"] = current_cost + float(cost)
     return totals
 
