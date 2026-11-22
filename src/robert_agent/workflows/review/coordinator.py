@@ -65,7 +65,9 @@ class ReviewStages(StageCoordinator):
     def prepare_context(self):
         review_workspace.verify_snapshot(self.manifest)
         if not self.manifest.get("frozen"):
-            prompt = self.prompt("prepare-prompt.md", render_prompt(review_prepare_input(self.manifest)).text)
+            prompt = self.prompt(
+                "prepare-prompt.md", render_prompt(review_prepare_input(self.manifest)).text, stage="prepare"
+            )
 
             def validate(output, model):
                 summary = review_files.safe_path(output / "context-summary.md", self.manifest["artifact_root"])
@@ -151,6 +153,7 @@ class ReviewStages(StageCoordinator):
         prompt = self.prompt(
             f"synthesis-prompt-{inputs['sha256']}.md",
             render_prompt(prompt_input).text,
+            stage="synthesis",
         )
 
         def validate(output, model):

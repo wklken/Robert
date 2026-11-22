@@ -73,7 +73,9 @@ class Coordinator(StageCoordinator):
             if self.manifest.get("frozen"):
                 return True
             prompt = self.prompt(
-                "prepare-" + self.manifest["snapshot_id"] + ".md", render_prompt(vote_prepare_input(self.manifest)).text
+                "prepare-" + self.manifest["snapshot_id"] + ".md",
+                render_prompt(vote_prepare_input(self.manifest)).text,
+                stage="prepare",
             )
 
             def validate(output, model):
@@ -161,6 +163,7 @@ class Coordinator(StageCoordinator):
         prompt = self.prompt(
             f"synthesis-{inputs_hash}.md",
             render_prompt(vote_synthesize_input(self.manifest, inputs, inputs_hash, records)).text,
+            stage="synthesis",
         )
 
         def validate(output, model):

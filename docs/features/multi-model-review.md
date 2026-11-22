@@ -99,6 +99,7 @@ reviewer 定向读取 manifest 的身份与上下文路径；完整源码哈希�
 
 Robert 冻结 manifest 和一次生成的 `reviewer-prompt.md`。所有 reviewer 的 stdin 读取同一个文件，
 启动前后核对 SHA256；重试也不改变 prompt。不同 CLI 内置的系统提示不在此字节一致保证内。
+部署更新 prompt 模板后，已登记的轮次和阶段继续使用原文件，并核对登记的哈希。
 每个子进程使用相同 cwd，通过独立环境变量 `ROBERT_REVIEW_OUTPUT_DIR` 得到自己的结果目录，
 不将 worker 名称或各自输出路径插入 prompt，不修改宿主环境。
 

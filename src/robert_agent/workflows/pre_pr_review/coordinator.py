@@ -249,6 +249,7 @@ class Coordinator(ReviewStages):
                     operator_reply=reply,
                 )
             ).text,
+            stage="address_findings",
         )
 
         def validate(output, _model):

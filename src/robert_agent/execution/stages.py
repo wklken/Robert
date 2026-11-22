@@ -659,11 +659,23 @@ class StageCoordinator:
                 return self.run_phase(stage, worker, prompt_path, validate, input_hash=input_hash)
             raise
 
-    def prompt(self, name, text):
+    def prompt(self, name, text, *, stage=None):
         path = Path(self.manifest["artifact_root"]) / name
-        if path.exists():
-            if path.read_bytes() != text.encode("utf-8"):
-                raise ValueError("registered phase prompt changed")
-        else:
+        if not path.exists():
             path.write_text(text, encoding="utf-8")
-        return path
+            return path
+        existing = path.read_bytes()
+        if existing == text.encode("utf-8"):
+            return path
+        if stage is not None:
+            # A deployment may change the renderer after a phase has run.
+            # Only the exact path and bytes recorded by that phase can be reused.
+            with self.store.connect(self.db_path) as conn:
+                registered = {
+                    run["prompt_sha256"]
+                    for run in self.store.runs(conn, self.round_id)
+                    if run["stage"] == stage and (run["dispatch"] or {}).get("prompt_path") == str(path)
+                }
+            if registered == {hashlib.sha256(existing).hexdigest()}:
+                return path
+        raise ValueError("registered phase prompt changed")
