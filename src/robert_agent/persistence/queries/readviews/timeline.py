@@ -1,6 +1,6 @@
 """Completed results and their request context for a calendar period."""
 
-from sqlalchemy import case, func, literal, select
+from sqlalchemy import and_, case, func, literal, or_, select
 
 from robert_agent.foundation.contracts.delivery import AuditStatus, OutputType
 from robert_agent.foundation.contracts.execution import AttemptStatus
@@ -141,8 +141,11 @@ def completed_result_receipt(conn, task_id, result_id):
     dispatch = valid_json_or_empty(attempt.c.metadata_json)
     query = select(
         selected.c.output_type,
-        result.c.handoff,
+        func.json_extract(valid_json_or_empty(result.c.metadata_json), "$.normalized_payload.receipt_summary").label(
+            "receipt_summary"
+        ),
         result.c.verification_json,
+        result.c.created_at.label("result_created_at"),
         attempt.c.attempt_no,
         attempt.c.started_at,
         attempt.c.finished_at,
@@ -154,3 +157,42 @@ def completed_result_receipt(conn, task_id, result_id):
         )
     )
     return statements.read(conn, query)
+
+
+def receipt_attempts(conn, task_id, attempt_no, result_created_at):
+    task, stream, attempt = (tables[name] for name in ("tasks", "workstreams", "attempts"))
+    lineage = func.json_extract(valid_json_or_empty(task.c.metadata_json), "$.supervision_lineage_key")
+    anchor = (
+        select(stream.c.repo_id, func.nullif(lineage, "").label("lineage"))
+        .select_from(task.join(stream, stream.c.workstream_id == task.c.workstream_id))
+        .where(task.c.task_id == task_id)
+        .subquery()
+    )
+    cutoff = func.julianday(result_created_at)
+    return statements.read(
+        conn,
+        select(
+            attempt.c.task_id,
+            attempt.c.attempt_id,
+            attempt.c.started_at,
+            attempt.c.finished_at,
+            attempt.c.metadata_json,
+            anchor.c.lineage,
+        )
+        .select_from(
+            attempt.join(task, task.c.task_id == attempt.c.task_id)
+            .join(stream, stream.c.workstream_id == task.c.workstream_id)
+            .join(anchor, anchor.c.repo_id == stream.c.repo_id)
+        )
+        .where(
+            or_(
+                and_(task.c.task_id == task_id, attempt.c.attempt_no <= attempt_no),
+                and_(
+                    task.c.task_id != task_id,
+                    lineage == anchor.c.lineage,
+                    func.julianday(task.c.created_at) <= cutoff,
+                    or_(attempt.c.started_at.is_(None), func.julianday(attempt.c.started_at) <= cutoff),
+                ),
+            )
+        ),
+    )

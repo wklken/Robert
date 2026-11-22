@@ -182,16 +182,22 @@ class CompletedWorkTests(BoardReadModelFixture):
             ),
         )
         self.conn.execute(
-            "UPDATE worker_results SET handoff=?, verification_json=? WHERE result_id='receipt-2'",
+            "UPDATE worker_results SET handoff=?, verification_json=?, metadata_json=? WHERE result_id='receipt-2'",
             (
-                "Completed the request and checked its output.",
+                "Full execution handoff.",
                 json.dumps([{"status": "passed", "command": "private command"}, {"status": "skipped"}]),
+                json.dumps(
+                    {
+                        "audit": {"status": "accepted"},
+                        "normalized_payload": {"receipt_summary": "Completed the request and checked its output."},
+                    }
+                ),
             ),
         )
         entry = self.timeline()["entries"][0]
         receipt = get_receipt(self.db_path, entry["task_id"], entry["result_id"])
         self.assertEqual(
-            receipt,
+            {field: value for field, value in receipt.items() if field != "usage"},
             {
                 "summary": "Completed the request and checked its output.",
                 "summary_redacted": False,
@@ -200,65 +206,102 @@ class CompletedWorkTests(BoardReadModelFixture):
                 "model": "worker-model",
                 "attempt": 2,
                 "started_at": "2026-11-01T15:48:25+00:00",
+                "finished_at": "2026-11-01T15:51:15+00:00",
                 "duration_seconds": 170.0,
                 "verification": {"passed": 1, "failed": 0, "skipped": 1},
             },
         )
 
-    def test_receipt_prefers_published_change_summary_to_git_and_verification_details(self):
-        self.result("receipt")
-        self.action("receipt", "https://github.com/example/repo/pull/2")
+    def test_receipt_rolls_up_usage_for_the_request_and_its_model_runs(self):
+        self.result("classification", output="classification_result")
+        self.result("receipt", output="local_result", attempt=2)
+        self.result("other-request", output="local_result")
         self.conn.execute(
-            "UPDATE github_actions SET metadata_json=? WHERE action_id='receipt-1-1'",
+            "UPDATE tasks SET metadata_json=? WHERE task_id IN ('classification', 'receipt')",
+            (json.dumps({"supervision_lineage_key": "same-request"}),),
+        )
+        self.conn.execute(
+            "UPDATE attempts SET started_at='2026-10-25T00:00:00Z', metadata_json=? WHERE attempt_id='classification-1'",
             (
                 json.dumps(
                     {
-                        "body": "## Summary\n- Consolidated version diff parsing.\n- Fixed empty field handling.\n"
-                        "## Verification\n- Run a long verification command."
+                        "usage": {
+                            "usage_available": True,
+                            "source": "cbc_stream_json",
+                            "usage": {"input_tokens": 11, "output_tokens": 4, "cache_read_input_tokens": 6},
+                            "total_cost_usd": 0.012,
+                        }
                     }
                 ),
             ),
         )
         self.conn.execute(
-            "UPDATE worker_results SET handoff=? WHERE result_id='receipt-1'",
-            ("已实现并本地提交：a1b2c3d4e5f6；工作区干净。",),
+            "UPDATE attempts SET started_at='2026-10-27T00:00:00Z', metadata_json=? WHERE attempt_id='other-request-1'",
+            (json.dumps({"usage": {"usage_available": True, "usage": {"input_tokens": 900, "output_tokens": 100}}}),),
+        )
+        self.conn.execute("UPDATE attempts SET started_at='2026-10-26T00:00:00Z' WHERE attempt_id='receipt-2'")
+        stdout = self.db_path.parent / "review.stdout"
+        stdout.write_text(
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 30, "cached_input_tokens": 8, "output_tokens": 9},
+                }
+            )
+            + "\n"
+        )
+        self.conn.execute(
+            "INSERT INTO review_sessions(round_id, repo, pr_number, workstream_id, trigger_fingerprint, task_id, "
+            "request_json, created_at, updated_at) VALUES ('r1', 'example/repo', 2, 'derived', 'review', 'receipt', "
+            "'{}', '2026-10-26T00:00:00Z', '2026-10-26T00:00:00Z')"
+        )
+        self.conn.execute(
+            "INSERT INTO review_runs(run_id, round_id, stage, worker_id, attempt_no, owner_attempt_id, status, "
+            "output_dir, prompt_sha256, started_at, dispatch_json, created_at, updated_at) "
+            "VALUES ('r1:run', 'r1', 'review', 'reviewer', 1, 'receipt-2', 'succeeded', 'output', 'hash', "
+            "'2026-10-27T00:00:00Z', ?, '2026-10-27T00:00:00Z', '2026-10-27T00:00:00Z')",
+            (json.dumps({"stdout_path": str(stdout)}),),
+        )
+        self.conn.execute(
+            "INSERT INTO review_runs(run_id, round_id, stage, worker_id, attempt_no, owner_attempt_id, status, "
+            "output_dir, prompt_sha256, started_at, created_at, updated_at) "
+            "VALUES ('r1:failed', 'r1', 'synthesis', 'reviewer', 1, 'receipt-2', 'failed', 'failed-output', 'hash', "
+            "'2026-10-28T00:00:00Z', '2026-10-28T00:00:00Z', '2026-10-28T00:00:00Z')"
         )
         self.conn.commit()
 
-        receipt = get_receipt(self.db_path, "receipt", "receipt-1")
-        self.assertEqual(receipt["summary"], "Consolidated version diff parsing.\nFixed empty field handling.")
-        self.assertFalse(receipt["summary_truncated"])
+        receipt = get_receipt(self.db_path, "receipt", "receipt-2")
+        self.assertEqual(
+            receipt["usage"],
+            {
+                "scope": "request",
+                "run_count": 3,
+                "token_run_count": 2,
+                "input_tokens": 47,
+                "output_tokens": 13,
+                "cached_input_tokens": 14,
+                "cache_creation_input_tokens": 0,
+                "cost_run_count": 1,
+                "reported_cost_usd": 0.012,
+            },
+        )
 
-    def test_receipt_extracts_handoff_outcomes_when_a_change_summary_is_unavailable(self):
-        self.result("receipt", output="local_result")
+    def test_historical_receipt_has_no_generated_summary(self):
+        self.result("receipt")
+        self.action("receipt", "https://github.com/example/repo/pull/2")
+        self.conn.execute(
+            "UPDATE github_actions SET metadata_json=? WHERE action_id='receipt-1-1'",
+            (json.dumps({"body": "## Summary\nOriginal PR description."}),),
+        )
         self.conn.execute(
             "UPDATE worker_results SET handoff=? WHERE result_id='receipt-1'",
-            (
-                "已实现并本地提交：a1b2c3d4e5f6；工作区干净。\n\n"
-                "归并资源版本差异的检查逻辑。验证：运行了一长串命令。\n"
-                "补齐空字段与文档缺失的处理。",
-            ),
+            ("Original detailed handoff.",),
         )
         self.conn.commit()
 
         receipt = get_receipt(self.db_path, "receipt", "receipt-1")
-        self.assertEqual(receipt["summary"], "归并资源版本差异的检查逻辑。\n补齐空字段与文档缺失的处理。")
+        self.assertEqual(receipt["summary"], "")
         self.assertFalse(receipt["summary_truncated"])
-
-    def test_receipt_bounds_a_long_change_summary_and_hides_verification_commands(self):
-        self.result("receipt", output="local_result")
-        long_summary = "Consolidated version diff parsing with " + "additional changes " * 35
-        self.conn.execute(
-            "UPDATE worker_results SET handoff=? WHERE result_id='receipt-1'",
-            (long_summary + ".\n## Verification\n- run-diagnostics\n",),
-        )
-        self.conn.commit()
-
-        receipt = get_receipt(self.db_path, "receipt", "receipt-1")
-        self.assertTrue(receipt["summary"].startswith("Consolidated version diff parsing"))
-        self.assertLessEqual(len(receipt["summary"]), 280)
-        self.assertNotIn("run-diagnostics", receipt["summary"])
-        self.assertTrue(receipt["summary_truncated"])
 
     def test_receipt_hides_sensitive_summary_and_rejects_undelivered_or_stale_results(self):
         self.result("receipt")
@@ -270,8 +313,16 @@ class CompletedWorkTests(BoardReadModelFixture):
 
         self.action("receipt", "https://github.com/example/repo/pull/3", attempt=2)
         self.conn.execute(
-            "UPDATE worker_results SET handoff=?, verification_json=? WHERE result_id='receipt-2'",
-            ("api_key=abcd", "malformed old verification"),
+            "UPDATE worker_results SET metadata_json=?, verification_json=? WHERE result_id='receipt-2'",
+            (
+                json.dumps(
+                    {
+                        "audit": {"status": "accepted"},
+                        "normalized_payload": {"receipt_summary": "api_key=abcd"},
+                    }
+                ),
+                "malformed old verification",
+            ),
         )
         self.conn.commit()
         self.assertIsNone(get_receipt(self.db_path, "other-task", "receipt-2"))

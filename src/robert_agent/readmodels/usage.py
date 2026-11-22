@@ -6,7 +6,9 @@ from robert_agent.persistence.queries import worker_results as db_read_worker_re
 
 import json
 from robert_agent.foundation.values import json_object
+from robert_agent.adapters.processes import session_history
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -53,6 +55,10 @@ def parse_cbc_stream_json_lines(lines):
             continue
         if isinstance(event, dict) and event.get("type") in {"result", "turn.completed"}:
             final_result = event
+    return _usage_from_event(final_result)
+
+
+def _usage_from_event(final_result):
     if not final_result:
         return {"usage_available": False, "source": "no_result_event"}
     provider_data = final_result.get("providerData") or {}
@@ -167,6 +173,87 @@ def summarize_usage_payloads(usage_payloads):
         "total_tokens": (totals["total_input_tokens"] + totals["total_output_tokens"]),
         **totals,
     }
+
+
+def _registered_log_usage(root, path):
+    if not isinstance(path, str) or not path:
+        return {}
+    try:
+        with session_history.open_history(root, path, trusted_root_alias=True) as stream:
+            end = session_history.complete_end(stream, os.fstat(stream.fileno()).st_size)
+            for _, line in session_history.reverse_lines(stream, end):
+                if line is None:
+                    continue
+                event = session_history.json_object(line)
+                if event.get("type") in ("result", "turn.completed"):
+                    return _usage_from_event(event)
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def _launched(dispatch, started_at):
+    return bool(started_at or dispatch.get("pid"))
+
+
+def _attempt_usage_payloads(root, attempts):
+    for attempt, model_runs in attempts:
+        metadata = json_object(attempt["metadata_json"])
+        dispatch = metadata.get("dispatch")
+        dispatch = dispatch if isinstance(dispatch, dict) else {}
+        saved = metadata.get("usage")
+        saved = saved if isinstance(saved, dict) else {}
+        if not model_runs and (saved.get("usage_available") or _launched(dispatch, attempt["started_at"])):
+            # Native coordinators are subprocess wrappers. Their model runs are
+            # counted below, so an unmetered wrapper adds no extra model call.
+            yield (
+                saved
+                if saved.get("usage_available")
+                else (_registered_log_usage(root, dispatch.get("stdout_path")) if attempt["finished_at"] else {})
+            )
+        for run in model_runs:
+            dispatch = json_object(run["dispatch_json"])
+            if _launched(dispatch, run["started_at"]):
+                yield _registered_log_usage(root, dispatch.get("stdout_path"))
+
+
+def summarize_receipt_usage(root, attempts):
+    attempts = tuple(attempts)
+    totals = {
+        "scope": "request" if any(attempt["lineage"] for attempt, _ in attempts) else "task",
+        "run_count": 0,
+        "token_run_count": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cost_run_count": 0,
+        "reported_cost_usd": None,
+    }
+    for payload in _attempt_usage_payloads(root, attempts):
+        totals["run_count"] += 1
+        block = _first_usage_block(payload)
+        inputs = _usage_value(block, "input_tokens", "inputTokens")
+        outputs = _usage_value(block, "output_tokens", "outputTokens")
+        cached = _usage_value(block, "cache_read_input_tokens", "cacheReadInputTokens", "cached_input_tokens")
+        created = _usage_value(block, "cache_creation_input_tokens", "cacheCreationInputTokens")
+        # Claude-style cache counts are separate input buckets. Codex's
+        # cached_input_tokens is already included in its input_tokens.
+        totals["input_tokens"] += inputs + (cached + created if payload.get("source") == "cbc_stream_json" else 0)
+        totals["output_tokens"] += outputs
+        totals["cached_input_tokens"] += cached
+        totals["cache_creation_input_tokens"] += created
+        if all(
+            _as_number(block.get(snake, block.get(camel)), None) is not None
+            for snake, camel in (("input_tokens", "inputTokens"), ("output_tokens", "outputTokens"))
+        ):
+            totals["token_run_count"] += 1
+        cost = payload.get("total_cost_usd")
+        current_cost = totals["reported_cost_usd"] or 0.0
+        if type(cost) in (int, float) and 0 <= cost <= sys.float_info.max - current_cost:
+            totals["cost_run_count"] += 1
+            totals["reported_cost_usd"] = current_cost + float(cost)
+    return totals
 
 
 def summarize_acceptance_metrics(conn):

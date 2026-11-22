@@ -63,6 +63,35 @@ class SubmissionTests(WorkerProtocolFixture):
 
         self.assertTrue(record["ok"], record)
 
+    def test_worker_receipt_summary_is_saved_separately_from_handoff(self):
+        from robert_agent.delivery.application import submission as result
+
+        db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
+        payload = result.build_result("task-1", "attempt-1", "local_result", ["comment:1"], [], "Full handoff.")
+        summary = "Reused the operation already registered by the SDK."
+        payload["submission"]["receipt_summary"] = summary
+
+        record = result.record_result(db_path, payload)
+        self.assertTrue(record["ok"], record)
+        self.assertTrue(result.record_result(db_path, payload)["deduplicated"])
+        with closing(sqlite3.connect(db_path)) as conn:
+            handoff, metadata = conn.execute("SELECT handoff, metadata_json FROM worker_results").fetchone()
+        self.assertEqual(handoff, "Full handoff.")
+        self.assertEqual(json.loads(metadata)["normalized_payload"]["receipt_summary"], summary)
+
+    def test_unsafe_optional_receipt_summary_does_not_block_result(self):
+        from robert_agent.delivery.application import submission as result
+
+        db_path = self._init_attempt_db(output_type="local_result", route_id="local-result")
+        payload = result.build_result("task-1", "attempt-1", "local_result", ["comment:1"], [], "Full handoff.")
+        payload["submission"]["receipt_summary"] = "api_key=abcd"
+
+        record = result.record_result(db_path, payload)
+        self.assertTrue(record["ok"], record)
+        with closing(sqlite3.connect(db_path)) as conn:
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])
+        self.assertNotIn("receipt_summary", metadata["normalized_payload"])
+
     def test_classification_result_records_recommended_route(self):
         from robert_agent.delivery.application import submission as result
 

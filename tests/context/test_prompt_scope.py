@@ -44,6 +44,13 @@ class PromptScopeTests(unittest.TestCase):
                 self.assertIn("Otherwise omit mutation testing without a skip explanation", prompt)
                 self.assertNotIn("When feasible, use scoped mutation testing", prompt)
 
+    def test_delivery_prompt_requests_a_separately_written_receipt_summary(self):
+        prompt = self.render("new-pr")
+        self.assertIn('"receipt_summary":', prompt)
+        self.assertIn("one or two short sentences", prompt)
+        self.assertIn("what changed or what you concluded", prompt)
+        self.assertNotIn('"receipt_summary":', self.render("classification-result"))
+
     def test_task_prompt_exposes_ordered_sections_and_stage_identity(self):
         prompt = self.render("new-pr")
         headings = [line for line in prompt.splitlines() if line.startswith("## ")]

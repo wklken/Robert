@@ -400,6 +400,10 @@ class Coordinator(ReviewStages):
         self.stage = "finalize"
         self.phase(self.stage)
         draft["verification"] = response["verification"]
+        if "receipt_summary" in response:
+            draft["receipt_summary"] = response["receipt_summary"]
+        elif final != head:
+            draft.pop("receipt_summary", None)
         action = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
         fixed = [f"- {item['id']}：{item['reason']}" for item in response["dispositions"] if item["status"] == "fixed"]
         deferred = [

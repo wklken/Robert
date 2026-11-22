@@ -119,17 +119,27 @@
 }
 .receipt-close:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
 .receipt-kicker { margin: 12px 0 3px; color: var(--receipt-muted); font-size: 12px; }
-.receipt-title { margin: 0 0 5px; font-size: clamp(21px, 5vw, 26px); line-height: 1.25; }
-.receipt-meta, .receipt-verification { color: var(--receipt-muted); font-size: 12px; }
-.receipt-meta { margin: 0; }
-.receipt-verification { margin: 8px 0 0; }
-.receipt-section { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--receipt-rule); }
+.receipt-title { margin: 0 0 16px; font-size: clamp(21px, 5vw, 26px); line-height: 1.25; }
+.receipt-lines { margin: 0; }
+.receipt-line {
+  display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.6fr);
+  align-items: baseline; gap: 12px; padding: 3px 0;
+}
+.receipt-line dt { color: var(--receipt-muted); }
+.receipt-line dd {
+  margin: 0; text-align: right; font-weight: 550; font-variant-numeric: tabular-nums;
+}
+#receipt-details > .receipt-lines, .receipt-section, #receipt-reference {
+  margin-top: 13px; padding-top: 12px; border-top: 1px dashed var(--receipt-rule);
+}
 .receipt-section h3 { margin: 0 0 5px; font-size: 13px; font-weight: 700; }
 .receipt-section p, .receipt-section ul { margin: 0; }
 .receipt-section ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 13px; }
 .receipt-section a { color: var(--receipt-link); text-decoration: underline; text-underline-offset: 2px; }
 .receipt-summary { white-space: pre-wrap; }
-.receipt-status { color: var(--receipt-muted); }
+.receipt-section .receipt-usage-coverage { margin-top: 4px; font-size: 12px; color: var(--receipt-muted); }
+.receipt-status, #receipt-reference { color: var(--receipt-muted); }
+#receipt-reference { font: 11px/1.45 ui-monospace, "SFMono-Regular", "Consolas", monospace; }
 #receipt-retry { color: var(--receipt-ink); border-color: var(--receipt-rule); }
 @media (max-width: 480px) {
   .receipt-paper { padding-inline: 18px; }

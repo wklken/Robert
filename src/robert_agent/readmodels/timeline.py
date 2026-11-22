@@ -3,12 +3,11 @@
 from collections import defaultdict
 from contextlib import closing
 from datetime import date, datetime, time, timedelta, timezone
-import re
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from robert_agent.foundation.contracts.delivery import (
     AuditStatus,
-    GitHubActionType,
     OutputType,
     PublishStatus,
     VerificationStatus,
@@ -16,26 +15,12 @@ from robert_agent.foundation.contracts.delivery import (
 from robert_agent.foundation.timestamps import utc_timestamp
 from robert_agent.foundation.values import json_list
 from robert_agent.persistence import database, records, transactions
+from robert_agent.persistence.queries import agent_sessions
 from robert_agent.persistence.queries.readviews import task_history
 from robert_agent.persistence.queries.readviews import timeline as timeline_queries
+from robert_agent.readmodels import usage
 from robert_agent.security.redaction import redact_text
 from robert_agent.security.text import safe_public_link, safe_text
-
-
-_SUMMARY_HEADING = re.compile(
-    r"(?im)^#{1,6}[ \t]+(?:summary|changes|what changed|摘要|变更摘要|改动摘要|改动说明|主要变更|变更说明|实现内容)"
-    r"[ \t]*[：:]?[ \t]*$"
-)
-_MARKDOWN_HEADING = re.compile(r"(?m)^#{1,6}[ \t]+")
-_HANDOFF_DETAIL_HEADING = re.compile(
-    r"(?i)^(?:verification|tests?|checks|testing|assumptions and decisions|验证|测试|验证记录|假设与决策)[ \t]*[：:]?$"
-)
-_HANDOFF_DETAIL = re.compile(
-    r"(?i)^(?:commit(?: sha)?|base(?: sha)?|head(?: sha)?|branch|worktree|verification|tests?|checks|"
-    r"已实现并本地提交|本地提交|提交|工作区(?:状态)?|验证|测试)[ \t]*[：:]"
-)
-_SUMMARY_PREFIX = re.compile(r"(?i)^(?:summary|changes|摘要|变更摘要|改动摘要|主要变更|验收映射)[ \t]*[：:][ \t]*")
-_RECEIPT_SUMMARY_LIMIT = 280
 
 
 class TimelineQueryError(ValueError):
@@ -147,84 +132,49 @@ def list_completed(db_path, *, view="week", anchor_date=None, timezone_name="UTC
     }
 
 
-def _summary_excerpt(text, *, require_heading=False):
-    text = re.sub(r"<!--.*?-->", "", text, flags=re.S).replace("\r\n", "\n")
-    text = re.sub(r"(?ms)^[ \t]*(?:`{3,}|~{3,})[^\n]*\n.*?^[ \t]*(?:`{3,}|~{3,})[ \t]*$", "", text)
-    if heading := _SUMMARY_HEADING.search(text):
-        text = _MARKDOWN_HEADING.split(text[heading.end() :], maxsplit=1)[0]
-    elif require_heading:
-        return "", False
-
-    outcomes = []
-    in_details = False
-    for line in text.splitlines():
-        line = line.strip()
-        if heading := _MARKDOWN_HEADING.match(line):
-            in_details = bool(_HANDOFF_DETAIL_HEADING.fullmatch(line[heading.end() :]))
-            continue
-        if in_details or not line:
-            continue
-        line = re.sub(r"^(?:[-*+]|\d+[.)])[ \t]+", "", line).replace("**", "").replace("`", "")
-        if _HANDOFF_DETAIL.match(line):
-            continue
-        line = _SUMMARY_PREFIX.sub("", line)
-        for sentence in re.split(r"(?<=[。！？；])|(?<=[.!?;])[ \t]+", line):
-            sentence = sentence.strip()
-            if not sentence or _HANDOFF_DETAIL.match(sentence):
-                continue
-            outcomes.append(sentence)
-            if len(outcomes) == 3:
-                break
-        if len(outcomes) == 3:
-            break
-    excerpt = "\n".join(outcomes[:2])
-    return excerpt[:_RECEIPT_SUMMARY_LIMIT].rstrip(), len(outcomes) > 2 or len(excerpt) > _RECEIPT_SUMMARY_LIMIT
+def _receipt_attempts(conn, task_id, row):
+    cutoff = utc_timestamp(row["result_created_at"])
+    for attempt in timeline_queries.receipt_attempts(conn, task_id, row["attempt_no"], row["result_created_at"]):
+        model_runs = agent_sessions.model_runs_for_attempt(conn, attempt["task_id"], attempt["attempt_id"], limit=None)
+        yield (
+            attempt,
+            [run for run in model_runs if cutoff is None or (utc_timestamp(run["created_at"]) or cutoff) <= cutoff],
+        )
 
 
-def _receipt_summary(handoff, published):
-    for action in published:
-        if action["action_type"] != GitHubActionType.OPEN_PR or not isinstance(action["body"], str):
-            continue
-        body = redact_text(action["body"], strict_assignments=True)
-        if body["ok"]:
-            summary, shortened = _summary_excerpt(body["text"], require_heading=True)
-            if summary:
-                return summary, False, shortened
-    if not isinstance(handoff, str):
-        return "", False, False
-    body = redact_text(handoff, strict_assignments=True)
-    if not body["ok"]:
-        return "", True, False
-    summary, shortened = _summary_excerpt(body["text"])
-    return summary, False, shortened
-
-
-def get_receipt(db_path, task_id, result_id):
+def get_receipt(db_path, task_id, result_id, *, include_usage=True):
     with closing(database.connect(db_path, busy_timeout_ms=5000)) as conn:
         transactions.begin(conn)
         row = records.first(timeline_queries.completed_result_receipt(conn, task_id, result_id))
         if row is None:
             return None
-        actions = task_history.timeline_actions_for_results(conn, [result_id], include_body=True)
-        published = _published_actions(row["output_type"], actions)
-        if published is None:
+        actions = task_history.timeline_actions_for_results(conn, [result_id])
+        if _published_actions(row["output_type"], actions) is None:
             return None
+        attempts = list(_receipt_attempts(conn, task_id, row)) if include_usage else []
 
     started = utc_timestamp(row["started_at"])
     finished = utc_timestamp(row["finished_at"])
-    summary, summary_redacted, summary_truncated = _receipt_summary(row["handoff"], published)
+    summary = row["receipt_summary"]
+    safe_summary = redact_text(summary, strict_assignments=True) if isinstance(summary, str) else {}
     checks = [check for check in json_list(row["verification_json"]) if isinstance(check, dict)]
     return {
-        "summary": summary,
-        "summary_redacted": summary_redacted,
-        "summary_truncated": summary_truncated,
+        "summary": safe_summary.get("text", ""),
+        "summary_redacted": safe_summary.get("ok") is False,
+        "summary_truncated": False,
         "worker": safe_text(row["worker"], 100),
         "model": safe_text(row["model"], 100),
         "attempt": row["attempt_no"],
         "started_at": started.isoformat() if started else None,
+        "finished_at": finished.isoformat() if finished else None,
         "duration_seconds": (finished - started).total_seconds()
         if started and finished and finished >= started
         else None,
+        **(
+            {"usage": usage.summarize_receipt_usage(Path(db_path).expanduser().absolute().parent, attempts)}
+            if include_usage
+            else {}
+        ),
         "verification": {
             status.value: sum(check.get("status") == status.value for check in checks) for status in VerificationStatus
         },

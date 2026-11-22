@@ -56,7 +56,20 @@ class ReceiptNotificationsTests(BoardReadModelFixture):
         self.conn.execute(
             "INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,handoff,created_at,metadata_json) "
             "VALUES (?,?,?,?,?,?,?)",
-            (ID, ID, ID, output, "Reported outcome", at, '{"audit":{"status":"accepted"}}'),
+            (
+                ID,
+                ID,
+                ID,
+                output,
+                "Full handoff",
+                at,
+                json.dumps(
+                    {
+                        "audit": {"status": "accepted"},
+                        "normalized_payload": {"receipt_summary": "Reported outcome"},
+                    }
+                ),
+            ),
         )
         self.conn.execute(
             "INSERT INTO github_actions(action_id,task_id,result_id,action_type,target_url,audit_status,"
