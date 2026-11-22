@@ -274,6 +274,7 @@ class Coordinator(ReviewStages):
             f"Review report: {path}",
             [action],
             used_skills=[],
+            receipt_summary=evaluation.get("receipt_summary"),
         )
         recorded = worker_result.record_result(self.db_path, payload)
         if not recorded.get("ok"):

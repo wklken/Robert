@@ -10,6 +10,7 @@ import tempfile
 import time
 
 from robert_agent.adapters.processes import identity as worker_identity
+from robert_agent.adapters.processes import model_usage
 from robert_agent.security.redaction import redact_and_truncate
 from robert_agent.worker_adapters import build_worker_launch
 
@@ -82,6 +83,7 @@ def run(profile, payload, stop, on_started):
     process_identity = None
     phase = "prepare"
     failure = {}
+    usage = {}
     try:
         with tempfile.TemporaryDirectory(prefix="robert-model-", ignore_cleanup_errors=True) as root:
             cwd = Path(root).resolve()
@@ -90,6 +92,7 @@ def run(profile, payload, stop, on_started):
             launch = build_worker_launch(source, cwd, worker_agent_config={"agent": "command", **profile})
             environment = {key: os.environ[key] for key in launch.environment_allowlist if key in os.environ}
             environment.update(HOME=str(cwd), TMPDIR=str(cwd), PATH=os.defpath)
+            environment[model_usage.SIDECAR_ENV] = str(cwd / model_usage.SIDECAR_NAME)
             if stop.is_set():
                 return {"status": status, "output": output, "stopped": stopped}
             try:
@@ -133,6 +136,7 @@ def run(profile, payload, stop, on_started):
                         stopped = False
                     if not stopped:
                         stopped = worker_identity.cleanup_new_process(proc, wait_timeout=0.5)
+                    usage = model_usage.read_sidecar(cwd)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         failure = failure or {"failure_phase": phase, "error_class": type(exc).__name__}
         status = ModelCommandStatus.LAUNCH_FAILED.value if proc is None else ModelCommandStatus.PROCESS_ATTENTION.value
@@ -156,6 +160,8 @@ def run(profile, payload, stop, on_started):
         "output": output,
         "stopped": stopped,
         "exit_code": proc.returncode if proc is not None else None,
+        "launched": proc is not None,
+        "usage": usage,
         "safe_error": safe_error,
         "stderr_truncated": diagnostics["stderr_truncated"],
         **failure,

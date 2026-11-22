@@ -50,3 +50,6 @@ If this task yields reusable project knowledge, optionally add memory_delta with
 ## remediation-evidence
 The result must include remediation_evidence.resolution_summary explaining the correction.
 Robert binds episode identity and observed revisions from trusted state and independently attests the branch and merge graph before accepting the result.
+
+## receipt-summary
+- At final delivery, write `receipt_summary` in one or two short sentences in the request's language. Explain what changed or what you concluded, and include a material limitation if it affects the outcome. Synthesize the finished work in fresh wording. Keep it plain text under 280 characters. Leave out commit hashes, file inventories, commands, test counts, and handoff logistics. Use the full handoff and verification fields for execution evidence. Omit the short summary when asking for input.

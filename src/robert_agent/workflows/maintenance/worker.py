@@ -4,6 +4,8 @@ The inner agent receives a prompt and returns a compact submission. Only this
 outer process can call Robert's ordinary result validation and durable spool.
 """
 
+from robert_agent.adapters.processes import model_usage
+
 from robert_agent.foundation.contracts.delivery import OutputType
 
 from robert_agent.persistence import database as db_database
@@ -13,7 +15,7 @@ from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
 
 import argparse
-from contextlib import closing
+from contextlib import closing, contextmanager
 import json
 import os
 from pathlib import Path
@@ -115,6 +117,14 @@ def _cleanup_group(proc):
         proc.wait(timeout=2)
 
 
+@contextmanager
+def _relay_usage(home):
+    try:
+        yield
+    finally:
+        model_usage.report_sidecar(model_usage.read_sidecar(home))
+
+
 def run(config, task_id, attempt_id, prompt):
     if os.getpgrp() != os.getpid():
         return {"ok": False, "status": "repair_broker_group_not_isolated"}
@@ -151,8 +161,12 @@ def run(config, task_id, attempt_id, prompt):
     handlers = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
     proc = None
     try:
-        with tempfile.TemporaryDirectory(prefix="robert-repair-model-") as home:
+        with (
+            tempfile.TemporaryDirectory(prefix="robert-repair-model-") as home,
+            _relay_usage(home),
+        ):
             environment = supervision_repair.repair_environment(authorization, home)
+            environment[model_usage.SIDECAR_ENV] = str(Path(home) / model_usage.SIDECAR_NAME)
             packet = {
                 "prompt": prompt,
                 "result_transport": "stdout_compact_submission",

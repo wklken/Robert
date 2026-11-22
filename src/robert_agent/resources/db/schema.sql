@@ -791,3 +791,13 @@ CREATE TABLE IF NOT EXISTS proposal_scans (
   slot TEXT PRIMARY KEY NOT NULL,
   completed_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS model_usage (
+  kind TEXT NOT NULL,
+  call_id TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  usage_json TEXT NOT NULL,
+  PRIMARY KEY(kind, call_id)
+);
+CREATE INDEX IF NOT EXISTS idx_model_usage_scope ON model_usage(kind, scope_id, recorded_at);

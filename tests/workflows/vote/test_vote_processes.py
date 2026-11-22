@@ -1,6 +1,7 @@
 from tests.support import database as fixture_database
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import json
 import sys
 import threading
 import time
@@ -39,6 +40,8 @@ value={k:manifest[k] for k in ('schema_version','round_id','snapshot_id','ballot
 value.update(choice_id='A',reason_summary='Vote from '+str(worker),evidence_refs=[],tradeoffs=[],uncertainties=[])
 (root/'ballot.json.tmp').write_text(json.dumps(value))
 (root/'ballot.json.tmp').replace(root/'ballot.json')
+print(json.dumps({"type": "result", "usage": {"input_tokens": 4, "output_tokens": 2},
+                  "total_cost_usd": 0.013}), flush=True)
 """)
         self.driver.launcher = self.launch
 
@@ -105,6 +108,11 @@ value.update(choice_id='A',reason_summary='Vote from '+str(worker),evidence_refs
         self.assertEqual(len(records), 2)
         with fixture_database.connect(self.fixture.db) as conn:
             self.assertEqual(vote_store.process_pool_status(conn)["in_use"], 0)
+            observed = conn.execute(
+                "SELECT usage_json FROM model_usage WHERE kind='stage' AND scope_id=?", (self.driver.task_id,)
+            ).fetchall()
+            self.assertEqual(len(observed), 2)
+            self.assertTrue(all(json.loads(row[0])["total_cost_usd"] == 0.013 for row in observed))
         self.assertEqual({r["adapter"] for r in records}, {"codex", "claude"})
 
     def test_cancel_stops_both_registered_voters_and_does_not_seal_votes(self):

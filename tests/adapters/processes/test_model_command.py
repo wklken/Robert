@@ -116,3 +116,16 @@ class ModelCommandTests(unittest.TestCase):
                 self.assertEqual(result["status"], expected)
                 self.assertTrue(result["stopped"])
                 self.assertEqual(result["output"], b"")
+
+    def test_command_reports_metering_even_when_output_is_unusable(self):
+        result = self.run_command(
+            "import json, os, pathlib, sys; "
+            "pathlib.Path(os.environ['ROBERT_MODEL_USAGE_FILE']).write_text("
+            "json.dumps({'usage': {'output_tokens': 7, 'private_text': 'confidential'}, 'total_cost_usd': 0})); "
+            "print('invalid'); sys.exit(1)"
+        )
+        self.assertEqual(result["status"], "exited")
+        self.assertTrue(result["launched"])
+        self.assertEqual(result["usage"]["usage"], {"output_tokens": 7})
+        self.assertEqual(result["usage"]["total_cost_usd"], 0)
+        self.assertNotIn("confidential", str(result))

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Call a local Messages gateway without exposing model tools."""
 
+from robert_agent.adapters.processes import model_usage
+
 import argparse
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
@@ -181,7 +183,7 @@ class RateLimited(ModelError):
         self.provider_error = provider_error
 
 
-def request_json(*, instructions, evidence, endpoint, model, timeout, session_id):
+def request_json(*, instructions, evidence, endpoint, model, timeout, session_id, on_usage=None):
     """Return JSON from the local Messages gateway with no model tools."""
     endpoint = checked_endpoint(endpoint)
     if len(json.dumps(evidence, ensure_ascii=False).encode()) > MAX_REQUEST_BYTES:
@@ -224,6 +226,8 @@ def request_json(*, instructions, evidence, endpoint, model, timeout, session_id
     if len(raw) > MAX_RESPONSE_BYTES:
         raise ModelError("model response exceeds the transport limit")
     response = load_json(raw)
+    if on_usage and isinstance(response, dict):
+        on_usage(model_usage.gateway_usage(response))
     if not isinstance(response, dict) or response.get("stop_reason") != "end_turn":
         raise ModelError("model response did not complete without tools")
     blocks = response.get("content")
@@ -250,7 +254,7 @@ def request_json(*, instructions, evidence, endpoint, model, timeout, session_id
     return load_json("".join(text))
 
 
-def call(bundle, kind, endpoint, model, timeout):
+def call(bundle, kind, endpoint, model, timeout, *, on_usage=None):
     endpoint = checked_endpoint(endpoint)
     if (
         not isinstance(bundle, dict)
@@ -269,6 +273,7 @@ def call(bundle, kind, endpoint, model, timeout):
             model=model,
             timeout=timeout,
             session_id="robert-supervision-" + bundle["bundle_id"],
+            on_usage=on_usage,
         )
     except RateLimited as error:
         return {
@@ -297,6 +302,7 @@ def main():
             gateway_endpoint(args.gateway_metadata),
             args.model,
             args.timeout,
+            on_usage=model_usage.report_sidecar,
         )
         sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
         return 0

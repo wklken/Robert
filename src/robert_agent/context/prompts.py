@@ -129,7 +129,7 @@ def render_prompt(request: PromptInput) -> RenderedPrompt:
         sections[section].append(content)
     if profile.boundary:
         sections["Boundaries"].insert(0, load(f"stages/{profile.boundary}-boundary.md"))
-    for name in request.guidance:
+    for name in (*profile.guidance, *request.guidance):
         if name not in GUIDANCE:
             raise ValueError(f"unknown prompt guidance: {name}")
         group, section = GUIDANCE[name]

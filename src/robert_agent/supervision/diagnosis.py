@@ -36,7 +36,8 @@ from robert_agent.security import redaction
 from robert_agent.supervision import rules as supervision_rules
 from robert_agent.supervision import store as supervision_store
 from robert_agent.adapters.processes import identity as worker_identity
-from robert_agent.adapters.processes import model_command
+from robert_agent.adapters.processes import model_command, model_usage
+from robert_agent.persistence.stores import model_usage as usage_store
 from robert_agent.configuration.supervision import normalize_diagnosis
 from robert_agent.worker_adapters import build_worker_launch
 
@@ -253,7 +254,17 @@ def _set_claim(db_path, claim, now):
     return True
 
 
-def _complete(db_path, claim, now, status, diagnosis=None, *, stopped=True, provider_error=None):
+def _complete(
+    db_path,
+    claim,
+    now,
+    status,
+    diagnosis=None,
+    *,
+    stopped=True,
+    provider_error=None,
+    observed_usage=None,
+):
     target = claim["target"]
     with _write(db_path) as conn:
         runner = _checkpoint(conn, _RUNNER)
@@ -264,6 +275,9 @@ def _complete(db_path, claim, now, status, diagnosis=None, *, stopped=True, prov
         record = _checkpoint(conn, _analysis_key(target))
         if record.get("bundle_id") != claim["bundle_id"]:
             return _status("claim_changed", target, ok=False)
+        if observed_usage is not None or claim.get("process_identity"):
+            kind = "diagnosis" if target["scope_type"] == "task" else "diagnosis_unassigned"
+            usage_store.record(conn, kind, claim["job_id"], target["scope_id"], now.isoformat(), observed_usage or {})
         record.update(status=status, observed_at=now.isoformat())
         if diagnosis is not None:
             record["diagnosis"] = diagnosis
@@ -325,6 +339,7 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
     started = time.monotonic()
     status, diagnosis, proc, stopped = ModelCommandStatus.STOPPED.value, None, None, True
     provider_error = None
+    observed_usage = None
     try:
         directory = tempfile.TemporaryDirectory(prefix="robert-diagnosis-", ignore_cleanup_errors=True)
     except OSError:
@@ -348,6 +363,7 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
             return _PendingCompletion(db_path, claim, now, ModelCommandStatus.LAUNCH_FAILED.value, None, True)
         environment = {name: os.environ[name] for name in launch.environment_allowlist if name in os.environ}
         environment.update(HOME=str(cwd), TMPDIR=str(cwd), PATH=os.defpath)
+        environment[model_usage.SIDECAR_ENV] = str(cwd / model_usage.SIDECAR_NAME)
         if not stop.is_set():
             try:
                 with source.open("rb") as input_stream:
@@ -393,10 +409,20 @@ def _run(db_path, claim, packet, profile, now, stop, *, observed_monotonic):
                         stopped = False
                     if not stopped:
                         stopped = worker_identity.cleanup_new_process(proc, wait_timeout=0.5)
+                    observed_usage = model_usage.read_sidecar(cwd)
             if not stopped:
                 status, diagnosis, provider_error = ModelCommandStatus.PROCESS_ATTENTION.value, None, None
     finished = now + timedelta(seconds=time.monotonic() - observed_monotonic)
-    return _PendingCompletion(db_path, claim, finished, status, diagnosis, stopped, provider_error=provider_error)
+    return _PendingCompletion(
+        db_path,
+        claim,
+        finished,
+        status,
+        diagnosis,
+        stopped,
+        provider_error=provider_error,
+        observed_usage=observed_usage,
+    )
 
 
 def _recover_previous(db_path, claim, now, stop):
@@ -422,13 +448,19 @@ def _recover_previous(db_path, claim, now, stop):
 class _PendingCompletion:
     """Keep an already reaped outcome until its durable write succeeds."""
 
-    def __init__(self, db_path, claim, now, status, diagnosis, stopped, *, provider_error=None):
+    def __init__(self, db_path, claim, now, status, diagnosis, stopped, *, provider_error=None, observed_usage=None):
         self.provider_error = provider_error
+        self.observed_usage = observed_usage
         self.arguments = (db_path, claim, now, status, diagnosis)
         self.stopped = stopped
 
     def persist(self):
-        return _complete(*self.arguments, stopped=self.stopped, provider_error=self.provider_error)
+        return _complete(
+            *self.arguments,
+            stopped=self.stopped,
+            provider_error=self.provider_error,
+            observed_usage=self.observed_usage,
+        )
 
 
 def _persist_job(job):

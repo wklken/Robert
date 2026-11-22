@@ -1,5 +1,6 @@
 """Queue prepared attempts and claim launches under the task fence."""
 
+from robert_agent.execution.usage import record_dispatch_usage
 from robert_agent.foundation.contracts.execution import AttemptStatus, RoundStatus
 
 from robert_agent.persistence.queries import attempts as db_read_attempts
@@ -747,10 +748,20 @@ def dispatch_queued_locked(
                 "model": model,
                 "fallback_model": selected_worker.get("fallback_model"),
                 "reasoning_effort": worker_kwargs["reasoning_effort"],
+                "model_coordinator": bool(native_review or candidate_review),
             }
             with closing(db_database.connect(db_path)) as conn, conn:
                 db_sqlite.configure(conn, foreign_keys=True)
                 db_sqlite.configure(conn, busy_timeout_ms=5000)
+                if dispatch_result.get("process_exited") and dispatch_result.get("pid"):
+                    record_dispatch_usage(
+                        conn,
+                        Path(db_path).parent,
+                        "worker",
+                        task_info["attempt_id"],
+                        task_info["task_id"],
+                        dispatch_result,
+                    )
                 if not execution_ownership.claim_task(conn, task_info["task_id"]):
                     # Process evidence survives lost authority; cleanup must not hold a writer.
                     _record_dispatch_result(conn, task_info["attempt_id"], dispatch_result)

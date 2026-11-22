@@ -15,6 +15,7 @@ from robert_agent.foundation.timestamps import utc_timestamp
 from robert_agent.persistence import database, transactions
 from robert_agent.persistence.queries import proposals as queries
 from robert_agent.persistence.stores import proposals as store
+from robert_agent.persistence.stores import model_usage
 from robert_agent.work import proposal_feedback, proposals, tapd_policy
 from robert_agent.work.application import proposal_sources, web_setup
 
@@ -179,7 +180,7 @@ def _tapd_candidates(setting, config, since, until, stats, clients):
                 stats["failed_scopes"].append(f"tapd:{key}:{kind}")
 
 
-def evaluate(setting, endpoint, source, commit, excerpts, comments):
+def evaluate(setting, endpoint, source, commit, excerpts, comments, *, on_usage=None):
     prompt = proposal_prompts.assessment(source, commit)
     evidence = {
         "ticket": {key: source[key] for key in ("title", "description", "description_truncated")},
@@ -193,6 +194,7 @@ def evaluate(setting, endpoint, source, commit, excerpts, comments):
         model=setting["model"],
         timeout=30,
         session_id="robert-proposal-" + proposals.digest([source["identity"], commit])[:32],
+        on_usage=on_usage,
     )
     return proposals.validate_assessment(output, commit, excerpts)
 
@@ -231,6 +233,8 @@ def scan(config, *, now=None):
             if not _eligible(previous) or _source_occupied(conn, source, previous):
                 continue
         name = source["repository"]
+        call_id = None
+        measured = {}
         try:
             if name not in commits:
                 commits[name] = proposal_evidence.pinned_commit(repos[name])
@@ -244,12 +248,20 @@ def scan(config, *, now=None):
                 continue
             stats["evaluated"] += 1
             excerpts = proposal_evidence.excerpts(repos[name], commit, source["title"] + "\n" + source["description"])
-            report = evaluate(setting, endpoint, source, commit, excerpts, comments) if excerpts else None
+            report = None
+            if excerpts:
+                call_id = values.new_id("proposer-model")
+                report = evaluate(setting, endpoint, source, commit, excerpts, comments, on_usage=measured.update)
         except commands.ControlDeadlineExceeded:
             raise
         except _NETWORK_ERRORS:
             stats["failed_evaluations"] += 1
             continue
+        finally:
+            if call_id:
+                scope = values.repository_id(name) + "/" + source["identity"]
+                with closing(database.connect(db_path)) as conn, conn:
+                    model_usage.record(conn, "proposer", call_id, scope, now, measured)
         with closing(database.connect(db_path)) as conn, conn:
             transactions.begin_immediate(conn)
             stats["proposed"] += _write(conn, setting, source, fingerprint, report, now)

@@ -490,6 +490,9 @@ def worker_prompt_input(
         "verification": _verification_example(route_result),
         "handoff": "",
     }
+    if expected_output not in {OutputType.CLASSIFICATION_RESULT, OutputType.WAITING_FOR_USER}:
+        guidance.append("receipt-summary")
+        result["receipt_summary"] = "<short user-facing outcome>"
     input_policy = task.get("review_input_policy", "required")
     if (
         task_kind not in REMEDIATION_TASK_KINDS

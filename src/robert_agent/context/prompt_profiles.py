@@ -11,6 +11,7 @@ class StageProfile:
     schemas: tuple[str, ...]
     tools: bool = True
     boundary: str = ""
+    guidance: tuple[str, ...] = ()
 
 
 STAGES = {
@@ -27,11 +28,13 @@ STAGES = {
     "review.prepare": StageProfile("atomic-files", ("review_context",), boundary="review"),
     "review.evaluate": StageProfile("atomic-files", ("review_result",), boundary="review"),
     "review.verify_final": StageProfile("atomic-files", ("final_review",), boundary="review"),
-    "review.address_findings": StageProfile("atomic-files", ("review_dispositions",)),
-    "review.synthesize": StageProfile("atomic-files", ("review_evaluation",), boundary="review"),
+    "review.address_findings": StageProfile("atomic-files", ("review_dispositions",), guidance=("receipt-summary",)),
+    "review.synthesize": StageProfile(
+        "atomic-files", ("review_evaluation",), boundary="review", guidance=("receipt-summary",)
+    ),
     "vote.prepare": StageProfile("atomic-files", ("prepared_request",), boundary="vote"),
     "vote.cast": StageProfile("atomic-files", ("ballot",), boundary="vote"),
-    "vote.synthesize": StageProfile("atomic-files", ("synthesis",), boundary="vote"),
+    "vote.synthesize": StageProfile("atomic-files", ("synthesis",), boundary="vote", guidance=("receipt-summary",)),
     "proposer.evaluate": StageProfile("stdout-json", ("proposal_assessment",), tools=False),
     "supervision.diagnose": StageProfile("stdout-json", ("diagnosis",), tools=False),
     "supervision.decide": StageProfile("stdout-json", ("decision",), tools=False),
@@ -49,7 +52,7 @@ GUIDANCE = {
         ("worker", "Boundaries", ("worker-boundaries",)),
         ("worker", "Work", ("collaboration", "resume", "skills", "memory", "knowledge")),
         ("worker", "Verification", ("unit-tests", "verification")),
-        ("worker", "Delivery", ("memory-delta", "memory-used", "remediation-evidence")),
+        ("worker", "Delivery", ("memory-delta", "memory-used", "remediation-evidence", "receipt-summary")),
         (
             "feedback",
             "Work",

@@ -35,6 +35,7 @@ from robert_agent.delivery.application import validation as result_validation
 from robert_agent.delivery import contract as result_contract
 from robert_agent.delivery.application import audit as audit_result
 from robert_agent.delivery.application import scope as action_scope
+from robert_agent.security.redaction import redact_text
 
 
 def _insert_worker_result_wakeup(conn, payload, result_id, created_at):
@@ -128,6 +129,7 @@ def build_result(
     operator_question=None,
     remediation_evidence=None,
     review_input_kind=None,
+    receipt_summary=None,
 ):
     payload = {
         "task_id": task_id,
@@ -140,6 +142,8 @@ def build_result(
         "handoff": handoff,
         "used_skills": list(used_skills or []),
     }
+    if receipt_summary is not None:
+        payload["receipt_summary"] = receipt_summary
     if memory_delta is not None:
         payload["memory_delta"] = memory_delta
     if used_memory_ids is not None:
@@ -213,6 +217,18 @@ def _review_required():
     }
 
 
+def _normalize_receipt_summary(result, output_type):
+    # A presentation-only field must not block an otherwise valid delivery.
+    summary = result.pop("receipt_summary", None)
+    if output_type in {OutputType.CLASSIFICATION_RESULT, OutputType.WAITING_FOR_USER}:
+        return
+    if not isinstance(summary, str) or not summary.strip() or len(summary) > 280:
+        return
+    redacted = redact_text(summary, strict_assignments=True)
+    if redacted["ok"]:
+        result["receipt_summary"] = " ".join(redacted["text"].split())
+
+
 def _prepare(db_path, envelope):
     with closing(db_database.connect(db_path, timeout=0.1)) as conn:
         settings, rejection = result_validation.context(
@@ -230,6 +246,7 @@ def _prepare(db_path, envelope):
             return None, _review_required()
         try:
             normalized = result_contract.normalize(envelope, settings)
+            _normalize_receipt_summary(normalized, envelope["output_type"])
             result_validation.validate_question_submission(normalized, settings)
         except result_contract.InvalidSubmission as exc:
             response = exc.response()

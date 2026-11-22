@@ -1,5 +1,6 @@
 """Shared lifecycle facts and safe operator recovery for a work item."""
 
+from robert_agent.execution.usage import record_dispatch_usage
 from robert_agent.foundation.contracts.execution import BindingStatus, ModelRunStatus
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
 
@@ -19,6 +20,7 @@ from robert_agent.persistence.stores import pr_remediation_episodes as db_write_
 from robert_agent.persistence.stores import wakeups as db_write_wakeups
 from robert_agent.adapters.processes import attempt as attempt_process
 import json
+from pathlib import Path
 
 from robert_agent.delivery.lock import task_publication_lock
 
@@ -75,6 +77,14 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
             )
         metadata["termination"] = outcome
         metadata["process_stopped_at"] = now
+        record_dispatch_usage(
+            conn,
+            Path(db_path).parent,
+            "worker",
+            attempt["attempt_id"],
+            attempt["task_id"],
+            metadata.get("dispatch"),
+        )
         db_write_attempts.set_metadata_json_by_attempt_id(conn, json.dumps(metadata), attempt["attempt_id"])
     # This is an explicit operator attestation, never an automatic inference
     # that an unrecorded process died. The task locks prevent concurrent spawn.

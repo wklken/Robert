@@ -13,7 +13,7 @@ import json
 import re
 
 CONTRACT_ID = "compact-v1"
-NORMALIZER_VERSION = 3
+NORMALIZER_VERSION = 4
 OUTPUTS = frozenset(output.value for output in OutputType)
 FIELDS = {
     "planned_github_actions",
@@ -22,6 +22,7 @@ FIELDS = {
     "consumed_event_fingerprints",
     "consumed_work_item_event_ids",
     "handoff",
+    "receipt_summary",
     "memory_delta",
     "used_memory_ids",
     "recommended_route",

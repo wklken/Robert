@@ -80,7 +80,7 @@ def _receipt_rows(db_path, pending):
     for notice in pending:
         metadata = json_object(notice["metadata_json"])
         details = (
-            get_receipt(db_path, notice["task_id"], metadata["result_id"])
+            get_receipt(db_path, notice["task_id"], metadata["result_id"], include_usage=False)
             if notice["task_id"] and metadata.get("result_id")
             else None
         )
@@ -92,7 +92,7 @@ def _receipt_rows(db_path, pending):
                 "title": metadata.get("title"),
                 "repository": metadata["repository"],
                 "occurred_at": utc_timestamp(notice["created_at"]).strftime("%Y-%m-%d %H:%M UTC"),
-                "summary": summary[:240] + ("…" if len(summary) > 240 else ""),
+                "summary": summary,
                 "url": url if len(url) <= 256 else "",
             }
         )

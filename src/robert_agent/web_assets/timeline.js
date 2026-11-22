@@ -15,12 +15,21 @@ const labels = {
     requirement: "Work item", board: "Board details", tapd: "TAPD",
     comment: "Published comment", open_pr: "Pull request", push_existing_pr: "Updated pull request",
     submit_pr_review: "PR review", delivery: "Delivery",
-    receipt: "Agent receipt", receiptEvidence: "Request and deliveries", receiptSummary: "What was done",
-    receiptChecks: "Verification", receiptLoading: "Loading receipt…", receiptError: "Couldn't load the receipt.",
+    receipt: "Agent receipt", receiptEvidence: "Request and deliveries", receiptCompleted: "Completed",
+    receiptOutput: "Result", receiptAttempt: "Attempt", receiptStart: "Started", receiptFinish: "Finished", receiptElapsed: "Attempt duration",
+    receiptWorker: "Worker", receiptModel: "Model", receiptSummary: "Work summary", receiptChecks: "Verification",
+    receiptLoading: "Loading execution details…", receiptError: "Couldn't load execution details.",
     receiptMissing: "This result is no longer available. Close the receipt and refresh the timeline.",
-    receiptEmptySummary: "No summary was recorded.", receiptHiddenSummary: "The summary contains sensitive information.",
-    receiptNoChecks: "No checks recorded",
-    passed: (n) => `${n} passed`, failed: (n) => `${n} failed`, skipped: (n) => `${n} skipped`,
+    receiptEmptySummary: "No short summary was generated.", receiptHiddenSummary: "The summary contains sensitive information.",
+    receiptNoChecks: "No checks were recorded.", passed: "Passed", failed: "Failed", skipped: "Skipped",
+    receiptRequestUsage: "Request usage", receiptTaskUsage: "Task usage",
+    receiptInputTokens: "Input total", receiptUncachedTokens: "Ordinary input", receiptOutputTokens: "Output",
+    receiptCacheRead: "Cache read", receiptCacheWrite: "Cache write",
+    receiptReportedCost: "Reported USD", receiptCostCny: "Estimated CNY", receiptUsageMissing: "Unreported",
+    receiptFxReference: (rate, date, source) => `1 USD = ${rate} CNY · ${source} · ${date}`,
+    receiptFxCfets: "CFETS reference", receiptFxOperator: "Operator reference",
+    receiptUsageCoverage: (tokens, billing, cost, runs) =>
+      `Runs with input/output ${tokens}/${runs} · all four types ${billing}/${runs} · cost ${cost}/${runs}`,
     copyReceiptImage: "Copy as image", receiptImagePreparing: "Preparing image…",
     receiptImageCopied: "Image copied. You can paste it into chat.",
     receiptImageBlocked: "Clipboard access is unavailable. Download the image to share it.",
@@ -43,12 +52,21 @@ const labels = {
     requirement: "需求", board: "看板详情", tapd: "TAPD",
     comment: "已发布评论", open_pr: "交付 PR", push_existing_pr: "已更新 PR",
     submit_pr_review: "PR 评审", delivery: "交付物",
-    receipt: "Agent 收据", receiptEvidence: "原始需求与交付物", receiptSummary: "处理摘要",
-    receiptChecks: "验证", receiptLoading: "正在加载收据…", receiptError: "无法加载收据。",
+    receipt: "Agent 收据", receiptEvidence: "原始需求与交付物", receiptCompleted: "完成于",
+    receiptOutput: "结果", receiptAttempt: "执行尝试", receiptStart: "启动于", receiptFinish: "结束于", receiptElapsed: "本次尝试用时",
+    receiptWorker: "执行 Agent", receiptModel: "模型", receiptSummary: "处理摘要", receiptChecks: "验证记录",
+    receiptLoading: "正在加载执行详情…", receiptError: "无法加载执行详情。",
     receiptMissing: "这条结果已不可用。关闭小票后可刷新时间线。",
-    receiptEmptySummary: "这次执行未记录摘要。", receiptHiddenSummary: "摘要含敏感信息，已隐藏。",
-    receiptNoChecks: "未记录验证",
-    passed: (n) => `${n} 项通过`, failed: (n) => `${n} 项失败`, skipped: (n) => `${n} 项跳过`,
+    receiptEmptySummary: "这次执行未生成短摘要。", receiptHiddenSummary: "摘要含敏感信息，已隐藏。",
+    receiptNoChecks: "这次执行未记录验证项。", passed: "通过", failed: "失败", skipped: "跳过",
+    receiptRequestUsage: "请求链路用量", receiptTaskUsage: "本任务用量",
+    receiptInputTokens: "输入合计", receiptUncachedTokens: "普通输入", receiptOutputTokens: "输出",
+    receiptCacheRead: "缓存读取", receiptCacheWrite: "缓存写入",
+    receiptReportedCost: "已上报美元", receiptCostCny: "人民币折算", receiptUsageMissing: "未上报",
+    receiptFxReference: (rate, date, source) => `1 美元 = ${rate} 元 · ${source} · ${date}`,
+    receiptFxCfets: "官方中间价", receiptFxOperator: "运营参考汇率",
+    receiptUsageCoverage: (tokens, billing, cost, runs) =>
+      `输入/输出 ${tokens}/${runs} · 四类齐全 ${billing}/${runs} · 费用 ${cost}/${runs} 次运行`,
     copyReceiptImage: "复制为图片", receiptImagePreparing: "正在生成图片…",
     receiptImageCopied: "图片已复制，可粘贴到群聊。",
     receiptImageBlocked: "浏览器未允许写入剪贴板，可下载图片后分享。",
@@ -222,28 +240,95 @@ function boardPath(entry) {
   return `/board?item=${encodeURIComponent(entry.work_item_id)}`;
 }
 
+function receiptLine(list, label, value) {
+  if (value === null || value === "") return;
+  const line = element("div", "receipt-line");
+  line.append(element("dt", "", label), element("dd", "", String(value)));
+  list.append(line);
+}
+
 function receiptTime(instant) {
   return new Intl.DateTimeFormat(language, {
     timeZone: timezone, year: "numeric", month: "short", day: "numeric",
-    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23", timeZoneName: "short",
   }).format(new Date(instant));
+}
+
+function receiptDuration(seconds) {
+  const elapsed = Math.round(seconds);
+  const units = [
+    [Math.floor(elapsed / 3600), "hour"],
+    [Math.floor(elapsed / 60) % 60, "minute"],
+    [elapsed % 60, "second"],
+  ];
+  return units.filter(([value, unit]) => value > 0 || (unit === "second" && elapsed === 0))
+    .map(([value, unit]) => new Intl.NumberFormat(language, { style: "unit", unit }).format(value)).join(" ");
+}
+
+function receiptUsage(usage, text) {
+  const section = element("section", "receipt-section");
+  const heading = usage?.scope === "request" ? text.receiptRequestUsage : text.receiptTaskUsage;
+  section.append(element("h3", "", heading));
+  if (!usage?.run_count) {
+    section.append(element("p", "", text.receiptUsageMissing));
+    return section;
+  }
+  const figures = element("dl", "receipt-lines");
+  const number = new Intl.NumberFormat(language);
+  for (const [label, count] of [
+    [text.receiptInputTokens, usage.input_tokens],
+    [text.receiptUncachedTokens, usage.uncached_input_tokens],
+    [text.receiptCacheRead, usage.cached_input_tokens],
+    [text.receiptCacheWrite, usage.cache_creation_input_tokens],
+    [text.receiptOutputTokens, usage.output_tokens],
+  ]) {
+    receiptLine(figures, label, count == null ? text.receiptUsageMissing : number.format(count));
+  }
+  const usd = usage.reported_cost_usd;
+  const cny = usage.reported_cost_cny;
+  const money = (value, currency) => value == null ? text.receiptUsageMissing :
+    new Intl.NumberFormat(language, { style: "currency", currency, maximumFractionDigits: 6 }).format(value);
+  receiptLine(figures, text.receiptCostCny, money(cny, "CNY"));
+  receiptLine(figures, text.receiptReportedCost, money(usd, "USD"));
+  const coverage = text.receiptUsageCoverage(
+    usage.token_run_count, usage.billing_token_run_count ?? 0, usage.cost_run_count, usage.run_count,
+  );
+  section.append(figures);
+  if (cny != null) {
+    const source = usage.fx_source === "operator_reference" ? text.receiptFxOperator : text.receiptFxCfets;
+    section.append(element("p", "receipt-usage-coverage", text.receiptFxReference(usage.usd_to_cny, usage.fx_date, source)));
+  }
+  section.append(element("p", "receipt-usage-coverage", coverage));
+  return section;
 }
 
 function renderReceiptDetails(receipt) {
   const text = labels[language];
   const details = byId("receipt-details");
+  const execution = element("dl", "receipt-lines");
+  receiptLine(execution, text.receiptAttempt, `#${receipt.attempt}`);
+  receiptLine(execution, text.receiptWorker, receipt.worker);
+  receiptLine(execution, text.receiptModel, receipt.model);
+  if (receipt.started_at) receiptLine(execution, text.receiptStart, receiptTime(receipt.started_at));
+  if (receipt.finished_at) receiptLine(execution, text.receiptFinish, receiptTime(receipt.finished_at));
+  if (receipt.duration_seconds !== null) {
+    receiptLine(execution, text.receiptElapsed, receiptDuration(receipt.duration_seconds));
+  }
+
   const summary = element("section", "receipt-section");
-  const summaryText = receipt.summary
-    ? receipt.summary + (receipt.summary_truncated ? "…" : "")
-    : receipt.summary_redacted ? text.receiptHiddenSummary : text.receiptEmptySummary;
+  const summaryText = receipt.summary || (receipt.summary_redacted ? text.receiptHiddenSummary : text.receiptEmptySummary);
   summary.append(element("h3", "", text.receiptSummary), element("p", "receipt-summary", summaryText));
 
-  const checks = ["passed", "failed", "skipped"]
-    .filter((status) => receipt.verification[status])
-    .map((status) => text[status](receipt.verification[status]));
-  const verification = element("p", "receipt-verification",
-    checks.length ? [text.receiptChecks, ...checks].join(" · ") : text.receiptNoChecks);
-  details.replaceChildren(summary, verification);
+  const verification = element("section", "receipt-section");
+  const checks = element("dl", "receipt-lines receipt-checks");
+  for (const status of ["passed", "failed", "skipped"]) {
+    if (receipt.verification[status]) receiptLine(checks, text[status], receipt.verification[status]);
+  }
+  verification.append(
+    element("h3", "", text.receiptChecks),
+    checks.childElementCount ? checks : element("p", "", text.receiptNoChecks),
+  );
+  details.replaceChildren(execution, summary, verification, receiptUsage(receipt.usage, text));
   details.hidden = false;
 }
 
@@ -330,9 +415,11 @@ function openReceipt(entry, opener) {
   const dialog = byId("receipt-dialog");
   byId("receipt-title").textContent = titleFor(entry);
   byId("receipt-details").hidden = true;
-  byId("receipt-facts").textContent = [
-    projectFor(entry), receiptTime(entry.completed_at), outputLabel(entry),
-  ].filter(Boolean).join(" · ");
+  const facts = byId("receipt-facts");
+  facts.replaceChildren();
+  receiptLine(facts, text.repository, projectFor(entry));
+  receiptLine(facts, text.receiptCompleted, receiptTime(entry.completed_at));
+  receiptLine(facts, text.receiptOutput, outputLabel(entry));
 
   const links = byId("receipt-links");
   links.replaceChildren();
@@ -345,6 +432,7 @@ function openReceipt(entry, opener) {
   for (const delivery of entry.deliveries) append(deliveryLabel(delivery), delivery.url);
   if (entry.work_item_id) append(text.board, boardPath(entry));
   byId("receipt-deliveries").hidden = !links.childElementCount;
+  byId("receipt-reference").textContent = `Task ${entry.task_id}`;
   byId("receipt-retry").onclick = () => loadReceipt(entry);
   opener.focus();
   dialog.showModal();

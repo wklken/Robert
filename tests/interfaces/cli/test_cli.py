@@ -31,6 +31,25 @@ class CliTests(unittest.TestCase):
         argv = run.call_args.args[0]
         self.assertEqual(argv[argv.index("--public-origin") + 1], "https://robert.example.com")
 
+    def test_web_run_forwards_receipt_exchange_rate(self):
+        with mock.patch("robert_agent.cli.main.web.main", return_value=0) as run:
+            code = main(
+                [
+                    "web",
+                    "run",
+                    "--db",
+                    "/tmp/unused.sqlite3",
+                    "--receipt-fx-rate",
+                    "6.8",
+                    "--receipt-fx-date",
+                    "2026-11-19",
+                ]
+            )
+        self.assertEqual(code, 0)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[argv.index("--receipt-fx-rate") + 1], "6.8")
+        self.assertEqual(argv[argv.index("--receipt-fx-date") + 1], "2026-11-19")
+
     def test_root_help_lists_public_commands(self):
         output = io.StringIO()
         with redirect_stdout(output), self.assertRaises(SystemExit) as raised:

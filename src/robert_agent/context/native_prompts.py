@@ -157,6 +157,7 @@ def review_synthesize_input(manifest, inputs, *, severities, recommendations, di
         ],
         "merge_recommendation": recommendations[1],
         "merge_reason": "中文合并理由",
+        "receipt_summary": "<short user-facing review outcome>",
     }
     output = _files_output("review_evaluation", _REVIEW_DIR, ("evaluation.json",), "Review coordinator", example)
     selected = _file_item(
@@ -245,6 +246,7 @@ def vote_synthesize_input(manifest, inputs_path, inputs_hash, records):
         "inputs_sha256": inputs_hash,
         "ballot_refs": [record["ballot_sha256"] for record in records],
         "summary": "Explain the comparison",
+        "receipt_summary": "<short user-facing vote outcome>",
         "recommendation": "Advisory recommendation and reasons",
         "agreements": [],
         "disagreements": [],
@@ -286,6 +288,7 @@ def address_findings_input(manifest, candidate_path, report_path, report_sha, de
                 }
             ],
             "body": "<updated original PR description>",
+            "receipt_summary": "<short outcome for the final implementation>",
         },
     )
     return PromptInput(

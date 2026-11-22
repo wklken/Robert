@@ -219,6 +219,7 @@ class Coordinator(StageCoordinator):
             f"Vote report: {report}",
             [action],
             used_skills=[],
+            receipt_summary=summary.get("receipt_summary"),
         )
         self.record(payload)
         return report

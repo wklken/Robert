@@ -10,6 +10,7 @@ import threading
 import os
 
 from robert_agent.adapters.processes import identity, model_command
+from robert_agent.persistence.stores import model_usage
 from robert_agent.configuration.supervision import normalize_diagnosis
 from robert_agent.persistence import database, errors, transactions
 from robert_agent.persistence.queries import supervision_decisions as queries
@@ -29,6 +30,18 @@ def _read_runner(conn):
 
 def _write_runner(conn, value, now):
     store.update_checkpoint(conn, *decisions.RUNNER_KEY, now=now, metadata=value)
+
+
+def _record_usage(conn, claim, root_id, now, observed):
+    task_id = claim.get("usage_task_id")
+    model_usage.record(
+        conn,
+        "decision" if task_id else "decision_workstream",
+        claim["bundle_id"],
+        task_id or root_id or claim["bundle_id"],
+        now,
+        observed or {},
+    )
 
 
 class DecisionLoop:
@@ -91,6 +104,8 @@ class DecisionLoop:
             claim = runner.get("claim") or {}
             if claim.get("bundle_id") != request["bundle_id"]:
                 return {"status": DecisionRunStatus.CLAIM_CHANGED.value}
+            if outcome.get("launched"):
+                _record_usage(conn, claim, request["root_id"], now, outcome.get("usage"))
             if not outcome["stopped"]:
                 # _finish runs only after the owned launcher thread returns.
                 # Persist that it can no longer spawn or checkpoint a child.
@@ -231,6 +246,7 @@ class DecisionLoop:
             runner = _read_runner(conn)
             if (runner.get("claim") or {}).get("bundle_id") != claim["bundle_id"]:
                 return {"status": DecisionRunStatus.CLAIM_CHANGED.value}
+            _record_usage(conn, claim, claim.get("root_id"), now, {})
             _write_runner(
                 conn,
                 {
@@ -316,7 +332,13 @@ class DecisionLoop:
                             now,
                         )
                         continue
+                    active_tasks = {
+                        stream["active_task_id"]
+                        for stream in snapshot["context"]["streams"]
+                        if stream.get("active_task_id")
+                    }
                     claim = {
+                        "usage_task_id": next(iter(active_tasks)) if len(active_tasks) == 1 else None,
                         "bundle_id": request["bundle_id"],
                         "root_id": root_id,
                         "claimed_at": now,
