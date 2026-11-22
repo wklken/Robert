@@ -4,6 +4,7 @@ import sqlite3
 import unittest
 
 from tests.support.board import BoardReadModelFixture
+from robert_agent.persistence.stores import github_sources as source_store
 from robert_agent.readmodels import board
 from robert_agent.work.application import commands, source_lifecycle
 
@@ -109,6 +110,40 @@ class ClosedSourceDeliveryTests(unittest.TestCase):
                         body="Change the implementation",
                     )
 
+    def test_unchanged_closed_tapd_ticket_is_not_reconciled_on_every_scan(self):
+        fixture, item, task = self.fixture("tapd_story")
+        self.add_pr(fixture, item)
+
+        def reconcile(conn, now):
+            return source_lifecycle.reconcile_remote_source_states(
+                conn, "repo-1", {"full_name": "example/repo"}, None, now, tapd_only=True
+            )
+
+        later = "2026-11-21T00:05:00+00:00"
+        with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
+            self.assertEqual(reconcile(conn, self.now), 1)
+            conn.execute(
+                "UPDATE github_sources SET metadata_json=json_set(metadata_json,'$.tapd.observed_at',?) "
+                "WHERE source_id='ticket'",
+                (later,),
+            )
+            conn.commit()
+            self.assertEqual(reconcile(conn, later), 0)
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM audit_events WHERE event_type='remote_source_closed'").fetchone()[0],
+                1,
+            )
+            conn.execute("UPDATE tasks SET lifecycle='queued' WHERE task_id=?", (task,))
+            conn.execute(
+                "UPDATE workstreams SET lifecycle='active',active_task_id=? WHERE workstream_id=?",
+                (task, item["workstream_id"]),
+            )
+            conn.commit()
+            self.assertEqual(reconcile(conn, later), 1)
+            self.assertEqual(
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (task,)).fetchone()[0], "canceled"
+            )
+
     def test_completed_tapd_ticket_without_pr_is_selected_for_terminal_sync(self):
         for kind in ("tapd_story", "tapd_bug"):
             with self.subTest(kind=kind):
@@ -117,6 +152,43 @@ class ClosedSourceDeliveryTests(unittest.TestCase):
                 detail = board.get_work_item_detail(fixture.db_path, item["work_item_id"])
                 self.assertEqual(detail["column"], "done")
                 self.assertIsNotNone(detail["completed_at"])
+
+    def test_reopened_tapd_ticket_can_close_again_with_the_same_status(self):
+        fixture, item, _ = self.fixture("tapd_story")
+        self.add_pr(fixture, item)
+        self.reconcile_ticket(fixture)
+
+        with closing(sqlite3.connect(fixture.db_path)) as conn, conn:
+            for observed_at, state, status, expected in (
+                ("2026-11-21T00:05:00+00:00", "open", "status_2", 0),
+                ("2026-11-21T00:10:00+00:00", "closed", "status_3", 1),
+                ("2026-11-21T00:15:00+00:00", "closed", "status_3", 0),
+            ):
+                source_store.upsert_tapd_source(
+                    conn,
+                    "ticket",
+                    "repo-1",
+                    "ticket",
+                    "tapd_story",
+                    "tapd.example/100",
+                    "16",
+                    "https://tapd.example/100/prong/stories/view/16",
+                    "Closed tapd_story",
+                    state,
+                    observed_at,
+                    json.dumps({"tapd": {"status": status, "observed_at": observed_at}}),
+                )
+                conn.commit()
+                self.assertEqual(
+                    source_lifecycle.reconcile_remote_source_states(
+                        conn, "repo-1", {"full_name": "example/repo"}, None, observed_at, tapd_only=True
+                    ),
+                    expected,
+                )
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM audit_events WHERE event_type='remote_source_closed'").fetchone()[0],
+                2,
+            )
 
     def test_open_pr_remains_visible_when_a_newer_derived_pr_is_closed(self):
         fixture, item, _ = self.fixture()
