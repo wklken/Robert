@@ -230,6 +230,8 @@ robert daemon run --config ~/.config/robert/config.yml
 supervisord -c ~/.config/robert/supervisord.conf
 supervisorctl -c ~/.config/robert/supervisord.conf status
 robert web run --config ~/.config/robert/config.yml
+robert web auth-init --file ~/.config/robert/web-auth.json --username robert
+robert web run --config ~/.config/robert/config.yml --basic-auth-file ~/.config/robert/web-auth.json
 robert diagnostics export --output robert-diagnostics.zip
 ```
 
@@ -237,6 +239,14 @@ Prepare Supervisor configuration using the [operations guide](guides.md#daemon-s
 `robert service install` and `robert service start` select a backend automatically
 and default to `--target all` (daemon and task supervisor). Only the Linux
 Supervisor backend includes Web in its daemon target.
+
+Web's optional `--basic-auth-file` applies HTTP Basic authentication to every GET
+and POST before accessing data or processing actions. `auth-init` prompts for a
+password and creates a private `0600` JSON verifier without overwriting files.
+Credentials stay outside configuration and command arguments. Authentication
+preserves the configured operator identity, repository scope, Host, Origin and
+CSRF checks. Basic credentials require HTTPS or an SSH tunnel on untrusted
+networks; the native listener serves HTTP. See the [Web guide](guides.md#local-web-ui).
 
 Integrations:
 

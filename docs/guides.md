@@ -402,7 +402,47 @@ robert web run \
   --operator "$USER"
 ```
 
-Remote binding requires `--allow-remote` and an authenticated reverse proxy.
+Remote binding requires `--allow-remote` and authentication. You can use Robert's
+optional HTTP Basic authentication or an authenticated reverse proxy. To create a
+password verifier, run:
+
+```bash
+mkdir -p ~/.config/robert
+robert web auth-init --file ~/.config/robert/web-auth.json --username robert
+```
+
+The terminal prompts for the password twice without echoing it. If echo cannot
+be disabled, initialization fails without reading fallback input or creating a
+file. Robert creates the file with mode `0600`, stores a salted PBKDF2-SHA256 verifier, and refuses to
+overwrite an existing file. Keep this file outside repositories. To change the
+password, create a new verifier file and restart Web with that path.
+
+```bash
+robert web run \
+  --config ~/.config/robert/config.yml \
+  --host 0.0.0.0 --port 8000 --allow-remote \
+  --public-origin http://YOUR_SERVER_IP:8000 \
+  --basic-auth-file ~/.config/robert/web-auth.json \
+  --writable --operator "$USER"
+```
+
+Use HTTPS or an SSH tunnel when transmitting Basic credentials over an untrusted
+network. The built-in listener serves HTTP; Basic authentication does not encrypt
+traffic. The browser prompts for credentials, and all pages, API reads, static
+assets, artifact previews and POST actions require authentication. Missing or
+invalid credentials receive `401` and a Basic challenge. An invalid, missing or
+group/world-accessible verifier prevents startup. An explicitly empty path also
+prevents startup. Omit `--basic-auth-file` to preserve existing behavior;
+`--operator` and repository scope still come from
+server configuration, and Host, Origin and CSRF checks still apply.
+
+For untrusted remote clients, put a trusted proxy in front of Web, prevent direct
+backend access, and enforce request rate, concurrency, burst and timeout limits
+before forwarding. Each well-formed Basic request, including assets and wrong
+passwords, performs PBKDF2; Web has no built-in authentication rate or concurrency
+limit. See [Web authentication and deployment budgets](features/web-authentication.md)
+to size the proxy limits using the actual host and verifier.
+
 When using a proxy domain, set the browser-facing origin explicitly:
 
 ```bash

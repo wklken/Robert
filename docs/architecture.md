@@ -45,7 +45,7 @@ robert_agent/
   adapters/                   # github/git/tapd/processes/notifications/services
   application/                # 只保留跨领域的 repository-cycle 组合
   runtime/                    # once/loop/daemon/scan/supervisor/paused monitor
-  interfaces/web/             # HTTP、输入/CSRF、模板、服务启动
+  interfaces/web/             # HTTP、可选 Basic 认证、输入/CSRF、模板、服务启动
   cli/, worker/, integrations/ # 稳定的 CLI、Worker 和 OpenClaw 接口命名空间
   foundation/                 # 小型共享值/命令/错误
     contracts/                # 按 work/execution/delivery/supervision 分组的纯值合同
@@ -109,6 +109,9 @@ Worker 结果和原生阶段在进入等待前校验新提问。看板和 OpenCl
 - `readmodels.timeline` 从已完成任务、审核结果和发布记录投影日、周、月工作清单，并沿工作流来源关联原始需求。
 - `work.receipt_events` 记录关键交付节点，`delivery.application.receipt_notifications` 将独立小票按批投递到已授权的 OpenClaw 目标。
 - `context.memory_policy` 定义项目记忆的大小和脱敏约束，供提交、审计和入库共用。
+- `interfaces.web.auth` 校验私有文件中的 salted PBKDF2-SHA256 password verifier；
+  `interfaces.web.server` 在 GET 读取与 POST 请求体解析前执行可选 Basic 认证。
+  认证保留配置中的操作员身份、仓库范围、Host、Origin、CSRF 与只读检查。
 
 [架构门禁](../tests/architecture/test_architecture_boundaries.py) 检查无环、层次方向、根目录合同和
 全部业务调用方的 SQL 边界。 [pyproject.toml](../pyproject.toml) 统一配置 Ruff 和 import-linter，
