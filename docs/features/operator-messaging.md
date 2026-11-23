@@ -312,7 +312,13 @@ menu describe their purpose and supported arguments.
 Append `--json` to status, task, run or artifact queries, or use
 `/robert-inbox --json`, to request diagnostic JSON. Replies are limited to 3,500
 UTF-16 code units to fit chat transports. Oversized JSON and artifact previews
-identify truncation and provide a local CLI command for the full output.
+identify truncation. Diagnostic JSON provides a local CLI command for the full
+JSON output. Artifact queries, including local `robert artifact show ... --output json`,
+read at most the last 65,536 bytes. When that preview is truncated, the reply
+points to the registered file to open on the Robert host for complete content;
+the JSON `data.path` field also identifies that file. If a local command or file
+hint is too long to fit, the reply replaces the entire hint with a short notice;
+use the configured path on the Robert host for local diagnostics and artifact lookup.
 Service status is a persisted record, not a live process probe; missing status
 is shown as unknown. Recent task counts describe the read model's recent tasks,
 not the complete historical task population.

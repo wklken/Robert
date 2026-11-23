@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -14,7 +15,7 @@ from robert_agent.integrations.openclaw import write_plugin
 
 @unittest.skipUnless(shutil.which("node"), "Node is required to execute the OpenClaw plugin")
 class OpenClawOutputTests(unittest.TestCase):
-    def invoke(self, payload, commands, *, exit_code=0):
+    def invoke(self, payload, commands, *, exit_code=0, config_path="/config with spaces.yml"):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_plugin(root / "plugin")
@@ -40,7 +41,7 @@ class OpenClawOutputTests(unittest.TestCase):
             script = root / "plugin/check.mjs"
             script.write_text("""import plugin from './index.js';
 const commands = {};
-plugin.register({ pluginConfig: { robertConfig: '/config with spaces.yml' },
+plugin.register({ pluginConfig: { robertConfig: JSON.parse(process.argv[3]) },
   registerCommand: command => commands[command.name] = command });
 const replies = [];
 for (const [name, args, authorized = true] of JSON.parse(process.argv[2])) {
@@ -50,7 +51,7 @@ for (const [name, args, authorized = true] of JSON.parse(process.argv[2])) {
 console.log(JSON.stringify(replies));
 """)
             result = subprocess.run(
-                ["node", str(script), json.dumps(commands)],
+                ["node", str(script), json.dumps(commands), json.dumps(config_path)],
                 env={
                     **os.environ,
                     "PATH": str(binary) + os.pathsep + os.environ["PATH"],
@@ -64,6 +65,60 @@ console.log(JSON.stringify(replies));
             )
             calls = [json.loads(line) for line in (root / "calls").read_text().splitlines()]
             return json.loads(result.stdout), calls
+
+    def test_truncated_artifact_points_to_registered_file_in_summary_and_json(self):
+        path = "/data/artifacts/worker '日志😀.log"
+        payload = {
+            "ok": True,
+            "data": {
+                "task_id": "task-one",
+                "artifact_type": "worker_stdout",
+                "path": path,
+                "content": "tail 😀\n" * 10000,
+                "truncated": True,
+                "missing": False,
+            },
+        }
+        replies, _ = self.invoke(
+            payload,
+            [("robert-artifact", "task-one worker_stdout"), ("robert-artifact", "task-one worker_stdout --json")],
+        )
+        for reply in replies:
+            text = reply["text"]
+            self.assertLessEqual(len(text.encode("utf-16-le")) // 2, 3500)
+            self.assertIn("预览", text)
+            file_hint = next(line for line in text.splitlines() if line.startswith("完整产物："))
+            self.assertEqual(shlex.split(file_hint.removeprefix("完整产物：在 Robert 主机打开已登记文件 ")), [path])
+            self.assertNotIn("完整产物：本地执行 robert artifact show", text)
+
+    def test_oversized_diagnostic_footer_is_omitted_without_partial_command(self):
+        config_path = "/" + "/".join(["cfg'" * 35] * 18) + "/config.yml"
+        payload = {"ok": True, "data": {"large_record": "😀" * 5000}}
+        replies, calls = self.invoke(payload, [("robert-status", "--json")], config_path=config_path)
+        text = replies[0]["text"]
+        self.assertLessEqual(len(text.encode("utf-16-le")) // 2, 3500)
+        self.assertIn("操作提示过长", text)
+        self.assertIn("Robert 主机", text)
+        self.assertNotIn("robert status", text)
+        self.assertNotIn("cfg", text)
+        self.assertEqual(calls[0]["args"][-1], config_path)
+
+    def test_diagnostic_footer_near_budget_preserves_whole_command_or_short_hint(self):
+        payload = {"ok": True, "data": {"large_record": "😀" * 5000}}
+        for length in range(3409, 3470, 10):
+            config_path = "/" + "/".join(["x" * 140] * 24) + "/" + "x" * (length - 3383) + "/config.yml"
+            with self.subTest(length=length):
+                replies, _ = self.invoke(payload, [("robert-status", "--json")], config_path=config_path)
+                text = replies[0]["text"]
+                self.assertLessEqual(len(text.encode("utf-16-le")) // 2, 3500)
+                if "完整 JSON：本地执行 " in text:
+                    command = text.split("完整 JSON：本地执行 ", 1)[1]
+                    self.assertEqual(
+                        shlex.split(command), ["robert", "status", "--output", "json", "--config", config_path]
+                    )
+                else:
+                    self.assertIn("操作提示过长", text)
+                    self.assertNotIn("robert status", text)
 
     def test_status_is_a_bounded_summary_with_alerts_and_explicit_json(self):
         payload = {

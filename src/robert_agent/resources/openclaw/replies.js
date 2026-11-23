@@ -27,10 +27,14 @@ const errorText = value => typeof value === "string" ? value
   : value?.safe_error ?? value?.message ?? value?.reason_code ?? value?.status;
 
 function bounded(text, footer = "", maximum = MAX_REPLY) {
-  const tail = footer ? "\n\n" + footer : "";
+  const notice = "\n…（内容已截断）";
+  let tail = footer ? "\n\n" + footer : "";
+  // Keep the entire operation or replace it; never slice a copyable command.
+  if (tail.length > maximum - notice.length) {
+    tail = "\n\n操作提示过长，未展示命令；请在 Robert 主机使用已配置路径查看本地诊断或已登记产物文件。";
+  }
   const limit = maximum - tail.length;
   if (text.length <= limit) return text + tail;
-  const notice = "\n…（内容已截断）";
   let preview = text.slice(0, limit - notice.length);
   // Prefer complete lines so a copied operation never contains a partial ID.
   const newline = preview.lastIndexOf("\n");
@@ -192,9 +196,14 @@ export function formatReply(args, result, input, { jsonOutput = false, page = 1 
   const quote = value => /^[A-Za-z0-9_./:@=-]+$/.test(value) ? value : "'" + value.replace(/'/g, "'\\''") + "'";
   const local = (input === undefined ? "" : `printf '%s' ${quote(JSON.stringify(input))} | `)
     + "robert " + args.map(quote).join(" ");
+  const artifact = args[0] === "artifact" ? result.data ?? {} : undefined;
+  const fileHint = artifact && !artifact.missing && artifact.path
+    ? `完整产物：在 Robert 主机打开已登记文件 ${quote(String(artifact.path))}` : "";
   if (jsonOutput) {
     const json = JSON.stringify(result, null, 2);
-    return { text: json.length <= MAX_REPLY ? json : bounded(json, `完整 JSON：本地执行 ${local}`) };
+    const footer = artifact?.truncated && fileHint
+      ? `产物预览已截断；本地 JSON 仍是预览。\n${fileHint}` : `完整 JSON：本地执行 ${local}`;
+    return { text: json.length <= MAX_REPLY ? json : bounded(json, footer) };
   }
   let text, footer;
   if (args[0] === "status") {
@@ -207,11 +216,11 @@ export function formatReply(args, result, input, { jsonOutput = false, page = 1 
     text = runText(result.data ?? {});
     footer = `/robert-run ${args[2]} --json`;
   } else if (args[0] === "artifact") {
-    const artifact = result.data ?? {};
     text = `产物 ${artifact.artifact_type} · 任务 ${artifact.task_id}\n\n`
       + (artifact.missing ? "产物文件不可用，请检查本地文件。" : String(artifact.content ?? ""))
       + (artifact.truncated ? "\n…（产物预览已截断）" : "");
-    footer = `完整产物：本地执行 ${local}`;
+    footer = (artifact.truncated ? "产物预览已截断；本地 JSON 仍是预览。\n" : "")
+      + (fileHint || `产物登记信息与预览：本地执行 ${local}`);
   } else if (args[1] === "inbox") {
     ({ text, footer } = inboxText(result, page));
   } else if (args[1] === "dispatch") text = dispatchText(result);

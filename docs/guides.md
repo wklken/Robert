@@ -448,7 +448,10 @@ for service records, recent task states, alerts and commands to inspect problems
 Use `/robert-task <task-id>` for a task's failure or result, `/robert-run latest`
 for the latest run, and `/robert-artifact <task-id> <artifact-type>` for the
 registered artifact's content. Add `--json` to a read command for diagnostics;
-long replies are truncated with a local CLI command for full output.
+long replies identify truncation and provide a local diagnostic command or the
+registered file to open on the Robert host. Artifact JSON remains a preview of
+at most the last 65,536 bytes; open the registered file for complete content.
+Hints that exceed the chat budget are replaced with a short notice.
 `/robert-inbox` shows current questions and permitted commands; use
 `/robert-inbox page 2` to continue. See the
 [chat command reference](features/operator-messaging.md#chat-command-output)
