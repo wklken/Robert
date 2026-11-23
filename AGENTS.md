@@ -155,6 +155,9 @@ Paths below are relative to `src/robert_agent/`.
   `resources/prompts/`. Callers supply authorized facts and preserve their own
   output validators; they must not append a separate handwritten instruction
   contract. Keep context independent of concrete workflows and application use cases.
+  Frozen review recovery may select a supported historical stage resource through
+  the renderer; verify full template rendering, snapshot identity and frozen
+  hashes before adopting a bundle not yet registered in the database.
 
 - Version 2 is the configuration contract. Loading, schema application,
   normalization and validation have one owner in `configuration/`; no alternate

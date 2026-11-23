@@ -37,7 +37,8 @@ READING_NOTES = (
     "Controller-generated path inventory only. Source bodies, callers and tests were not read "
     "during preparation; reviewers must read them independently. Rules and runtime/check "
     "files are discovery candidates, not interpreted contracts or verified commands. Deleted files "
-    "and symlinks are recorded in changes and remain available through diff.patch. "
+    "and symlinks are recorded in changes and remain available through diff.patch. Paths that "
+    "cannot be report locations are JSON-escaped in changes and omitted from source entrypoints. "
     "Tests have not been run by preparation."
 )
 
@@ -67,14 +68,18 @@ def _changes(manifest):
         if not record:
             continue
         added, deleted, name = record.split("\t", 2)
-        name = files._source_path(name)
         try:
-            path = files.safe_path(tree / name, tree)
-            availability = "file" if path.is_file() else "absent-at-head"
-            if path.is_dir():
-                availability = "gitlink-or-directory"
+            files._source_path(name)
         except ValueError:
-            availability = "symlink-or-unsafe-path"
+            availability = "unindexable-path"
+        else:
+            try:
+                path = files.safe_path(tree / name, tree)
+                availability = "file" if path.is_file() else "absent-at-head"
+                if path.is_dir():
+                    availability = "gitlink-or-directory"
+            except ValueError:
+                availability = "symlink-or-unsafe-path"
         changes.append(
             {
                 "path": name,
@@ -95,8 +100,8 @@ def _inventory(manifest, changes):
         # Only registered, regular source files can become reviewer entrypoints.
         if name not in manifest["source_hashes"]:
             return
-        files._source_path(name)
         try:
+            files._source_path(name)
             path = files.safe_path(tree / name, tree)
         except ValueError:
             return
@@ -105,6 +110,8 @@ def _inventory(manifest, changes):
 
     directories = {PurePosixPath(".")}
     for change in changes:
+        if change["availability"] == "unindexable-path":
+            continue
         if change["availability"] == "file":
             add(change["path"], "changed_source")
         directories.update(PurePosixPath(change["path"]).parents)

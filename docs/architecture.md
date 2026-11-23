@@ -604,6 +604,7 @@ review/vote、监督和受限维护的阶段指令。调用方提供结构化事
 交付协议来自 [`resources/prompts/`](../src/robert_agent/resources/prompts/)。
 [`prompt_contract`](../src/robert_agent/context/prompt_contract.py) 定义输入和输出值；
 [`prompt_profiles`](../src/robert_agent/context/prompt_profiles.py) 限定阶段及适用组合。
+renderer 的 `stage_version` 仅选择固定的内建阶段资源；review 冻结包恢复使用受支持的模板完整渲染核验原提示词，版本与接纳策略由 review workspace 持有。
 
 ```mermaid
 flowchart LR

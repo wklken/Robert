@@ -8,6 +8,60 @@ from tests.support.review_workspace import ReviewWorkspaceFixture
 
 
 class ReviewPreparationTests(ReviewWorkspaceFixture):
+    def test_unindexable_git_paths_keep_statistics_and_freeze(self):
+        names = [
+            "tab\tfile.py",
+            "line\nfile.py",
+            "back\\slash.py",
+            "odd\tdir/AGENTS.md",
+            ".github/workflows/tab\tjob.yml",
+        ]
+        for name in names:
+            path = self.upstream / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("value = 1\n")
+        self.git(self.upstream, "add", ".")
+        self.commit("value = 3\n")
+        manifest = self.prepare("unindexable")
+        preparation.write_context(manifest)
+        frozen = workspace.freeze_context(manifest)
+        text = Path(frozen["context_dir"], "source-index.json").read_text()
+        index = json.loads(text)
+        changes = {entry["path"]: entry for entry in index["changes"]}
+        for name in names:
+            self.assertEqual(changes[name]["added"], 1)
+            self.assertEqual(changes[name]["deleted"], 0)
+            self.assertEqual(changes[name]["availability"], "unindexable-path")
+            self.assertNotIn(name, [entry["path"] for entry in index["files"]])
+        self.assertIn("tab\\tfile.py", text)
+        self.assertIn("line\\nfile.py", text)
+        self.assertTrue(workspace.verify_snapshot(frozen))
+
+    def test_deleting_only_a_tab_path_keeps_statistics_and_freezes(self):
+        name = "deleted\tfile.py"
+        self.git(self.upstream, "checkout", "main")
+        (self.upstream / name).write_text("old = True\n")
+        self.git(self.upstream, "add", ".")
+        self.git(self.upstream, "commit", "-m", "tab baseline")
+        self.base = self.git(self.upstream, "rev-parse", "HEAD")
+        self.git(self.upstream, "checkout", "feature")
+        self.git(self.upstream, "reset", "--hard", self.base)
+        (self.upstream / name).unlink()
+        self.git(self.upstream, "commit", "-am", "delete tab path")
+        self.head = self.git(self.upstream, "rev-parse", "HEAD")
+        self.git(self.upstream, "update-ref", "refs/pull/42/head", "HEAD")
+        manifest = self.prepare("deleted-tab")
+        preparation.write_context(manifest)
+        frozen = workspace.freeze_context(manifest)
+        index = json.loads(Path(frozen["context_dir"], "source-index.json").read_text())
+        self.assertEqual(len(index["changes"]), 1)
+        self.assertEqual(index["changes"][0]["path"], name)
+        self.assertEqual(index["changes"][0]["added"], 0)
+        self.assertEqual(index["changes"][0]["deleted"], 1)
+        self.assertEqual(index["files"], [])
+        summary = Path(frozen["context_dir"], "context-summary.md").read_text()
+        self.assertIn("Changed paths: 1; additions: 0; deletions: 1", summary)
+
     def test_inventory_handles_rules_runtime_binary_deletions_and_links(self):
         self.git(self.upstream, "checkout", "main")
         (self.upstream / "deleted.py").write_text("old = True\n")
