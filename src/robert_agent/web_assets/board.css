@@ -608,8 +608,8 @@ dialog::backdrop { background: rgba(31, 35, 40, 0.4); }
   border-radius: 0 var(--radius-small) var(--radius-small) 0;
   background: var(--amber-soft);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-
 
 .question-choices {
   display: grid;
@@ -617,30 +617,36 @@ dialog::backdrop { background: rgba(31, 35, 40, 0.4); }
   margin-bottom: 12px;
 }
 .question-choices .question-choice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 8px;
+  display: block;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-small);
   padding: 9px 12px;
-  background: var(--amber-soft);
-  text-align: left;
+  background: var(--paper);
+  text-align: start;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
-.question-choices .question-choice:hover:not(:disabled) {
+.question-choices .question-choice:has(.choice-recommendation) {
   border-color: var(--borderColor-attention);
 }
+.question-choices .question-choice:hover:not(:disabled) {
+  border-color: var(--blue);
+  background: var(--bgColor-muted);
+}
 .choice-recommendation {
+  display: inline-block;
+  margin-inline-start: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
   color: var(--amber);
+  background: var(--amber-soft);
   font-size: 12px;
   font-weight: 650;
 }
 .choice-tradeoff {
-  flex-basis: 100%;
+  display: block;
+  margin-top: 3px;
   color: var(--muted);
-  font-size: 13px;
+  font-weight: 400;
 }
 .question-choices .choice-other { justify-self: start; }
 

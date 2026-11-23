@@ -5,7 +5,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from tests.support import PACKAGE_ROOT  # noqa: F401
+from robert_agent.context import prompts
 from robert_agent.workflows.review import workspace as review_workspace
 
 
@@ -65,3 +67,18 @@ class ReviewWorkspaceFixture(unittest.TestCase):
             )
         )
         return review_workspace.freeze_context(manifest)
+
+    def freeze_legacy(self, manifest):
+        """Freeze with the exact stage resource shipped before controller preparation."""
+        manifest["prompt_version"] = 1
+        review_workspace.review_files.atomic_json(Path(manifest["context_dir"]) / "manifest.json", manifest)
+        current_resource = prompts.resource
+        legacy = Path(__file__).parents[1] / "fixtures/prompts/review-evaluate-model-preparation-v1.md"
+
+        def resource(*parts):
+            if parts == ("prompts", "stages", "review-evaluate.md"):
+                return legacy
+            return current_resource(*parts)
+
+        with patch.object(prompts, "resource", side_effect=resource):
+            return self.freeze(manifest)

@@ -50,6 +50,10 @@ def safe_path(path, root, *, subdirectory=None):
 
 
 def atomic_json(path, payload):
+    atomic_text(path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
+def atomic_text(path, text):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
@@ -58,8 +62,7 @@ def atomic_json(path, payload):
     descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
-            stream.write("\n")
+            stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)

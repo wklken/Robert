@@ -18,6 +18,7 @@ from robert_agent.context.prompts import render_prompt
 from robert_agent.delivery.application import validation as result_validation
 from robert_agent.workflows.review import files as review_files
 from robert_agent.workflows.review import workspace as review_workspace
+from robert_agent.workflows.review import preparation as review_preparation
 from robert_agent.persistence.rounds import review as store
 from robert_agent.adapters.github.pull_requests import read_pr
 from robert_agent.execution.stages import (
@@ -65,6 +66,21 @@ class ReviewStages(StageCoordinator):
     def prepare_context(self):
         review_workspace.verify_snapshot(self.manifest)
         if not self.manifest.get("frozen"):
+            self.check_active()
+            saved = review_files._read_json(Path(self.manifest["context_dir"]) / "manifest.json")
+            if saved.get("frozen"):
+                # Recover a freeze committed before its database registration.
+                self.manifest = review_workspace.freeze_context(self.manifest)
+                self.save_manifest()
+                return
+            with self.store.connect(self.db_path) as conn:
+                legacy_prepare = any(run["stage"] == "prepare" for run in self.store.runs(conn, self.round_id))
+            if not legacy_prepare:
+                review_preparation.write_context(self.manifest)
+                self.check_active()
+                self.manifest = review_workspace.freeze_context(self.manifest)
+                self.save_manifest()
+                return
             prompt = self.prompt(
                 "prepare-prompt.md", render_prompt(review_prepare_input(self.manifest)).text, stage="prepare"
             )

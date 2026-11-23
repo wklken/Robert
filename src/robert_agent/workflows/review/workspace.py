@@ -233,7 +233,7 @@ def _build_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, 
     manifest = {
         "schema_version": 1,
         "context_version": 1,
-        "prompt_version": 1,
+        "prompt_version": 2,
         "round_id": round_id,
         "snapshot_id": snapshot_id,
         "head_sha": head_sha,
@@ -254,11 +254,12 @@ def _build_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, 
     return manifest
 
 
-def _reviewer_text(manifest):
+def _reviewer_text(manifest, *, stage_version=None):
     return render_prompt(
         review_evaluate_input(
             manifest, severities=review_files.SEVERITIES, recommendations=review_files.RECOMMENDATIONS
-        )
+        ),
+        stage_version=stage_version,
     ).text
 
 
@@ -288,8 +289,17 @@ def verify_snapshot(manifest, *, require_current_prompt=False):
             path = review_files.safe_path(manifest["prompt_path"], manifest["artifact_root"])
             if review_files.sha256_file(path) != manifest["prompt_sha256"]:
                 raise ValueError("review prompt hash changed")
-            if require_current_prompt and path.read_text(encoding="utf-8") != _reviewer_text(manifest):
-                raise ValueError("review prompt no longer matches the built-in template")
+            if require_current_prompt:
+                # Version 1 was also used by the first controller-inventory release.
+                # Adoption must match a known full rendering, not only a local hash.
+                version = manifest.get("prompt_version")
+                if type(version) is not int or version not in (1, 2):
+                    raise ValueError("unsupported review prompt version")
+                text = path.read_text(encoding="utf-8")
+                if text != _reviewer_text(manifest) and not (
+                    version == 1 and text == _reviewer_text(manifest, stage_version=1)
+                ):
+                    raise ValueError("review prompt no longer matches a supported built-in template")
             saved = json.loads(Path(manifest["context_dir"], "manifest.json").read_text(encoding="utf-8"))
             if saved != manifest:
                 raise ValueError("review manifest changed")

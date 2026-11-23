@@ -422,7 +422,7 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
         reviewer_prompt = (Path(driver.manifest["artifact_root"]) / "reviewer-prompt.md").read_text()
         self.assertIn('"decision_mention": "@maintainer"', reviewer_prompt)
         self.assertNotIn("user", json.loads((Path(driver.manifest["context_dir"]) / "pr-info.json").read_text()))
-        self.assertEqual(self.launches, {"implement": 1, "prepare-prompt.md": 1, "reviewer-prompt.md": 1, "address": 1})
+        self.assertEqual(self.launches, {"implement": 1, "reviewer-prompt.md": 1, "address": 1})
         with fixture_database.connect(self.db) as conn:
             saved = store.session(conn, task_id=driver.task_id)
             self.assertEqual(saved["final_result_id"], result["result_id"])
@@ -486,7 +486,6 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             self.launches,
             {
                 "implement": 1,
-                "prepare-prompt.md": 1,
                 "reviewer-prompt.md": 2,
                 "synthesis": 2,
                 "address": 1,

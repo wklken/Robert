@@ -21,7 +21,8 @@ from tests.support.review_coordinator import ReviewCoordinatorFixture
 class SupersededReviewRecoveryTests(ReviewCoordinatorFixture):
     def supersede(self, driver):
         driver.prepare()
-        self.git_fixture.commit("value = 3\n" if len(self.calls) == 1 else "value = 4\n")
+        value = int((self.git_fixture.upstream / "source.py").read_text().split("=")[1])
+        self.git_fixture.commit(f"value = {value + 1}\n")
         with self.assertRaises(StageSuperseded):
             driver.run()
         with database.connect(self.db) as conn:
