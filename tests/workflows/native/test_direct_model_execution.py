@@ -66,7 +66,7 @@ assert not loaded, f'stage executor loaded workflows: {sorted(loaded)}'
             driver = review_coordinator.Coordinator(fixture.db, task, attempt, fetch_pr=fixture.pr, launcher=launch)
             report = driver.run()
         self.assertTrue(report.is_file())
-        self.assertEqual(len(calls), 4)  # prepare, two reviewers, synthesis
+        self.assertEqual(len(calls), 3)  # two reviewers and synthesis; preparation uses no model
 
     def test_vote_defaults_run_without_system_sandbox(self):
         fixture = vote_fixture.VoteCoordinatorFixture()
