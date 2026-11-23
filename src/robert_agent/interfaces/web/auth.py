@@ -2,7 +2,7 @@
 
 import base64
 import binascii
-from getpass import getpass
+from getpass import GetPassWarning, getpass
 from dataclasses import dataclass, field
 import hashlib
 import hmac
@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import secrets
 import stat
+import warnings
 
 
 ITERATIONS = 600_000
@@ -112,10 +113,18 @@ def load_basic_auth_file(path):
 def initialize_basic_auth_file(path, username):
     """Prompt on the terminal so passwords never enter command arguments or output."""
     try:
-        password = getpass("Basic Auth password: ")
-        if password != getpass("Confirm password: "):
-            raise ValueError("Basic Auth passwords did not match.")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", GetPassWarning)
+            password = getpass("Basic Auth password: ")
+            if password != getpass("Confirm password: "):
+                raise ValueError("Basic Auth passwords did not match.")
         write_basic_auth_file(path, username, password)
+    except GetPassWarning:
+        return {
+            "ok": False,
+            "status": "failed_input",
+            "safe_error": "Basic Auth password input requires a terminal with echo disabled.",
+        }
     except (OSError, ValueError, EOFError) as exc:
         error = str(exc) if isinstance(exc, ValueError) else "Unable to create Basic Auth file."
         return {"ok": False, "status": "failed_input", "safe_error": error}

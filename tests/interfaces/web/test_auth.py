@@ -1,5 +1,6 @@
 import base64
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+import getpass
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 import io
@@ -9,6 +10,7 @@ import tempfile
 from threading import Thread
 import unittest
 from unittest import mock
+import warnings
 
 from robert_agent.interfaces.web import auth, server
 
@@ -166,6 +168,57 @@ class BasicAuthTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(auth.load_basic_auth_file(path).authorized(authorization(password="secret-password")))
         self.assertNotIn("secret-password", json.dumps(result))
+
+    def test_password_prompt_refuses_echo_fallback_at_either_prompt_without_reading_input(self):
+        for first_prompt in (True, False):
+            path = self.path.with_name(f"new-{first_prompt}.json")
+            output = io.StringIO()
+            password_input = io.StringIO("fallback-password\nfallback-password\n")
+            responses = (
+                [getpass.fallback_getpass, getpass.fallback_getpass]
+                if first_prompt
+                else ["fallback-password", getpass.fallback_getpass]
+            )
+
+            def prompt(message):
+                response = responses.pop(0)
+                return response(message) if callable(response) else response
+
+            with (
+                self.subTest(first_prompt=first_prompt),
+                warnings.catch_warnings(),
+                mock.patch.object(auth, "getpass", side_effect=prompt),
+                mock.patch("sys.stdin", password_input),
+                redirect_stderr(output),
+            ):
+                warnings.simplefilter("ignore", getpass.GetPassWarning)
+                result = auth.initialize_basic_auth_file(path, "robert")
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["status"], "failed_input")
+                self.assertIn("echo", result["safe_error"])
+                self.assertFalse(path.exists())
+                self.assertEqual(password_input.tell(), 0)
+                self.assertNotIn("fallback-password", json.dumps(result) + output.getvalue())
+
+    def test_empty_auth_file_prevents_local_and_remote_listener_and_database_access(self):
+        for host in ("127.0.0.1", "0.0.0.0"):
+            output = io.StringIO()
+            with (
+                self.subTest(host=host),
+                redirect_stdout(output),
+                mock.patch.object(server, "serve") as serve,
+                mock.patch.object(server, "ThreadingHTTPServer") as listener,
+                mock.patch.object(server.db_database, "connect") as connect,
+                mock.patch.object(server.sqlite_master, "table_names", return_value=server.workbench.REQUIRED_TABLES),
+            ):
+                code = server.main(
+                    ["--db", "unused.sqlite3", "--host", host, "--allow-remote", "--basic-auth-file", ""]
+                )
+                self.assertEqual(code, 3)
+                self.assertEqual(json.loads(output.getvalue())["status"], "failed_input")
+                serve.assert_not_called()
+                listener.assert_not_called()
+                connect.assert_not_called()
 
     def test_requested_invalid_authentication_prevents_server_start_and_database_access(self):
         output = io.StringIO()

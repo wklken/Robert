@@ -944,7 +944,7 @@ def main(argv=None):
     try:
         _allowed_web_origins(args.host, args.port, args.public_origin)
         receipt_fx = _receipt_exchange_rate(args.receipt_fx_rate, args.receipt_fx_date)
-        basic_auth = auth.load_basic_auth_file(args.basic_auth_file) if args.basic_auth_file else None
+        basic_auth = auth.load_basic_auth_file(args.basic_auth_file) if args.basic_auth_file is not None else None
     except ValueError as exc:
         return emit({"ok": False, "status": "failed_input", "safe_error": str(exc)}, 3)
     if args.config:

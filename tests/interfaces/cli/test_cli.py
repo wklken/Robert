@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
@@ -34,6 +36,38 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         argv = run.call_args.args[0]
         self.assertEqual(argv[argv.index("--basic-auth-file") + 1], "/private/auth.json")
+
+    def test_web_auth_init_without_controlling_terminal_fails_without_creating_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "auth.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-W",
+                    "ignore",
+                    "-c",
+                    "from robert_agent.cli.main import main; raise SystemExit(main())",
+                    "web",
+                    "auth-init",
+                    "--file",
+                    str(path),
+                    "--username",
+                    "robert",
+                    "--output",
+                    "json",
+                ],
+                input="fallback-password\nfallback-password\n",
+                capture_output=True,
+                text=True,
+                start_new_session=True,
+                timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(json.loads(result.stdout)["status"], "failed_input")
+            self.assertIn("echo", json.loads(result.stdout)["safe_error"])
+            self.assertFalse(path.exists())
+            self.assertNotIn("fallback-password", result.stdout + result.stderr)
 
     def test_web_run_forwards_public_origin(self):
         with mock.patch("robert_agent.cli.main.web.main", return_value=0) as run:

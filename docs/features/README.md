@@ -11,6 +11,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [生命周期看板](web-lifecycle-board.md) | 状态含义、日常操作、异常恢复与交付证据 |
+| [Web 认证与远程部署](web-authentication.md) | verifier、无回显输入、可信代理和认证计算预算 |
 | [OpenClaw Issue 派单](issue-dispatch.md) | 两步提交、自动分类、Issue/PR 交付与建单恢复 |
 | [Proposer](proposer.md) | 主动发现单据、提案审核、入队和回评 |
 | [TAPD 来源](tapd.md) | @ 触发、标签选仓库、回评、澄清回复与单据结束 |
