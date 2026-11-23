@@ -2,12 +2,13 @@
 
 from types import MappingProxyType
 
-from sqlalchemy import column, table
+from sqlalchemy import Table, column, table
+from sqlalchemy.sql.selectable import TableClause
 
 from robert_agent.models import Base
 
 
-tables = MappingProxyType(
+tables: MappingProxyType[str, Table | TableClause] = MappingProxyType(
     {
         **Base.metadata.tables,
         "sqlite_master": table(

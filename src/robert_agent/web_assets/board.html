@@ -4,144 +4,147 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <link rel="icon" type="image/svg+xml" href="/assets/robert-favicon.svg">
+  <!-- workbench-head -->
   <title>Robert Task Board</title>
-  <script>
-    (function () {
-      const savedTheme = localStorage.getItem("robertWorkbenchTheme") || "system";
-      const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-      document.documentElement.dataset.themeChoice = savedTheme;
-      document.documentElement.dataset.theme = savedTheme === "system"
-        ? (prefersDark ? "dark" : "light")
-        : savedTheme;
-      document.documentElement.dataset.colorMode = document.documentElement.dataset.theme;
-    })();
-  </script>
   <link rel="stylesheet" href="/assets/github-shell.css">
   <link rel="stylesheet" href="/assets/board.css">
   <script src="/assets/board-client.js" defer></script>
+  <script src="/assets/agent-session.js" defer></script>
   <script src="/assets/board.js" defer></script>
 </head>
 <body>
   <header class="global-bar">
-    <a class="brand" href="/" aria-label="Robert Workbench">
-      <span class="brand-mark" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M6 7.5v9M18 8.5v2a6 6 0 0 1-6 6H6"/></svg></span>
-      <span>Robert</span>
-    </a>
+    <!-- workbench-brand -->
     <div class="global-actions" aria-label="Board controls" data-i18n-aria="boardControls">
       <span class="live-indicator"><i aria-hidden="true"></i><span class="responsive-label" id="capacity" data-i18n="agentsRunningEmpty">0 agents running</span></span>
-      <button id="new-task-button" class="shell-button primary" type="button" data-i18n="newTask">New task</button>
-      <label class="theme-control"><span class="sr-only" data-i18n="theme">Theme</span><select id="theme-select" aria-label="Theme" data-i18n-aria="theme">
-        <option value="system" data-i18n="themeSystem">System</option>
-        <option value="light" data-i18n="themeLight">Light</option>
-        <option value="dark" data-i18n="themeDark">Dark</option>
-      </select></label>
-      <label class="shell-select language-control"><span class="sr-only" data-i18n="language">Language</span><select id="language-select" aria-label="Language" data-i18n-aria="language">
-        <option value="en" data-i18n="languageEnglish">English</option>
-        <option value="zh" data-i18n="languageChinese">中文</option>
-      </select></label>
+      <button id="new-task-button" class="shell-button primary" type="button"><span aria-hidden="true">＋</span> <span data-i18n="newTask">New task</span></button>
+      <!-- workbench-preferences -->
     </div>
   </header>
 
   <header class="repo-header">
     <div class="repo-context"><a href="/">Robert</a><span>/</span><strong id="repo-context" data-i18n="taskBoardContext">board</strong></div>
-    <nav class="underline-nav" aria-label="Workbench" data-i18n-aria="primaryNavigation">
-      <a class="underline-nav-item" href="/work"><svg class="nav-glyph" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4v5m0 2v1"/></svg> <span data-i18n="navWork">Work</span></a>
-      <a class="underline-nav-item selected" href="/board"><svg class="nav-glyph" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 2v12M10 2v12"/></svg> <span data-i18n="navBoard">Board</span></a>
-      <a class="underline-nav-item" href="/work?bucket=history"><svg class="nav-glyph" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/></svg> <span data-i18n="navHistory">History</span></a>
-      <a class="underline-nav-item" href="/operations"><svg class="nav-glyph" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg> <span data-i18n="navOperations">Operations</span></a>
-      <a class="underline-nav-item" href="/operations#knowledge"><svg class="nav-glyph" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 3v11M2 2l6 1 6-1v10l-6 1-6-1z"/></svg> <span data-i18n="navKnowledge">Knowledge</span></a>
-    </nav>
+    <!-- workbench-navigation -->
   </header>
 
-  <div class="board-heading"><div><h1 data-i18n="boardTitle">Repository task board</h1></div><span id="sync-status" role="status" aria-live="polite"></span></div>
+  <div class="board-heading">
+    <div>
+      <h1 data-i18n="boardTitle">Task board</h1>
+      <p class="board-hint" data-i18n="boardHint">Track execution, resolve blockers, and finish work.</p>
+    </div>
+    <div class="heading-actions">
+      <span id="sync-status" class="sync-status" role="status" aria-live="polite"></span>
+      <button id="refresh-button" class="quiet-button" type="button" aria-label="Refresh board" data-i18n="refresh" data-i18n-aria="refreshBoard">Refresh</button>
+    </div>
+  </div>
+
+  <section id="attention-inbox" class="attention-inbox" aria-labelledby="attention-inbox-title" hidden>
+    <div class="attention-inbox-head">
+      <h2 id="attention-inbox-title"></h2>
+      <button id="attention-inbox-filter" class="link-button" type="button" data-i18n="showOnlyMine">Show only these</button>
+    </div>
+    <div id="attention-inbox-items" class="attention-inbox-items"></div>
+  </section>
   <div id="board-feedback" class="feedback" role="alert" hidden></div>
   <div id="read-only-notice" class="feedback" hidden></div>
+
   <section class="control-rail" aria-label="Board filters" data-i18n-aria="boardFilters">
     <label class="search-field">
-      <span data-i18n="find">Find</span>
-      <input id="search-filter" type="search" placeholder="Title, task, branch or PR" data-i18n-placeholder="searchPlaceholder">
+      <span class="sr-only" data-i18n="find">Find</span>
+      <span class="search-icon" aria-hidden="true">⌕</span>
+      <input id="search-filter" type="search" placeholder="Title, task, branch or PR" data-i18n-placeholder="searchPlaceholder" data-i18n-aria="find" aria-label="Find">
+      <kbd aria-hidden="true">/</kbd>
     </label>
-    <label>
-      <span data-i18n="repository">Repository</span>
-      <select id="repo-filter"><option value="" data-i18n="allRepositories">All repositories</option></select>
-    </label>
-    <label>
-      <span data-i18n="agent">Agent</span>
-      <select id="agent-filter"><option value="" data-i18n="allAgents">All agents</option></select>
-    </label>
-    <label>
-      <span data-i18n="priority">Priority</span>
-      <select id="priority-filter">
-        <option value="" data-i18n="allPriorities">All priorities</option>
-        <option value="P0">P0</option>
-        <option value="P1">P1</option>
-        <option value="P2">P2</option>
-        <option value="P3">P3</option>
-      </select>
-    </label>
-    <label><span data-i18n="view">View</span><select id="view-filter"><option value="active" data-i18n="boardTitle">Board</option><option value="history" data-i18n="canceledTasks">Canceled tasks</option></select></label>
     <label class="attention-filter">
-      <input id="attention-filter" type="checkbox">
+      <input id="attention-filter" type="checkbox" role="switch">
+      <span class="switch-track" aria-hidden="true"></span>
       <span data-i18n="needsAttention">Needs attention</span>
     </label>
     <button id="mobile-filter-toggle" class="quiet-button mobile-filter-toggle" type="button" aria-expanded="false" data-i18n="filtersToggle">Filters</button>
-    <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh board" data-i18n="refresh" data-i18n-aria="refreshBoard">Refresh</button>
+    <div class="rail-filters">
+      <label><span class="sr-only" data-i18n="repository">Repository</span>
+        <select id="repo-filter" aria-label="Repository" data-i18n-aria="repository"><option value="" data-i18n="allRepositories">All repositories</option></select>
+      </label>
+      <label><span class="sr-only" data-i18n="agent">Agent</span>
+        <select id="agent-filter" aria-label="Agent" data-i18n-aria="agent"><option value="" data-i18n="allAgents">All agents</option></select>
+      </label>
+      <label><span class="sr-only" data-i18n="priority">Priority</span>
+        <select id="priority-filter" aria-label="Priority" data-i18n-aria="priority">
+          <option value="" data-i18n="allPriorities">All priorities</option>
+          <option value="P0">P0</option>
+          <option value="P1">P1</option>
+          <option value="P2">P2</option>
+          <option value="P3">P3</option>
+        </select>
+      </label>
+      <label><span class="sr-only" data-i18n="view">View</span><select id="view-filter" aria-label="View" data-i18n-aria="view"><option value="active" data-i18n="activeTasks">Active tasks</option><option value="history" data-i18n="canceledTasks">Canceled tasks</option></select></label>
+    </div>
+    <span id="filter-summary" class="filter-summary"></span>
+  </section>
+
+  <section id="filter-empty" class="filter-empty" hidden>
+    <strong data-i18n="noMatchingTasks">No tasks match these filters</strong>
+    <p id="filter-empty-conditions"></p>
+    <button id="clear-filters" class="quiet-button" type="button" data-i18n="clearFilters">Clear filters</button>
   </section>
 
   <nav id="mobile-column-tabs" class="mobile-tabs" aria-label="Task status" data-i18n-aria="taskStatus">
     <button type="button" data-mobile-column="backlog"><span data-i18n="columnBacklog">Backlog</span> <span data-count="backlog">0</span></button>
-    <button type="button" data-mobile-column="todo"><span data-i18n="columnTodo">TODO</span> <span data-count="todo">0</span></button>
-    <button type="button" data-mobile-column="doing"><span data-i18n="columnDoing">Doing</span> <span data-count="doing">0</span></button>
-    <button type="button" data-mobile-column="waiting"><span data-i18n="columnWaiting">Waiting for you</span> <span data-count="waiting">0</span></button>
+    <button type="button" data-mobile-column="todo"><span data-i18n="columnTodo">Queued</span> <span data-count="todo">0</span></button>
+    <button type="button" data-mobile-column="doing"><span data-i18n="columnDoing">Executing</span> <span data-count="doing">0</span></button>
+    <button type="button" data-mobile-column="waiting"><span data-i18n="columnWaiting">Needs attention</span> <span data-count="waiting">0</span></button>
     <button type="button" data-mobile-column="review"><span data-i18n="columnReview">Review</span> <span data-count="review">0</span></button>
     <button type="button" data-mobile-column="done"><span data-i18n="columnDone">Done</span> <span data-count="done">0</span></button>
   </nav>
 
   <main id="board-app" class="board-shell" aria-label="Repository tasks" data-i18n-aria="repositoryTasks">
     <section class="board-column" data-column="backlog" aria-labelledby="heading-backlog">
-      <header><h2 id="heading-backlog" data-i18n="columnBacklog">Backlog</h2><span data-count="backlog">0</span></header>
-      <p class="column-purpose" data-i18n="purposeBacklog">Ideas that are still editable</p>
+      <header><h2 id="heading-backlog" data-i18n="columnBacklog">Backlog</h2><span class="column-count" data-count="backlog">0</span></header>
+      <p class="column-purpose" data-i18n="purposeBacklog">Not started yet; still editable</p>
       <div class="card-stack" data-cards="backlog"></div>
     </section>
     <section class="board-column" data-column="todo" aria-labelledby="heading-todo">
-      <header><h2 id="heading-todo" data-i18n="columnTodo">TODO</h2><span data-count="todo">0</span></header>
-      <p class="column-purpose" data-i18n="purposeTodo">Ready for an Agent slot</p>
+      <header><h2 id="heading-todo" data-i18n="columnTodo">Queued</h2><span class="column-count" data-count="todo">0</span></header>
+      <p class="column-purpose" data-i18n="purposeTodo">Waiting for Robert to dispatch</p>
       <div class="card-stack" data-cards="todo"></div>
     </section>
     <section class="board-column" data-column="doing" aria-labelledby="heading-doing">
-      <header><h2 id="heading-doing" data-i18n="columnDoing">Doing</h2><span data-count="doing">0</span></header>
-      <p class="column-purpose" data-i18n="purposeDoing">Agent work or publication in flight</p>
+      <header><h2 id="heading-doing" data-i18n="columnDoing">Executing</h2><span class="column-count" data-count="doing">0</span></header>
+      <p class="column-purpose" data-i18n="purposeDoing">An Agent is working or publishing</p>
       <div class="card-stack" data-cards="doing"></div>
     </section>
     <section class="board-column waiting-column" data-column="waiting" aria-labelledby="heading-waiting">
-      <header><h2 id="heading-waiting" data-i18n="columnWaiting">Waiting for you</h2><span data-count="waiting">0</span></header>
-      <p class="column-purpose" data-i18n="purposeWaiting">A decision or reply unblocks work</p>
+      <header><h2 id="heading-waiting" data-i18n="columnWaiting">Needs attention</h2><span class="column-count" data-count="waiting">0</span></header>
+      <p class="column-purpose" data-i18n="purposeWaiting">Failures, questions, and decisions</p>
       <div class="card-stack" data-cards="waiting"></div>
     </section>
     <section class="board-column" data-column="review" aria-labelledby="heading-review">
-      <header><h2 id="heading-review" data-i18n="columnReview">Review</h2><span data-count="review">0</span></header>
-      <p class="column-purpose" data-i18n="purposeReview">PR or completion needs review</p>
+      <header><h2 id="heading-review" data-i18n="columnReview">Review</h2><span class="column-count" data-count="review">0</span></header>
+      <p class="column-purpose" data-i18n="purposeReview">PR created, waiting for review</p>
       <div class="card-stack" data-cards="review"></div>
     </section>
     <section class="board-column" data-column="done" aria-labelledby="heading-done">
-      <header><h2 id="heading-done" data-i18n="columnDone">Done</h2><span data-count="done">0</span></header>
-      <p class="column-purpose" data-i18n="purposeDone">Accepted and completed</p>
+      <header><h2 id="heading-done" data-i18n="columnDone">Done</h2><span class="column-count" data-count="done">0</span></header>
+      <p class="column-purpose" data-i18n="purposeDone">Nothing left to do</p>
       <div class="card-stack" data-cards="done"></div>
     </section>
     <section class="board-column history-column" data-column="history" aria-labelledby="heading-history" hidden>
-      <header><h2 id="heading-history" data-i18n="canceledTasks">Canceled tasks</h2><span data-count="history">0</span></header>
+      <header><h2 id="heading-history" data-i18n="canceledTasks">Canceled tasks</h2><span class="column-count" data-count="history">0</span></header>
       <p class="column-purpose" data-i18n="historyHint">Stopped tasks and their history remain available.</p><div class="card-stack" data-cards="history"></div>
     </section>
   </main>
-  <p class="scope-note" data-i18n="boardScope">Task counts follow task lifecycle; Work counts GitHub workflows.</p>
-  <footer class="board-footer"><span id="loaded-count"></span><button id="load-more" class="quiet-button" type="button" data-i18n="loadMore" hidden>Load more tasks</button></footer>
+  <footer class="board-footer">
+    <span class="scope-note" data-i18n="boardScope">Counts follow the task lifecycle; the Work queue counts GitHub workflows.</span>
+    <span id="loaded-count"></span>
+    <button id="load-more" class="quiet-button" type="button" data-i18n="loadMore" hidden>Load more tasks</button>
+  </footer>
 
   <dialog id="work-item-drawer" class="drawer" aria-labelledby="drawer-title">
     <div class="drawer-bar">
-      <div>
+      <div class="drawer-heading">
         <p id="drawer-repo" class="eyebrow"></p>
         <h2 id="drawer-title" data-i18n="taskDetail">Task detail</h2>
+        <div id="drawer-status" class="drawer-status"></div>
       </div>
       <button class="icon-button" type="button" data-close-drawer aria-label="Close task detail" data-i18n="close" data-i18n-aria="closeTaskDetail">Close</button>
     </div>
@@ -158,20 +161,21 @@
         </div>
         <button class="icon-button" type="button" data-close-new-task aria-label="Close new task" data-i18n="close" data-i18n-aria="closeNewTask">Close</button>
       </div>
-      <p data-i18n="requiredHelp">Repository, title and requirement are required.</p>
       <div id="form-feedback" class="feedback" role="alert" hidden></div>
       <div class="form-grid">
-        <label><span data-i18n="repository">Repository</span><select name="repo_id" id="new-task-repo" required aria-describedby="new-task-repo-error"></select><span id="new-task-repo-error" role="alert"></span></label>
-        <label class="wide"><span data-i18n="title">Title</span><span data-i18n="requiredMark">(required)</span><input name="title" maxlength="200" required aria-describedby="new-task-title-error"><span id="new-task-title-error" role="alert"></span></label>
-        <label class="wide"><span data-i18n="requirement">Requirement</span><span data-i18n="requiredMark">(required)</span><textarea name="description" rows="5" maxlength="20000" required aria-describedby="new-task-description-error"></textarea><span id="new-task-description-error" role="alert"></span></label>
-        <label><span data-i18n="priority">Priority</span><select name="priority"><option>P0</option><option>P1</option><option selected>P2</option><option>P3</option></select></label>
-        <label><span data-i18n="routing">Routing</span><select name="routing_mode" id="routing-mode"><option value="auto" data-i18n="auto">Auto</option><option value="manual" data-i18n="specificAgent">Specific agent</option></select></label>
-        <label id="worker-field" hidden><span data-i18n="agent">Agent</span><select name="requested_worker" id="worker-select"></select></label>
-        <label><span data-i18n="afterCreation">After creation</span><select name="mode"><option value="backlog" data-i18n="keepInBacklog">Keep in backlog</option><option value="start" data-i18n="startNow">Start now</option></select></label>
+        <label class="wide"><span class="field-label" data-i18n="repository">Repository</span><select name="repo_id" id="new-task-repo" required aria-describedby="new-task-repo-hint new-task-repo-error"></select><span id="new-task-repo-hint" class="field-hint" data-i18n="repoHint">Robert works in a fresh worktree of this repository.</span><span id="new-task-repo-error" class="field-error" role="alert"></span></label>
+        <label class="wide"><span class="field-label"><span data-i18n="title">Title</span> <span class="required-mark" data-i18n="requiredMark">(required)</span></span><input name="title" maxlength="200" required aria-describedby="new-task-title-error" data-i18n-placeholder="titleExample" placeholder="e.g. Fix pagination when the cursor is empty"><span id="new-task-title-error" class="field-error" role="alert"></span></label>
+        <label class="wide"><span class="field-label"><span data-i18n="requirement">Requirement</span> <span class="required-mark" data-i18n="requiredMark">(required)</span></span><textarea name="description" rows="6" maxlength="20000" required aria-describedby="new-task-description-hint new-task-description-error" data-i18n-placeholder="requirementExample" placeholder="What should change, how to verify it, and anything Robert must not touch."></textarea><span id="new-task-description-hint" class="field-hint" data-i18n="requirementHint">Describe the expected result and how to check it. Robert asks when something is unclear.</span><span id="new-task-description-error" class="field-error" role="alert"></span></label>
+        <label><span class="field-label" data-i18n="priority">Priority</span><select name="priority"><option>P0</option><option>P1</option><option selected>P2</option><option>P3</option></select></label>
+        <label><span class="field-label" data-i18n="routing">Routing</span><select name="routing_mode" id="routing-mode" aria-describedby="routing-hint"><option value="auto" data-i18n="auto">Auto</option><option value="manual" data-i18n="specificAgent">Specific agent</option></select><span id="routing-hint" class="field-hint" data-i18n="routingHint">Auto lets Robert pick the Agent that fits the requirement.</span></label>
+        <label id="worker-field" class="wide" hidden><span class="field-label" data-i18n="agent">Agent</span><select name="requested_worker" id="worker-select"></select><span class="field-hint" data-i18n="workerHint">Only Agents allowed for this board are listed.</span></label>
+        <input type="hidden" name="mode" id="new-task-mode" value="backlog">
       </div>
       <div class="dialog-actions">
         <button class="quiet-button" type="button" data-close-new-task data-i18n="cancel">Cancel</button>
-        <button class="primary-button" type="submit" data-i18n="createTask">Create task</button>
+        <span class="dialog-actions-spacer"></span>
+        <button class="quiet-button" type="submit" data-mode="backlog" title="Saved to Backlog; nothing runs until you start it." data-i18n="saveToBacklog" data-i18n-title="saveToBacklogHint">Save to Backlog</button>
+        <button class="primary-button" type="submit" data-mode="start" title="Queued now; an Agent picks it up when a slot is free." data-i18n="createAndQueue" data-i18n-title="createAndQueueHint">Create and queue</button>
       </div>
     </form>
   </dialog>

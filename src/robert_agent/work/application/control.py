@@ -1,9 +1,11 @@
 """Shared lifecycle facts and safe operator recovery for a work item."""
 
+from robert_agent.execution.usage import record_dispatch_usage
 from robert_agent.foundation.contracts.execution import BindingStatus, ModelRunStatus
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
 
 from robert_agent.persistence.stores import review_sessions as db_write_review_sessions
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import vote_sessions as db_write_vote_sessions
 from robert_agent.persistence.stores import workstreams as db_write_workstreams
@@ -18,6 +20,7 @@ from robert_agent.persistence.stores import pr_remediation_episodes as db_write_
 from robert_agent.persistence.stores import wakeups as db_write_wakeups
 from robert_agent.adapters.processes import attempt as attempt_process
 import json
+from pathlib import Path
 
 from robert_agent.delivery.lock import task_publication_lock
 
@@ -74,6 +77,14 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
             )
         metadata["termination"] = outcome
         metadata["process_stopped_at"] = now
+        record_dispatch_usage(
+            conn,
+            Path(db_path).parent,
+            "worker",
+            attempt["attempt_id"],
+            attempt["task_id"],
+            metadata.get("dispatch"),
+        )
         db_write_attempts.set_metadata_json_by_attempt_id(conn, json.dumps(metadata), attempt["attempt_id"])
     # This is an explicit operator attestation, never an automatic inference
     # that an unrecorded process died. The task locks prevent concurrent spawn.
@@ -117,5 +128,10 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
     db_write_workstreams.cancel_execution_filtered(conn, facts["streams"], now)
     db_write_review_sessions.cancel_execution_filtered(conn, facts["streams"], now)
     db_write_vote_sessions.cancel_execution_filtered(conn, facts["streams"], now)
+    for (task_id,) in task_ids:
+        if entry := pre_pr_review.session(conn, task_id=task_id):
+            pre_pr_review.update(conn, entry["round_id"], status="canceled", proof_json=None)
     db_write_github_actions.cancel_execution_filtered(conn, facts["streams"])
-    db_write_wakeups.update_for_cancel_execution(conn, now, item["work_item_id"])
+    db_write_wakeups.update_for_cancel_execution(
+        conn, now, item["work_item_id"], task_ids=[task_id for (task_id,) in task_ids]
+    )

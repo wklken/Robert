@@ -1,5 +1,6 @@
 """Native preparation, independent ballots and synthesis; no direct GitHub writes."""
 
+from robert_agent.foundation import question_choices
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
 from robert_agent.foundation.contracts.execution import RoundStatus
 
@@ -23,7 +24,9 @@ from robert_agent.execution.stages import (
     terminate_children,
 )
 from robert_agent.execution.rounds import SLOT_STORES
+from robert_agent.delivery.application import validation
 from robert_agent.delivery.application import submission as worker_result
+from robert_agent.work import decision_owner
 
 
 class Coordinator(StageCoordinator):
@@ -59,6 +62,12 @@ class Coordinator(StageCoordinator):
                 self.request["workers"],
                 self.read_source(),
             )
+            if not self.manifest.get("frozen"):
+                with vote_store.connect(self.db_path) as conn:
+                    self.manifest["decision_owner"] = decision_owner.for_workstream(
+                        conn, self.session["workstream_id"], self.request["repo"]["github_account"]
+                    )
+                vote_files.atomic_json(Path(self.manifest["context_dir"]) / "manifest.json", self.manifest)
             self.save_manifest()
         vote_workspace.verify_snapshot(self.manifest)
         self.check_sources()
@@ -66,12 +75,23 @@ class Coordinator(StageCoordinator):
             if self.manifest.get("frozen"):
                 return True
             prompt = self.prompt(
-                "prepare-" + self.manifest["snapshot_id"] + ".md", render_prompt(vote_prepare_input(self.manifest)).text
+                "prepare-" + self.manifest["snapshot_id"] + ".md",
+                render_prompt(vote_prepare_input(self.manifest)).text,
+                stage="prepare",
             )
+            require_choices = question_choices.PROMPT_MARKER in prompt.read_text(encoding="utf-8")
 
             def validate(output, model):
                 path = output / "prepared-request.json"
-                vote_files.read_prepared(path, self.manifest)
+                prepared = vote_files.read_prepared(path, self.manifest)
+                if prepared["status"] == "needs_clarification":
+                    choices = prepared.get("choices", [])
+                    if require_choices:
+                        validation.require_answerable_question(
+                            {"kind": "clarification", "summary": prepared["question"], "choices": choices}
+                        )
+                    elif error := question_choices.validation_error(choices):
+                        raise ValueError(error)
                 return {"prepared_path": str(path), "prepared_sha256": vote_files.digest(path)}
 
             result = self.run_phase("prepare", self.request["workers"][0], prompt, validate)
@@ -84,7 +104,13 @@ class Coordinator(StageCoordinator):
                 continue
             if prepared["status"] == "needs_clarification":
                 target = self.target_url()
-                body = prepared["question"]
+                choices = prepared.get("choices", [])
+                body = "\n\n".join(
+                    [
+                        prepared["question"],
+                        "\n".join(question_choices.option_lines(choices, recommended="（推荐）")),
+                    ]
+                ).strip()
                 payload = worker_result.build_result(
                     self.task_id,
                     self.attempt_id,
@@ -94,7 +120,7 @@ class Coordinator(StageCoordinator):
                     prepared["question"],
                     [{"type": GitHubActionType.COMMENT.value, "target_url": target, "body": body}],
                     used_skills=[],
-                    operator_question={"kind": "clarification", "summary": prepared["question"]},
+                    operator_question={"kind": "clarification", "summary": prepared["question"], "choices": choices},
                 )
                 self.phase(RoundStatus.WAITING_FOR_USER.value)
                 self.record(payload)
@@ -154,6 +180,7 @@ class Coordinator(StageCoordinator):
         prompt = self.prompt(
             f"synthesis-{inputs_hash}.md",
             render_prompt(vote_synthesize_input(self.manifest, inputs, inputs_hash, records)).text,
+            stage="synthesis",
         )
 
         def validate(output, model):
@@ -192,6 +219,7 @@ class Coordinator(StageCoordinator):
             f"Vote report: {report}",
             [action],
             used_skills=[],
+            receipt_summary=summary.get("receipt_summary"),
         )
         self.record(payload)
         return report

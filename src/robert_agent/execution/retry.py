@@ -77,10 +77,16 @@ def _retry_after_seconds(message, now):
 
 
 def failure_state(previous, message, now, *, retryable=True):
-    count = int(previous.get("attempt_count", 0)) + 1
-    first = previous.get("first_failed_at") or now
     category = error_class(message)
-    elapsed = (timestamp(now) - timestamp(first)).total_seconds()
+    try:
+        count = int(previous.get("attempt_count", 0)) + 1
+        first = previous.get("first_failed_at") or now
+        elapsed = (timestamp(now) - timestamp(first)).total_seconds()
+        if count < 1:
+            raise ValueError("invalid retry count")
+    except (ValueError, TypeError, OverflowError):
+        count, first, elapsed = MAX_ATTEMPTS, now, MAX_ELAPSED_SECONDS
+        retryable = False
     transient = category in {"transient_failure", "rate_limited"}
     delay = max(min(60, 5 * 2 ** min(count - 1, 4)), _retry_after_seconds(message, now))
     allowed = retryable and transient and count < MAX_ATTEMPTS and elapsed + delay < MAX_ELAPSED_SECONDS

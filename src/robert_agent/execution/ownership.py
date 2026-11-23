@@ -14,6 +14,7 @@ from robert_agent.persistence.queries import pr_remediation_episodes as db_read_
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import wakeups as db_read_wakeups
 from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import execution_subjects as db_write_execution_subjects
 import json
 from datetime import datetime, timezone
 from robert_agent.persistence import execution_control as execution_store
@@ -174,6 +175,23 @@ def recovery_subject(conn, task_id):
     if episode_id and execution_store.get_binding(conn, "remediation_episode", episode_id):
         return "remediation_episode", episode_id
     return "task", task_id
+
+
+def inherit_recovery_budget(conn, parent_task_id, task_id, run_now):
+    """Keep a replacement review within the accepted request's one-shot quota."""
+    parent = execution_store.get_binding(conn, "task", parent_task_id)
+    child = execution_store.get_binding(conn, "task", task_id)
+    if (
+        not parent
+        or not child
+        or parent["binding_status"] != BindingStatus.ACTIVE
+        or child["binding_status"] != BindingStatus.ACTIVE
+        or parent["recovery_attempts"] != 1
+        or child["recovery_attempts"] != 0
+    ):
+        raise ValueError("review recovery budget transfer requires active, classified ownership")
+    if db_write_execution_subjects.update_for_classify_recovery(conn, run_now, "task", task_id) != 1:
+        raise ValueError("review recovery budget changed before transfer")
 
 
 def mark_attention(conn, task_id, run_now):

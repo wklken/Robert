@@ -42,6 +42,19 @@
           },
           "additionalProperties": false
         },
+        "pre_pr_review": {
+          "type": "object",
+          "required": ["workers"],
+          "properties": {
+            "workers": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            }
+          },
+          "additionalProperties": false
+        },
         "multi_agent_review": {
           "type": "object",
           "properties": {
@@ -83,6 +96,10 @@
     "prAutomation": {
       "type": "object",
       "properties": {
+        "dispatch_mode": {
+          "enum": ["follow_supervision", "direct"],
+          "default": "follow_supervision"
+        },
         "conflict": {
           "type": "object",
           "properties": {
@@ -112,6 +129,20 @@
               "default": false
             },
             "check_allowlist": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "default": []
+            },
+            "check_mode": {
+              "type": "string",
+              "enum": ["all", "observed"],
+              "default": "all"
+            },
+            "workflow_path_allowlist": {
               "type": "array",
               "uniqueItems": true,
               "items": {
@@ -327,7 +358,7 @@
           "timeout_seconds": {
             "type": "integer",
             "minimum": 1,
-            "default": 5400
+            "default": 3600
           },
           "environment_allowlist": {
             "type": "array",
@@ -452,7 +483,7 @@
         "hard_timeout_seconds": {
           "type": "integer",
           "minimum": 1,
-          "default": 2700
+          "default": 3600
         },
         "startup_grace_seconds": {
           "type": "integer",
@@ -720,6 +751,31 @@
           "default": false
         },
         "dispatch_enabled": {"type": "boolean", "default": false},
+        "contextual_replies": {"type": "boolean", "default": false},
+        "receipts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean", "default": false},
+            "send_after": {"type": "string", "minLength": 1},
+            "chromium": {"type": "string", "minLength": 1, "default": "chromium"},
+            "events": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "default": ["pr_opened", "report_delivered"],
+              "items": {
+                "type": "string",
+                "enum": ["pr_opened", "report_delivered", "pr_updated", "pr_reviewed", "pr_merged"]
+              }
+            }
+          }
+        },
+        "send_after": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Only externally deliver notifications created after this timezone-aware ISO timestamp. Required when enabled; retain on service restarts."
+        },
         "provider": {
           "type": "string",
           "enum": [
@@ -764,6 +820,91 @@
         "thread": {
           "type": "string",
           "default": ""
+        }
+      }
+    },
+    "proposer": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean", "default": false},
+        "publish_comments": {"type": "boolean", "default": false},
+        "github_repositories": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []},
+        "github_assignees": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []},
+        "tapd_projects": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []},
+        "tapd_assignees": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []},
+        "gateway_metadata": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
+    "tapd": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "executable": {
+          "type": "string",
+          "minLength": 1,
+          "default": "tapd",
+          "description": "TAPD CLI executable name or path. Authentication stays in the CLI's own configuration."
+        },
+        "mention_name": {
+          "type": "string",
+          "minLength": 1,
+          "default": "robert-wklken",
+          "description": "Trigger mention without @, also used as the automatic comment prefix."
+        },
+        "projects": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["host", "workspace_id", "trusted_user", "accept_after", "label_rules"],
+            "properties": {
+              "host": {
+                "type": "string",
+                "minLength": 1
+              },
+              "workspace_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "trusted_user": {
+                "type": "string",
+                "minLength": 1
+              },
+              "accept_after": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Only comments created at or after this timezone-aware ISO timestamp can trigger work."
+              },
+              "label_rules": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["label", "repository"],
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "repository": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

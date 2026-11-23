@@ -17,6 +17,79 @@ from tests.support.terminal_github_followup import TerminalGithubFollowupFixture
 
 
 class TerminalGithubFollowupTests(TerminalGithubFollowupFixture):
+    def test_blocked_pr_worktree_trigger_replay_keeps_repository_processing(self):
+        self.source_type = "pull_request"
+        with mock.patch.object(
+            assigned_workspace,
+            "prepare_worktree",
+            return_value={
+                "ok": False,
+                "status": "blocked_unmanaged_worktree",
+                "worktree_path": str(self.fixture.root / "unmanaged"),
+                "branch_name": "codex/existing",
+            },
+        ):
+            self.deliver("blocked", body="@robot fix the reply handling", intent="bug_fix")
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            task_id, stream_id, lifecycle = conn.execute("SELECT task_id,workstream_id,lifecycle FROM tasks").fetchone()
+            self.assertEqual(lifecycle, "failed")
+            self.assertEqual(conn.execute("SELECT active_task_id FROM workstreams").fetchone()[0], task_id)
+            binding = execution_store.get_binding(conn, "task", task_id)
+            self.assertEqual(binding["binding_status"], "terminal")
+            attempt = conn.execute("SELECT * FROM attempts").fetchone()
+        replay = self.deliver("blocked", body="@robot fix the reply handling", intent="bug_fix")
+        self.assertEqual(replay["prompt_paths"], [])
+        self.assertEqual(self.tasks(), [(task_id, None, "failed")])
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            self.assertEqual(execution_store.get_binding(conn, "task", task_id), binding)
+            self.assertEqual(conn.execute("SELECT * FROM attempts").fetchone(), attempt)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0], 0)
+            self.assertEqual(
+                conn.execute(
+                    "SELECT lifecycle,active_task_id FROM workstreams WHERE workstream_id=?", (stream_id,)
+                ).fetchone(),
+                ("failed", task_id),
+            )
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT 1 FROM notifications WHERE notification_type='repository_pipeline_failed'"
+                ).fetchone()
+            )
+
+    def test_consumed_trigger_replay_does_not_change_new_task_execution_evidence(self):
+        self.finish()
+        self.deliver("followup")
+        child_id = self.tasks()[1][0]
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            binding = execution_store.get_binding(conn, "task", child_id)
+            receipt_count = conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0]
+        replay = self.deliver("first")
+        self.assertEqual(replay["prompt_paths"], [])
+        self.assertEqual(len(self.tasks()), 2)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            self.assertEqual(execution_store.get_binding(conn, "task", child_id), binding)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0], receipt_count)
+
+    def test_fresh_followup_waits_for_stopped_workstream_pointer_to_clear(self):
+        self.finish("failed")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE workstreams SET active_task_id=?", (self.parent_id,))
+        result = self.deliver("retry")
+        self.assertEqual(result["prompt_paths"], [])
+        self.assertEqual(self.tasks(), [(self.parent_id, None, "failed")])
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            self.assertEqual(execution_store.get_binding(conn, "task", self.parent_id), self.old_binding)
+            self.assertIsNotNone(
+                conn.execute("SELECT 1 FROM github_events WHERE event_fingerprint='comment:retry'").fetchone()
+            )
+            self.assertIsNone(conn.execute("SELECT 1 FROM task_events WHERE event_id='event:comment:retry'").fetchone())
+            conn.execute("UPDATE workstreams SET active_task_id=NULL")
+        result = self.deliver("retry")
+        self.assertEqual(len(result["prompt_paths"]), 1)
+        self.assertEqual(len(self.tasks()), 2)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            self.assertEqual(execution_store.get_binding(conn, "task", self.parent_id), self.old_binding)
+
     def test_completed_issue_and_pr_followup_start_once_and_preserve_history(self):
         for source_type in ("issue", "pull_request"):
             with self.subTest(source_type=source_type):

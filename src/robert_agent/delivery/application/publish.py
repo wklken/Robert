@@ -28,10 +28,11 @@ from robert_agent.delivery.application import scope as publication_scope
 from robert_agent.delivery.application import intents as publication_intents
 from robert_agent.delivery.application import outcomes as publication_outcomes
 from robert_agent.delivery.application import receipts as publication_receipts
+from robert_agent.delivery.application import tapd_comments
 from robert_agent.delivery import intents as intent_facts
 from robert_agent.delivery import queries as publication_queries
 from robert_agent.delivery import values as publication_values
-from robert_agent.persistence.queries import dispatch_requests
+from robert_agent.persistence.queries import dispatch_requests, proposals as proposal_queries
 
 PUBLISH_COMMAND_TIMEOUT_SECONDS = 60
 
@@ -53,6 +54,7 @@ def publish_ready_actions(
         )
         return control_command(*args, runner=run_command, **kwargs)
 
+    tapd = tapd_comments.publisher_for(config, run_command)
     with closing(db_database.connect(db_path)) as conn:
         from robert_agent.execution.application import cutover as result_cutover
 
@@ -123,8 +125,10 @@ def publish_ready_actions(
                 continue
             action = ready[0]
             with closing(db_database.connect(db_path)) as auth_conn:
-                dispatch_bound = dispatch_requests.for_task(auth_conn, action["task_id"]) is not None
-            action_config = {} if config is None and dispatch_bound else config
+                requires_config = dispatch_requests.for_task(
+                    auth_conn, action["task_id"]
+                ) is not None or proposal_queries.task_bound(auth_conn, action["task_id"])
+            action_config = {} if config is None and requires_config else config
             # Consume the request before this pass, including reconciliation
             # failures, so a failed attempt never leaves retry disabled.
             with closing(db_database.connect(db_path)) as retry_conn, retry_conn:
@@ -175,6 +179,24 @@ def publish_ready_actions(
                     # this task's ordered actions pending and try other tasks.
                     deferred_count += 1
                     busy_task_ids.add(action["task_id"])
+                    continue
+                except ValueError:
+                    # Invalid task-local recovery state cannot authorize an effect.
+                    result = {
+                        "ok": False,
+                        "status": "publish_failed",
+                        "retryable": False,
+                        "safe_error": "Invalid publication recovery state; inspect the task before retrying.",
+                    }
+                    with closing(db_database.connect(db_path)) as conn, conn:
+                        publication_outcomes.record_failure(conn, action, result, now)
+                    failed_count += 1
+                    busy_task_ids.add(action["task_id"])
+                    if result_id:
+                        failed_result_ids.add(result_id)
+                    failures.append(
+                        {"action_id": action["action_id"], "safe_error": result["safe_error"], "command": []}
+                    )
                     continue
                 if supervision["status"] == "blocked":
                     if result_id:
@@ -326,6 +348,7 @@ def publish_ready_actions(
                         action,
                         reconcile_scope if scope is not None else None,
                         bounded_command,
+                        tapd=tapd,
                     )
                     if reconciliation["status"] == "confirmed_effect":
                         result = {
@@ -346,6 +369,31 @@ def publish_ready_actions(
                         published_count += 1
                         deduplicated_count += 1
                         continue
+                    if publication_reconcile.read_failed(reconciliation):
+                        # Only reads are retried; exhausting their budget falls through to attention.
+                        with closing(db_database.connect(db_path)) as conn, conn:
+                            retry = publication_outcomes.schedule_reconcile_retry(conn, action, reconciliation, now)
+                            if retry:
+                                supervision_publication.finish(
+                                    conn,
+                                    supervision,
+                                    outcome="observing",
+                                    action_id=action["action_id"],
+                                    now=now,
+                                    reason=reconciliation["reason_code"],
+                                )
+                        if retry:
+                            failed_count += 1
+                            failures.append(
+                                {
+                                    "action_id": action["action_id"],
+                                    "safe_error": f"publication reconciliation retry scheduled: {reconciliation['reason_code']}",
+                                    "command": [],
+                                }
+                            )
+                            if result_id:
+                                failed_result_ids.add(result_id)
+                            continue
                     if reconciliation["status"] == "unknown":
                         current = {**current, "state": "attention"}
                     if reconciliation["status"] == "confirmed_absent" and scope is not None:
@@ -553,6 +601,7 @@ def publish_ready_actions(
                         conn=conn,
                         source_sha=current.get("source_sha"),
                         trusted_head_owner=current.get("head_owner"),
+                        tapd=tapd,
                         **guard_kwargs,
                     )
                 now = publication_values.now()
@@ -603,7 +652,7 @@ def publish_ready_actions(
                     if result.get("deduplicated"):
                         deduplicated_count += 1
                     continue
-                if result["status"] in {"unsupported_action", "superseded"}:
+                if result["status"] in {"unsupported_action", "superseded", tapd_comments.PR_TERMINAL}:
                     with closing(db_database.connect(db_path)) as conn, conn:
                         publication_outcomes.record_remediation_publish_outcome(conn, action, result, now)
                         publication_outcomes.mark_skipped(conn, action, result, now)

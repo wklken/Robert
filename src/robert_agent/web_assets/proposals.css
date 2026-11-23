@@ -1,0 +1,21 @@
+.proposal-list { margin: 0; padding: 0; list-style: none; }
+.proposal-list li, .proposal-detail {
+  border: 1px solid var(--borderColor-muted);
+  border-radius: var(--radius-medium);
+  padding: 1rem;
+  margin-block: .75rem;
+  overflow-wrap: anywhere;
+}
+.proposal-list p, .proposal-detail p { margin-block: .4rem; }
+.proposal-detail h2 { margin-top: 0; }
+.proposal-meta, #proposal-message { color: var(--fgColor-muted); }
+.proposal-detail code { overflow-wrap: anywhere; }
+.proposal-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-block-start: 1rem; }
+.proposal-actions input {
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--borderColor-default);
+  border-radius: var(--radius-small);
+  background: var(--bgColor-default);
+  color: var(--fgColor-default);
+}

@@ -8,11 +8,169 @@ from pathlib import Path
 from robert_agent.delivery import values as publication_values
 from robert_agent.delivery.application import reconcile as publication_reconcile
 from robert_agent.delivery.application import publish
+from robert_agent.execution import retry as retry_policy
 from robert_agent.persistence import execution_control as execution_store
 from tests.support.publication_reconcile import Completed, PublicationReconcileFixture
 
 
 class PublicationReconcileTests(PublicationReconcileFixture):
+    def publication_state(self, action_id="action-1"):
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            metadata = json.loads(
+                conn.execute("SELECT metadata_json FROM github_actions WHERE action_id=?", (action_id,)).fetchone()[0]
+            )
+            intent = conn.execute("SELECT status FROM publication_intents WHERE action_id=?", (action_id,)).fetchone()
+            attention = conn.execute(
+                "SELECT COUNT(*) FROM notifications WHERE notification_type='workflow_attention_required'"
+            ).fetchone()[0]
+        return metadata.get("publish") or {}, intent[0] if intent else None, attention
+
+    def publish_at(self, now, runner):
+        with mock.patch.object(publication_values, "now", return_value=now):
+            return publish.publish_ready_actions(self.db_path, run_command=runner)
+
+    def test_only_failed_remote_reads_are_rechecked(self):
+        for reason_code, expected in (
+            ("comment_query_failed", True),
+            ("open_pr_query_failed", True),
+            ("remote_branch_query_failed", True),
+            ("existing_pr_snapshot_query_failed", True),
+            ("review_query_failed", True),
+            ("vote_query_failed", True),
+            ("push_target_query_failed", True),
+            ("comment_marker_missing", False),
+            ("open_pr_candidate_conflict", False),
+            ("remote_sha_conflict", False),
+            ("comment_response_malformed", False),
+        ):
+            with self.subTest(reason_code=reason_code):
+                reconciliation = {"status": "unknown", "reason_code": reason_code, "evidence": {}}
+                self.assertIs(publication_reconcile.read_failed(reconciliation), expected)
+
+    def test_failed_reconcile_read_rechecks_after_backoff_without_another_write(self):
+        comment = {
+            "id": 7,
+            "user": {"login": "bot"},
+            "body": self.body,
+            "html_url": "https://github.com/x/y/issues/1#issuecomment-7",
+        }
+        remote = {"lookup": "[]"}
+        writes = []
+
+        def runner(command, **kwargs):
+            if command[2].endswith("comments?per_page=100"):
+                if remote["lookup"] is None:
+                    return Completed("", 1, "connection reset")
+                return Completed(remote["lookup"])
+            writes.append(command)
+            return Completed("", 1, "connection reset after response")
+
+        publish.publish_ready_actions(self.db_path, run_command=runner)
+        remote["lookup"] = None
+        due = self.publication_state()[0]["next_retry_at"]
+        rechecked = self.publish_at(due, runner)
+        early = self.publish_at(due, runner)
+
+        publish_state, intent, attention = self.publication_state()
+        self.assertFalse(rechecked["ok"])
+        self.assertIn("comment_query_failed", rechecked["failures"][0]["safe_error"])
+        self.assertEqual(early["pending_count"], 0)
+        self.assertEqual((intent, attention), ("executing", 0))
+        self.assertTrue(publish_state["reconcile_required"])
+        self.assertGreater(retry_policy.timestamp(publish_state["next_retry_at"]), retry_policy.timestamp(due))
+
+        remote["lookup"] = json.dumps([comment])
+        confirmed = self.publish_at(publish_state["next_retry_at"], runner)
+        self.assertEqual((confirmed["published_count"], confirmed["deduplicated_count"]), (1, 1), confirmed)
+        self.assertEqual(self.publication_state()[1], "published")
+        self.assertEqual(len(writes), 1)
+
+    def test_reconcile_recheck_keeps_later_actions_ordered_until_absence_is_confirmed(self):
+        later_body = "<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=1 -->\nnext"
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO github_actions(action_id, result_id, task_id, action_type, target_url, audit_status, "
+                "publish_status, created_at, metadata_json) VALUES ('action-2', 'result-1', 'task-1', 'comment', "
+                "'https://github.com/x/y/issues/1', 'accepted', 'not_published', '2026-08-02T00:00:01+00:00', ?)",
+                (json.dumps({"body": later_body}),),
+            )
+        remote = []
+        written = []
+        state = {"lookup_fails": False, "crash": True}
+
+        def runner(command, **kwargs):
+            if command[2].endswith("comments?per_page=100"):
+                if state["lookup_fails"]:
+                    return Completed("", 1, "connection reset")
+                return Completed(json.dumps(remote))
+            body = command[-1].removeprefix("body=")
+            written.append(body)
+            if state["crash"]:
+                raise RuntimeError("crash before the comment was created")
+            comment = {"id": len(remote) + 1, "user": {"login": "bot"}, "body": body}
+            remote.append(comment)
+            return Completed(json.dumps(comment))
+
+        with self.assertRaisesRegex(RuntimeError, "crash before"):
+            publish.publish_ready_actions(self.db_path, run_command=runner)
+        state.update(lookup_fails=True, crash=False)
+        now = publication_values.now()
+        rechecked = self.publish_at(now, runner)
+        waiting = self.publish_at(now, runner)
+
+        self.assertFalse(rechecked["ok"])
+        self.assertEqual(waiting["pending_count"], 0)
+        self.assertEqual(written, [self.body])
+        self.assertEqual(self.publication_state()[1:], ("executing", 0))
+
+        state["lookup_fails"] = False
+        due = self.publication_state()[0]["next_retry_at"]
+        self.publish_at(due, runner)
+        self.publish_at(due, runner)
+
+        self.assertEqual(written, [self.body, self.body, later_body])
+        self.assertEqual([comment["body"] for comment in remote], [self.body, later_body])
+        self.assertEqual(self.publication_state("action-1")[1], "published")
+        self.assertEqual(self.publication_state("action-2")[1], "published")
+
+    def test_unreadable_recheck_state_enters_attention(self):
+        def runner(command, **kwargs):
+            if command[2].endswith("comments?per_page=100"):
+                return Completed("[]")
+            return Completed("", 1, "connection reset after response")
+
+        publish.publish_ready_actions(self.db_path, run_command=runner)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE github_actions SET metadata_json=json_set(metadata_json, '$.publish.reconcile_retry', 'corrupt')"
+            )
+        result = self.publish_at(
+            self.publication_state()[0]["next_retry_at"],
+            lambda *_args, **_kwargs: Completed("", 1, "connection reset"),
+        )
+
+        self.assertIn("comment_query_failed", result["failures"][0]["safe_error"])
+        self.assertEqual(self.publication_state()[1:], ("attention", 1))
+
+    def test_conflicting_reconcile_evidence_enters_attention_without_recheck(self):
+        duplicate = [{"id": number, "body": self.body, "user": {"login": "bot"}} for number in (1, 2)]
+        remote = {"lookup": "[]"}
+        writes = []
+
+        def runner(command, **kwargs):
+            if command[2].endswith("comments?per_page=100"):
+                return Completed(remote["lookup"])
+            writes.append(command)
+            return Completed("", 1, "connection reset after response")
+
+        publish.publish_ready_actions(self.db_path, run_command=runner)
+        remote["lookup"] = json.dumps(duplicate)
+        result = self.publish_at(self.publication_state()[0]["next_retry_at"], runner)
+
+        self.assertIn("comment_marker_conflict", result["failures"][0]["safe_error"])
+        self.assertEqual(self.publication_state()[1:], ("attention", 1))
+        self.assertEqual(len(writes), 1)
+
     def test_marker_requires_matching_publisher_and_exact_body(self):
         action = {
             "action_type": "comment",
@@ -179,6 +337,31 @@ class PublicationReconcileTests(PublicationReconcileFixture):
         self.assertEqual(result["status"], "unknown")
         self.assertEqual(result["reason_code"], "comment_marker_conflict")
 
+    def test_comment_listing_with_an_unexpected_shape_needs_operator_evidence(self):
+        action = {
+            "action_id": "action-1",
+            "action_type": "comment",
+            "target_url": "https://github.com/x/y/issues/1",
+            "metadata_json": json.dumps({"body": self.body}),
+        }
+        scope = {"repo": "x/y", "github_account": "bot", "sources": [{"source_type": "issue", "number": 1}]}
+        for stdout in (
+            "",
+            '{"message": "Not Found"}',
+            '[[{"id": 1}]]',
+            '[["comment"]]',
+            json.dumps([{"id": 1, "body": self.body, "user": "bot"}]),
+            '[[{"id": 1, "body": "comment", "user": {"login": 42}}]]',
+            json.dumps([[{"id": 1, "body": self.body, "user": {"login": " "}}]]),
+            json.dumps([[{"body": self.body, "user": {"login": "bot"}}]]),
+        ):
+            with self.subTest(stdout=stdout):
+                result = publication_reconcile.classify_remote_state(
+                    action, scope, lambda *_args, response=stdout, **_kwargs: Completed(response)
+                )
+                self.assertEqual((result["status"], result["reason_code"]), ("unknown", "comment_response_malformed"))
+                self.assertFalse(publication_reconcile.read_failed(result))
+
     def test_open_pr_matching_marker_and_owner_confirms_effect(self):
         body = "<!-- robert-workstream task_id=task-1 -->\nPR"
         action = {
@@ -290,19 +473,15 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             return Failed()
 
         first = publish.publish_ready_actions(self.db_path, run_command=runner)
-        # Advance to the persisted retry deadline; immediate retry is now forbidden.
-        with closing(sqlite3.connect(self.db_path)) as retry_conn:
-            due = json.loads(
-                retry_conn.execute("SELECT metadata_json FROM github_actions WHERE action_id='action-1'").fetchone()[0]
-            )["publish"]["next_retry_at"]
-        retry_clock = mock.patch.object(publication_values, "now", return_value=due)
-        retry_clock.start()
-        self.addCleanup(retry_clock.stop)
-        second = publish.publish_ready_actions(self.db_path, run_command=runner)
-        # Keep the durable outcomes visible when this focused regression fails.
-        self.assertIn(first["status"], {"publish_failed"})
-        self.assertFalse(first["ok"])
-        self.assertFalse(second["ok"])
+        self.assertEqual(first["status"], "publish_failed")
+        # Each failed read waits for its persisted deadline; attention follows the last allowed read.
+        for _ in range(retry_policy.MAX_ATTEMPTS):
+            publish_state, intent, attention = self.publication_state()
+            self.assertEqual((intent, attention), ("executing", 0))
+            due = publish_state["next_retry_at"]
+            self.assertFalse(self.publish_at(due, runner)["ok"])
+        self.assertEqual(len(calls), 1 + retry_policy.MAX_ATTEMPTS)
+        self.assertEqual(self.publish_at(due, runner)["pending_count"], 0)
         with closing(sqlite3.connect(self.db_path)) as conn:
             count, status = conn.execute(
                 "SELECT COUNT(*), MAX(status) FROM notifications WHERE notification_type = 'workflow_attention_required'"
@@ -641,9 +820,16 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             if command == ["gh", "api", "repos/x/y/pulls/4"]:
                 return Completed(
                     json.dumps(
-                        {"state": "open", "merged": False, "head": {"sha": original_sha}, "base": {"sha": "c" * 40}}
+                        {
+                            "state": "open",
+                            "merged": False,
+                            "head": {"sha": original_sha},
+                            "base": {"ref": "main", "sha": "d" * 40},
+                        }
                     )
                 )
+            if command == ["gh", "api", "repos/x/y/git/ref/heads/main"]:
+                return Completed(json.dumps({"ref": "refs/heads/main", "object": {"sha": "c" * 40}}))
             if command[:3] == ["git", "ls-remote", "--heads"]:
                 return Completed(f"{original_sha}\trefs/heads/feature\n")
             if command == ["git", "rev-parse", "HEAD"]:

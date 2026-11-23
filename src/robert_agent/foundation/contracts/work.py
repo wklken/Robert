@@ -39,6 +39,20 @@ class WorkstreamLifecycle(StrEnum):
 
 
 @unique
+class SourceProvider(StrEnum):
+    GITHUB = "github"
+    TAPD = "tapd"
+
+
+@unique
+class SourceType(StrEnum):
+    ISSUE = "issue"
+    PULL_REQUEST = "pull_request"
+    TAPD_STORY = "tapd_story"
+    TAPD_BUG = "tapd_bug"
+
+
+@unique
 class TaskKind(StrEnum):
     HUMAN_REQUEST = "human_request"
     CI_REMEDIATION = "ci_remediation"

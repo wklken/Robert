@@ -1,5 +1,6 @@
 """Queue prepared attempts and claim launches under the task fence."""
 
+from robert_agent.execution.usage import record_dispatch_usage
 from robert_agent.foundation.contracts.execution import AttemptStatus, RoundStatus
 
 from robert_agent.persistence.queries import attempts as db_read_attempts
@@ -18,6 +19,7 @@ from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from robert_agent.supervision import store as supervision_store
 from contextlib import closing
 from pathlib import Path
+from robert_agent.adapters.git import workspace as git_workspace
 from robert_agent.adapters.processes import worker as dispatch
 from robert_agent.foundation import errors as run_errors
 from robert_agent.execution.application import cutover as result_cutover
@@ -25,6 +27,7 @@ from robert_agent.execution.application import evidence
 from robert_agent.execution import workspace as assigned_workspace
 from robert_agent.work.application import admission as work_admission
 from robert_agent.persistence.queries import dispatch_requests as dispatch_queries
+from robert_agent.persistence.queries import proposals as proposal_queries
 from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import lifecycle as work_application_lifecycle
 from robert_agent.configuration import routes as route_config
@@ -37,6 +40,7 @@ from robert_agent.persistence import execution_control as execution_store
 from robert_agent.foundation import commands as control_commands
 from robert_agent.foundation import values
 from robert_agent.execution import rounds as native_rounds
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.workflows import routes as route
 from robert_agent.workflows import routing as workflow_routing
 from robert_agent.persistence.rounds import review as review_store
@@ -227,6 +231,7 @@ def current_dispatch_target(conn, attempt_id):
         prompt_path,
         routing_mode,
         requested_worker,
+        branch_name,
     ) = row
     if not execution_ownership.claim_task(conn, task_id):
         return None
@@ -239,7 +244,7 @@ def current_dispatch_target(conn, attempt_id):
         "routing_mode": routing_mode,
         "requested_worker": requested_worker,
     }
-    worktree_result = {"worktree_path": worktree_path} if worktree_path else None
+    worktree_result = {"worktree_path": worktree_path, "branch_name": branch_name} if worktree_path else None
     return task_info, worktree_result
 
 
@@ -282,10 +287,29 @@ def can_materialize_worktree(repo):
 
 def ensure_dispatch_worktree(db_path, repo, task_info, worktree_result):
     worktree_path = (worktree_result or {}).get("worktree_path")
-    if not worktree_path or Path(worktree_path).exists():
+    if not worktree_path:
         return worktree_result
     if not can_materialize_worktree(repo):
         return worktree_result
+    ownership = None
+    if db_path and task_info.get("attempt_id") and task_info.get("task_id"):
+        with closing(db_database.connect(db_path)) as conn:
+            ownership = db_records.first(
+                db_read_attempts.find_dispatch_workspace_ownership(conn, task_info["attempt_id"], task_info["task_id"])
+            )
+        if not ownership or ownership["worktree_path"] != worktree_path:
+            return {**worktree_result, "ok": False, "status": "blocked_changed_worktree"}
+        if ownership["is_continuation"] and not ownership["owns_continuation"]:
+            return {**worktree_result, "ok": False, "status": "blocked_changed_worktree"}
+    if Path(worktree_path).exists():
+        branch_name = ownership["branch_name"] if ownership else worktree_result.get("branch_name")
+        allow_dirty = bool(ownership and branch_name and (ownership["owns_resume"] or ownership["owns_continuation"]))
+        error = git_workspace.check_worktree_reuse(
+            repo["repo_root"], repo["worktree_root"], worktree_path, branch_name=branch_name, allow_dirty=allow_dirty
+        )
+        return {**worktree_result, "ok": False, "status": error} if error else worktree_result
+    if ownership and ownership["is_continuation"]:
+        return {**worktree_result, "ok": False, "status": "blocked_unavailable_worktree"}
 
     with closing(db_database.connect(db_path)) as conn:
         db_sqlite.configure(conn, foreign_keys=True)
@@ -469,8 +493,11 @@ def dispatch_queued_locked(
         }
         with closing(db_database.connect(db_path)) as conn:
             native_review = native_rounds.session(conn, task_id=task_info["task_id"])
-            dispatch_bound = dispatch_queries.for_task(conn, task_info["task_id"]) is not None
-        if not native_review and (config_result or dispatch_bound):
+            candidate_review = pre_pr_review.session(conn, task_id=task_info["task_id"])
+            requires_config = dispatch_queries.for_task(
+                conn, task_info["task_id"]
+            ) is not None or proposal_queries.task_bound(conn, task_info["task_id"])
+        if not native_review and (config_result or requires_config):
             with closing(db_database.connect(db_path)) as conn, conn:
                 if not work_admission.ordinary_dispatch_allowed(conn, task_info["task_id"], repo, config_result):
                     now = values.utc_now()
@@ -558,9 +585,66 @@ def dispatch_queued_locked(
                     worker_kwargs["worker_agent_config"] = supervision_repair_worker.launch_profile(
                         config_result, task_info["task_id"], task_info["attempt_id"], repair_authorization["worker"]
                     )
+        if candidate_review:
+            plan = candidate_review["request"]["plan"]
+            if task_info.get("routing_mode") == "manual" and not candidate_review["request"].get("implementer_bound"):
+                with closing(db_database.connect(db_path)) as conn, conn:
+                    db_transactions.begin(conn, immediate=True)
+                    if not dry_run and not current_dispatch_target(conn, task_info["attempt_id"]):
+                        continue
+                    plan = pre_pr_review.bind_implementer(conn, candidate_review["round_id"], selected_worker)
+            profiles = [plan["implementer"], *plan["workers"]]
+            current = {worker["name"]: worker for worker in (config_result or {}).get("workers", [])}
+            if config_result and any(
+                profile["name"] not in current
+                or any(
+                    profile[key] != current[profile["name"]][key]
+                    for key in ("agent", "command_argv", "environment_allowlist")
+                )
+                for profile in profiles
+            ):
+                with closing(db_database.connect(db_path)) as conn, conn:
+                    now = values.utc_now()
+                    db_write_attempts.update_for_dispatch_queued_locked(conn, now, task_info["attempt_id"])
+                    pre_pr_review.update(
+                        conn,
+                        candidate_review["round_id"],
+                        status="attention",
+                        error="current worker configuration differs from the recorded review plan",
+                    )
+                    work_application_lifecycle.finalize_failed_task(
+                        conn,
+                        task_info["task_id"],
+                        task_info["workstream_id"],
+                        now,
+                        {"status": "review_configuration_changed"},
+                    )
+                continue
+            worker_kwargs.update(
+                worktree_path=str(Path(db_path).resolve().parent),
+                worker_agent_config={
+                    "agent": "command",
+                    "command_argv": [
+                        sys.executable,
+                        "-m",
+                        "robert_agent.workflows.pre_pr_review.coordinator",
+                        "--db",
+                        str(Path(db_path).resolve()),
+                        "--task-id",
+                        task_info["task_id"],
+                        "--attempt-id",
+                        task_info["attempt_id"],
+                    ],
+                    "timeout_seconds": plan["timeout_seconds"],
+                    "environment_allowlist": sorted(
+                        {"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}
+                        | {name for profile in profiles for name in profile["environment_allowlist"]}
+                    ),
+                },
+            )
         if native_review:
             configured = native_review["request"]["workers"]
-            timeout = sum(w["timeout_seconds"] for w in configured) + 2 * configured[0]["timeout_seconds"] + 600
+            timeout = (config_result or {}).get("hard_timeout_seconds", 3600)
             environment_names = sorted(
                 {"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}
                 | {name for w in configured for name in w["environment_allowlist"]}
@@ -594,7 +678,12 @@ def dispatch_queued_locked(
                 target = current_dispatch_target(conn, task_info["attempt_id"])
                 if target is None:
                     continue
-                task_info, worktree_result = target
+                task_info, current_workspace = target
+                if any(
+                    (current_workspace or {}).get(key) != (worktree_result or {}).get(key)
+                    for key in ("worktree_path", "branch_name")
+                ):
+                    worktree_result = {"ok": False, "status": "workspace_changed_before_dispatch"}
                 if not execution_ownership.claim_task(conn, task_info["task_id"]):
                     continue
                 subject_type, subject_id = execution_ownership.subject_for_task(conn, task_info["task_id"])
@@ -659,10 +748,20 @@ def dispatch_queued_locked(
                 "model": model,
                 "fallback_model": selected_worker.get("fallback_model"),
                 "reasoning_effort": worker_kwargs["reasoning_effort"],
+                "model_coordinator": bool(native_review or candidate_review),
             }
             with closing(db_database.connect(db_path)) as conn, conn:
                 db_sqlite.configure(conn, foreign_keys=True)
                 db_sqlite.configure(conn, busy_timeout_ms=5000)
+                if dispatch_result.get("process_exited") and dispatch_result.get("pid"):
+                    record_dispatch_usage(
+                        conn,
+                        Path(db_path).parent,
+                        "worker",
+                        task_info["attempt_id"],
+                        task_info["task_id"],
+                        dispatch_result,
+                    )
                 if not execution_ownership.claim_task(conn, task_info["task_id"]):
                     # Process evidence survives lost authority; cleanup must not hold a writer.
                     _record_dispatch_result(conn, task_info["attempt_id"], dispatch_result)
@@ -700,6 +799,10 @@ def dispatch_queued_locked(
                     results.append(dispatch_result)
                     continue
                 _record_dispatch_result(conn, task_info["attempt_id"], dispatch_result)
+                if dispatch_result.get("ok") and dispatch_result.get("status") == AttemptStatus.RUNNING.value:
+                    db_write_tasks.mark_task_running_for_attempt(
+                        conn, task_info["task_id"], task_info["attempt_id"], values.utc_now()
+                    )
                 subject_type, subject_id = execution_ownership.subject_for_task(conn, task_info["task_id"])
                 binding = execution_store.get_binding(conn, subject_type, subject_id)
                 if binding:

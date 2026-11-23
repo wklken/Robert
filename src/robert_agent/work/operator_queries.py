@@ -1,4 +1,4 @@
-"""Durable Kanban requests awaiting GitHub context from the remote scanner."""
+"""Durable operator requests awaiting source context from the remote scanner."""
 
 from robert_agent.persistence.queries import operator_requests
 
@@ -6,6 +6,8 @@ from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_scan_reads as db_read_github_scan_reads
 from robert_agent.work import control_queries
 from robert_agent.adapters.github import client as github_client
+from robert_agent.foundation.contracts.work import SourceProvider
+from robert_agent.foundation.timestamps import utc_timestamp
 from datetime import datetime
 import json
 
@@ -16,6 +18,25 @@ def pending_tasks(conn, repo_ids=(), *, task_id=None):
 
 def source_read(conn, task):
     """Require a scanner observation after the accepted operator request."""
+    if task.get("provider") == SourceProvider.TAPD:
+        try:
+            metadata = json.loads(task["source_metadata_json"] or "{}")
+        except (ValueError, TypeError):
+            return False, None
+        snapshot = metadata.get("tapd") if isinstance(metadata, dict) else None
+        if not isinstance(snapshot, dict):
+            return False, None
+        observed = utc_timestamp(snapshot.get("observed_at"))
+        if not observed or observed < datetime.fromisoformat(task["requested_at"]):
+            return False, None
+        source = {
+            "title": snapshot.get("title"),
+            "state": "closed" if snapshot.get("ended") else "open",
+            "updated_at": snapshot["observed_at"],
+        }
+        if "description" in snapshot:
+            source["body"] = snapshot["description"]
+        return True, source
     key = github_client.command_key(["gh", "api", f"repos/{task['full_name']}/issues/{task['number']}"])
     row = db_records.first(
         db_read_github_scan_reads.find_for_source_read(

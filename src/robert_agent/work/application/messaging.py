@@ -4,12 +4,14 @@ from contextlib import closing, contextmanager
 import hashlib
 import json
 from pathlib import Path
+import re
 
 from robert_agent.persistence import database, errors, records, transactions
-from robert_agent.persistence.queries import notifications
+from robert_agent.persistence.queries import notifications, work_item_events
 from robert_agent.persistence.stores import notifications as notification_store
 
 from robert_agent.delivery import messages
+from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.security.redaction import redact_text
 from robert_agent.work import messaging
 from robert_agent.work.messaging_identity import authenticate
@@ -50,13 +52,19 @@ def inbox(config, request):
     }
 
 
-def respond(config, request):
+def respond(config, request, *, idempotency_key=None):
     identity = authenticate(config, request)
     notification_id = validate_text(request.get("notification_id"), "notification_id", 256, required=True)
     version = request.get("version")
     if type(version) is not int or version < 0:
         raise WorkItemValidationError("version must be a nonnegative integer")
     action = request.get("action")
+    custom = action == "custom_reply"
+    if custom:
+        action = "reply"
+    choice = request.get("choice")
+    if choice is not None and (custom or action != "reply" or type(choice) is not int):
+        raise WorkItemValidationError("Invalid reply option.")
     if action not in {"reply", "approve", "retry", "retry_publish", "cancel", "ack"}:
         raise WorkItemValidationError("Unsupported messaging action.")
     body = validate_text(request.get("body", ""), "body", MAX_REPLY)
@@ -67,9 +75,14 @@ def respond(config, request):
     request_key = (
         "message:"
         + hashlib.sha256(
-            json.dumps([notification_id, version, identity, action, body], ensure_ascii=False).encode()
+            json.dumps(
+                [notification_id, version, identity, action, body] + ([choice] if choice is not None else []),
+                ensure_ascii=False,
+            ).encode()
         ).hexdigest()
     )
+    if idempotency_key is not None:
+        request_key = idempotency_key
     with _connection(config) as conn:
         row = records.first(notifications.find_local_response(conn, notification_id))
         if not row:
@@ -82,6 +95,22 @@ def respond(config, request):
         displayed = messages.envelope(conn, notification_id, config=config, include_closed=True)
         if not displayed or action not in displayed["actions"]:
             raise WorkItemValidationError("This message does not authorize that action.")
+        if custom:
+            current = messages.envelope(conn, notification_id, config=config)
+            if not current or current["version"] != version:
+                raise WorkItemConflictError("This question changed. Use /robert-inbox to read the current question.")
+            return {
+                "ok": True,
+                "status": "awaiting_custom_reply",
+                "message": (
+                    "可以引用这条消息，直接回复你自己的答案。\n"
+                    if metadata.get("attention_event_id") and config["messaging"].get("contextual_replies")
+                    else "请将下面命令中的 <你的答案> 替换为你自己的答复。\n"
+                )
+                + f"/robert-respond {notification_id} {version} reply <你的答案>",
+            }
+    if action == "reply" and not metadata.get("attention_event_id"):
+        return _reply_to_supervisor(config, notification_id, version, identity, request_key, body, choice)
     if action != "ack":
         context = CommandContext(
             "operator", identity, allowed, frozenset(worker["name"] for worker in config["workers"])
@@ -95,6 +124,7 @@ def respond(config, request):
             expected_event_id=metadata["attention_event_id"],
             idempotency_key=request_key,
             body=body,
+            choice=choice,
         )
         # The command event itself is the atomic receipt; crash/replay reuses it.
         return {
@@ -126,3 +156,135 @@ def respond(config, request):
                 conn, json.dumps(metadata, ensure_ascii=False), notification_id
             )
     return {"ok": True, "status": "acknowledged", "notification_id": notification_id}
+
+
+def _reply_to_supervisor(config, notification_id, version, identity, request_key, body, choice):
+    from robert_agent.supervision import decisions
+
+    with _connection(config, write=True) as conn, conn:
+        transactions.begin_immediate(conn)
+        displayed = messages.envelope(conn, notification_id, config=config, include_closed=True)
+        if (
+            not displayed
+            or displayed["type"] != "supervision_question"
+            or "reply" not in displayed["actions"]
+            or displayed["version"] != version
+        ):
+            raise WorkItemConflictError("This supervisor question changed. Use /robert-inbox.")
+        row = records.first(notifications.find_local_response(conn, notification_id))
+        metadata = json.loads(row[1] or "{}")
+        previous = metadata.get("operator_response")
+        if previous and previous["request_key"] == request_key:
+            return previous["result"]
+        if choice is not None:
+            options = displayed.get("choices", [])
+            if body.strip() or not 1 <= choice <= len(options):
+                raise WorkItemValidationError("The selected option is unavailable.")
+            body = options[choice - 1]["label"]
+        body = validate_text(body, "body", MAX_REPLY, required=True)
+        now = commands.utc_now()
+        root_id = metadata["workstream_id"]
+        if decisions.snapshot(conn, root_id, config, now) is None:
+            raise WorkItemConflictError("This supervisor question is no longer available.")
+        try:
+            decisions.reply(conn, config, root_id, notification_id, body, now)
+        except ValueError as exc:
+            raise WorkItemConflictError(str(exc)) from exc
+        result = {"ok": True, "status": "accepted", "notification_id": notification_id, "task_id": None}
+        metadata["operator_response"] = {
+            "request_key": request_key,
+            "actor_identity": identity,
+            "action": "reply",
+            "body": body,
+            "created_at": now,
+            "result": result,
+        }
+        notification_store.set_metadata_json_by_notification_id(
+            conn, json.dumps(metadata, ensure_ascii=False), notification_id
+        )
+    return result
+
+
+def reply(config, request):
+    """Resolve dedicated-chat text, then reuse the versioned reply command."""
+    if not config["messaging"].get("contextual_replies"):
+        return {"ok": True, "status": "ignored"}
+    try:
+        identity = authenticate(config, request)
+    except WorkItemValidationError:
+        # The global OpenClaw dispatch hook must leave unrelated chats alone.
+        return {"ok": True, "status": "ignored"}
+    message_id = validate_text(request.get("message_id"), "message_id", 256, required=True)
+    body = validate_text(request.get("body"), "body", MAX_REPLY, required=True)
+    safe = redact_text(body)
+    if not safe["ok"]:
+        raise WorkItemValidationError("Response contains sensitive text; use local controls.")
+    body = safe["text"]
+    quote_body = validate_text(request.get("quote_body", ""), "quote_body", 20000)
+    quote_message_id = validate_text(request.get("quote_message_id", ""), "quote_message_id", 256)
+    quoted = request.get("quoted", False)
+    if type(quoted) is not bool:
+        raise WorkItemValidationError("quoted must be a boolean")
+    key = (
+        "chat-reply:"
+        + hashlib.sha256(
+            json.dumps([identity, request["conversation"], request["thread"], message_id]).encode()
+        ).hexdigest()
+    )
+    with task_publication_lock(config["db_path"], key) as acquired:
+        if not acquired:
+            raise WorkItemConflictError("This reply is being processed. Resend it after completion.")
+        with _connection(config) as conn:
+            allowed = messages.allowed_repo_ids(conn, config)
+            receipt = records.first(work_item_events.find_chat_reply_receipt(conn, key, identity, allowed))
+            if receipt:
+                if receipt[0] != body:
+                    raise WorkItemConflictError("This incoming message already contains a different reply.")
+                result = json.loads(receipt[1])["command_result"]
+                return {
+                    "ok": True,
+                    "status": "accepted",
+                    "notification_id": receipt[2],
+                    "task_id": result.get("task_id"),
+                    "version": result["item"]["version"],
+                }
+            commands_in_quote = re.findall(r"/robert-respond\s+(\S+)\s+(\d+)\s+reply\b", quote_body)
+            delivery_ids = re.findall(r"(?:^|\n)Delivery:\s*(\S+)", quote_body)
+            ids = {identifier for identifier, _ in commands_in_quote}
+            ids.update(value.rsplit(":", 1)[0] for value in delivery_ids)
+            if len(ids) > 1:
+                raise WorkItemValidationError("The quote contains multiple Robert questions. Quote one message.")
+            if (quoted or quote_body or quote_message_id) and not ids and not quote_message_id:
+                raise WorkItemValidationError("The quoted question cannot be identified. Use /robert-inbox.")
+            selected = notifications.find_chat_question(
+                conn,
+                messaging_repo_ids=allowed,
+                messaging_settings=config["messaging"],
+                notification_id=next(iter(ids), None),
+                message_id=(quote_message_id or None) if not ids else None,
+            )
+            if not selected:
+                if quoted or quote_body or quote_message_id:
+                    raise WorkItemValidationError("The quoted question is unavailable. Use /robert-inbox.")
+                return {"ok": True, "status": "no_question"}
+            if len(selected) != 1:
+                raise WorkItemValidationError("The quote matches multiple questions. Use /robert-inbox.")
+            notification_id, raw, status = selected[0]
+            delivery = json.loads(raw)["delivery"]
+            if ids and quote_message_id and delivery.get("message_id") and quote_message_id != delivery["message_id"]:
+                raise WorkItemValidationError("The quote identifiers do not match. Use /robert-inbox.")
+            if any(value != delivery["delivery_id"] for value in delivery_ids):
+                raise WorkItemConflictError("The quoted delivery changed. Use /robert-inbox.")
+            version = delivery.get("version")
+            if type(version) is not int or any(int(value) != version for _, value in commands_in_quote):
+                raise WorkItemConflictError("The quoted question version changed. Use /robert-inbox.")
+            envelope = messages.envelope(conn, notification_id, config=config)
+            if status == "resolved" or not envelope:
+                raise WorkItemConflictError("The quoted question was already handled. Use /robert-inbox.")
+            if "reply" not in envelope["actions"]:
+                raise WorkItemValidationError("This question does not accept a text reply. Use /robert-inbox.")
+        return respond(
+            config,
+            {**request, "notification_id": notification_id, "version": version, "action": "reply", "body": body},
+            idempotency_key=key,
+        )

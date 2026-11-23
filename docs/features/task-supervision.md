@@ -36,6 +36,51 @@ the command; ordinary coding adapters are not this profile. An existing
 In `decide` mode the supervisor does not start separate advisory diagnosis calls
 or automatic maintenance proposals; the decision loop owns the next action.
 
+### Local Messages gateway wrapper
+
+The installed [supervision model wrapper](../../src/robert_agent/adapters/services/supervision_model.py)
+can call an existing local gateway implementing the Messages API. Configure the
+absolute installed interpreter path and the gateway's administrator-owned metadata
+file; its `url` must be an HTTP endpoint on `127.0.0.1` with an explicit port.
+The metadata must be a regular file owned by the service account and must not be
+writable by group or other users. Symlinks and redirects are rejected.
+
+```yaml
+supervision:
+  mode: decide
+  decision:
+    command:
+      - /opt/robert/venv/bin/python
+      - -m
+      - robert_agent.adapters.services.supervision_model
+      - --gateway-metadata
+      - /opt/robert/gateway/metadata.json
+      - --model
+      - your-model-id
+      - --timeout
+      - '90'
+      - --kind
+      - decision
+    timeout_seconds: 120
+    cooldown_seconds: 120
+    max_calls_per_hour: 12
+```
+
+The same command supports `--kind diagnosis` in a diagnosis profile. Model requests
+expose no tools and request disabled thinking. If the gateway still returns
+`thinking` or `redacted_thinking` blocks, the wrapper discards them and parses only
+the text blocks. This includes gateway thinking blocks containing only a signature.
+Tool blocks, unknown or malformed blocks, incomplete turns and
+missing text fail the call. The resulting JSON must still cite the supplied
+bundle/hash and known evidence IDs, select an offered action and satisfy the
+existing output limits. Thinking content never enters stdout or error details.
+
+Failures report fixed diagnostic descriptions such as
+`model output references unknown evidence`, without model text, evidence values
+or credentials. HTTP 429 retains the rate-limit outcome described below. This
+wrapper is an explicit configuration choice; existing external commands continue
+to run until their configuration is changed.
+
 The model can select a supplied CI repair, conflict resolution, eligible Worker
 retry, or known recovery candidate; wait with a recheck time; notify or ask the
 operator. `finish_supervision` is offered only when current domain facts already
@@ -48,8 +93,17 @@ Existing repository `pr_automation` enablement, CI check allowlists and episode
 budgets still apply. Known recovery candidates require the existing
 `supervision.recovery` repository/action allowlists. Worker retry retains its
 existing process-identity, evidence and one-shot recovery budget. In this mode
-these automatic consumers wait for a matching model choice; they cannot race
-the model's `wait` decision or silently fall back to their old automatic choice.
+these automatic consumers wait for a matching model choice. A repository
+can explicitly set `pr_automation.dispatch_mode: direct` to let the PR
+remediation policy dispatch the first eligible attempt for a snapshot.
+Retries after failed repair attempts still require a matching model
+choice. Unsupported CI conclusions, missing evidence and exhausted
+budgets remain visible in the durable episode and operator attention.
+CI episodes preserve their original observation time while their repair wall
+budget starts when usable failure evidence first becomes available. Repeated
+observations, temporary evidence loss and reopening preserve that start time
+and the existing attempt, token and cost counters. Legacy episodes that already
+had usable evidence or repair attempts retain their original wall budget.
 Normal result ingestion, initial execution, audit/publication validation,
 cancellation and required cleanup retain their existing lifecycle owners.
 
@@ -87,9 +141,41 @@ Malformed model output, timeouts and transport failures cannot grant actions.
 The wrapper may report the same bound `rate_limited` transport envelope as the
 diagnosis wrapper below; the greater of its Retry-After delay and configured
 cooldown applies across targets and restarts. Repeated model failures create an
-operator health notice. An unresolved process identity retains the claim and is
-visible as `decision_runner.claim` in status; service restart does not authorize
-duplicate launches. Stop the supervisor service and its model processes, then
+operator health notice. This is a global service alert in `/operations`' notification
+center, rather than a Kanban approval or reply event. Its `ack` action records
+receipt only; decisions continue according to the configured cooldown and call
+budget. Known failure codes have human-readable explanations. Failed calls retain
+the exact decision/workstream identity, time, exit code and bounded, redacted
+stderr in supervisor status and the work item's task-supervision details. Oversized,
+non-UTF-8 or sensitive stderr is withheld. URLs containing userinfo are treated
+as sensitive, including percent-encoded credentials. Raw stderr is never persisted.
+Explicit credential assignments are withheld regardless of value length.
+Global service alerts contain only service health information, not workstream,
+repository or stderr details. This also applies to older alerts waiting for
+delivery; inspect the local supervisor status or task details for diagnostics.
+
+After a validated model response and confirmed process stop, the unavailable
+alerts become resolved history, preserving their delivery and acknowledgement
+records. This establishes that the service can answer again; it does not prove
+that every previously failed workstream has retried or completed. An invalid
+response, process-start failure or unresolved process does not clear the alert.
+Model startup failures retain their safe failure phase and error class. When
+identity checkpointing fails, the launcher still proves process-group cleanup
+before releasing its claim. If cleanup remains unproven, the recorded process
+identity stays available for reconciliation.
+
+An unresolved process identity retains the claim and is visible as
+`decision_runner.claim` in status. A claim without a model identity moves to
+`decision_runner.attention_claims`, keyed by its root workstream, once its owner
+is proven dead or its launcher thread has durably recorded that it finished.
+That proof establishes that the launcher cannot later spawn or checkpoint a
+child. The affected workstream remains fenced until operator recovery, while
+unrelated workstreams can continue decisions under the shared cooldown and
+hourly call budget. Older claims with a live or unknown owner and no launcher
+completion proof retain the installation-wide fence. Recorded model identities
+continue through process reconciliation.
+
+Stop the supervisor service and its model processes, then
 release that exact stranded claim through the local operator command:
 
 ```sh
@@ -123,8 +209,26 @@ command creates a missing database or silently migrates an old one. Missing or
 busy state is reported as unobservable, not interpreted as a missing task.
 A failed recorded check updates local health immediately. An outage notice
 requires at least two consecutive failed observations spanning `poll_seconds`;
-a single stale failure cannot trigger a notice later. A successful check resets
-that episode. Notification identity and delivery state survive restarts.
+a single stale failure cannot trigger a notice later. The recorded check waits
+up to one second to acquire its writer lock, then revalidates observations in
+the same transaction. Reads retain their bounded observation budget. A failed
+record write does not imply that task state could not be read.
+
+A successful check reports healthy status immediately and resets the consecutive
+failure count. The outage identity and delivery budget remain until regularly
+sampled checks have succeeded for at least five minutes (or two polling intervals,
+whichever is longer). A gap exceeding two polling intervals plus ten seconds
+restarts that recovery interval. Brief recovery followed by another failure
+therefore does not send a new notice for the same outage. Stable recovery allows
+a subsequent outage to send its own notice. Identity and delivery state survive
+restarts, and transport attempts remain limited to three per outage.
+
+Health records include the failed phase (`schema`, `collect`, or `record`),
+SQLite error name when available, and elapsed time without raw SQL or input
+values. The most recent failure remains available during recovery; delivered
+notice records retain their original reason and diagnostics when SQLite becomes
+writable again. Database contention, observation deadlines, corruption, schema
+incompatibility and inaccessible files have distinct notification explanations.
 
 ```yaml
 supervision:
@@ -173,6 +277,12 @@ monitoring is a separate deployment responsibility.
 The published supervision boundaries are described in the
 [architecture guide](../architecture.md#worker-监督与失败恢复).
 
+A canceled or ignored task's incident can be dismissed once its workstream is
+terminal and the same lineage has no remaining work. Observation alone leaves
+the incident intact. The supervisor checks attempts, stored process exits,
+leases, recovery actions, and publication receipts again before dismissing it.
+Unknown effects or process ownership keep the incident open.
+
 ## Optional semantic diagnosis
 
 Configure a dedicated administrator-owned wrapper that accepts one JSON evidence
@@ -192,7 +302,9 @@ supervision:
 ```
 
 Only explicitly named model environment variables reach the wrapper. Business
-credentials and runtime configuration variables are prohibited. Its private HOME
+credentials and runtime configuration variables are prohibited. Model wrappers
+using Google application default credentials may explicitly allow
+`GOOGLE_APPLICATION_CREDENTIALS`; it is not inherited by default. Its private HOME
 and working directory reduce accidental configuration reuse; they are not an OS
 sandbox. The configured executable is trusted administration code, responsible
 for its model API and the no-tool contract.
@@ -422,3 +534,13 @@ is stale. Fresh independent coverage owns overlapping delay/control alerts.
 Disabling recovery stops new actions; outstanding claims still require draining
 or reconciliation. Keep receipts, unknown scopes and budgets until their effects
 have been verified. No production service or model profile is enabled merely by installing this code.
+
+When pre-publication finding processing needs an operator decision, GitHub requests
+submit only the existing question comment. Web requests create a local question
+without publication actions. Both record a structured question after the normal
+audit and delivery checks. The question pins the review round, snapshot,
+candidate, report and disposition checkpoint. After process exit is confirmed,
+an authenticated versioned reply can resume finding processing with the original
+candidate and reviews. The reply is context within the original scope; it cannot
+change routing, workers, base branch, publication targets or action permissions.
+A stale checkpoint, canceled request or stale question cannot resume the round.

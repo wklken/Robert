@@ -37,6 +37,10 @@ robert init
 Production defaults remain `~/.config/robert/config.yml` and
 `~/.local/share/robert/`.
 
+The runtime defines the execution order in Python. The packaged `workflow.yml`
+illustrates that order. Low-level cycle, loop and daemon commands retain
+`--workflow` as a compatibility path check. Its contents are descriptive.
+
 ## Testing
 
 Run focused tests first, then the complete gate:
@@ -77,6 +81,21 @@ python3 -m venv /tmp/robert-smoke
 Tests use isolated temporary configuration and data directories instead of
 production paths.
 
+For the same full suite with isolated module processes, use
+`python3 -B -m tests.run --workers 4`. The runner uses standard unittest discovery
+and the current interpreter, keeps each module's class/module fixtures together,
+and reports every child's output and elapsed time. Import errors, empty discovery
+and any failed child make the run fail. `python3 -B -m tests.run --list` prints the
+complete discovered test IDs without executing them. The serial discovery command
+above remains available for independent validation and timing comparisons.
+Module-level and decorator skips retain unittest semantics. Custom `load_tests`
+hooks require the serial command; the parallel runner rejects them because
+reloading test methods by name cannot preserve hook-created instances or suites.
+
+Keep real-time integration checks for database lock survival, HTTP backoff and
+process cleanup. Tests of repeated policy decisions can advance an explicit clock;
+fixture polling may use shorter intervals without bypassing exit or ownership checks.
+
 Tests follow the owning domains under `tests/work/`, `tests/execution/`,
 `tests/delivery/`, `tests/supervision/` and the other source boundaries. Adapter
 tests live under the corresponding `tests/adapters/` protocol directory. Model
@@ -100,7 +119,8 @@ The standard unittest discovery stays Docker-free.
 Pull requests and pushes to `main` run four jobs:
 
 - The complete unittest suite on Linux with Python 3.11 and 3.15, the minimum
-  and maximum supported versions.
+  and maximum supported versions. Each job runs up to four isolated test module
+  processes concurrently; every discovered test still runs on each version.
 - One Python 3.15 quality job for Ruff lint/format, import boundaries, the
   configured mypy targets, compilation and diff checks.
 - Secret scanning.
@@ -109,11 +129,25 @@ New commits to a pull request cancel its superseded CI run. Ordinary CI does
 not build packages, run installed-wheel smoke tests, audit dependencies or
 check documentation links.
 
+Ordinary CI caches the installed dependency environment in `.ci-venv`, shared
+by quality and test jobs when their interpreter and runner match. The key
+includes the exact interpreter version/path, runner OS image and architecture,
+checkout path, `pyproject.toml` and the setup action. Source-only changes reuse
+dependencies; changes to these inputs create a fresh environment. Only exact
+cache matches are accepted. Dependencies are saved before tests run, so a test
+failure does not discard a newly prepared environment. Robert itself is always
+installed from the current checkout without resolving dependencies again.
+GitHub's normal branch/cache access rules still apply; a first run or cache
+eviction installs dependencies normally. To refresh dependencies within unchanged
+version ranges, delete the matching `python-env-` cache entries in Actions.
+
 Pushing a `v*` release tag calls the same CI workflow with `full-checks: true`.
 It expands the test matrix to Linux/macOS and every supported Python version
 (3.11–3.15), audits each tested environment, and enables the installed-wheel
 smoke and documentation-link jobs. Quality and secret checks also run.
 The release publishing job waits for all these checks to pass.
+Release validation installs dependencies afresh, bypassing the environment
+cache, and keeps its separate audit environment and clean installed-wheel smoke.
 
 ## Architecture contracts
 
@@ -187,7 +221,7 @@ and atomic conditional updates through one persistence layer. The standard-libra
 module and the existing dependencies do not provide these mapping and query-building
 capabilities. The synchronous API supports the project's supported Python matrix; the
 runtime keeps sqlite3's existing transaction behavior and uses no ORM session identity map.
-The dependency range stays on the maintained 2.0 line. Its MIT license is compatible with
+The dependency range requires the maintained 2.1 line and excludes 2.2. Its MIT license is compatible with
 this project; release CI dependency audits include SQLAlchemy and its resolved dependencies.
 No additional database service, migration tool, or asynchronous driver is required.
 

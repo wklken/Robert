@@ -26,15 +26,10 @@ from robert_agent.foundation import values
 
 class ObservabilityTests(unittest.TestCase):
     def test_codex_turn_usage_is_counted(self):
-        from robert_agent.readmodels import usage
+        from robert_agent.adapters.processes import model_usage
 
-        parsed = usage.parse_cbc_stream_json(
-            json.dumps(
-                {
-                    "type": "turn.completed",
-                    "usage": {"input_tokens": 100, "output_tokens": 50},
-                }
-            )
+        parsed = model_usage.event_usage(
+            {"type": "turn.completed", "usage": {"input_tokens": 100, "output_tokens": 50}}
         )
         self.assertTrue(parsed["usage_available"])
         self.assertEqual(parsed["usage"]["input_tokens"], 100)

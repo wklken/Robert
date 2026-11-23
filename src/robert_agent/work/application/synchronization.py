@@ -21,10 +21,17 @@ from robert_agent.workflows import pr_health
 from robert_agent.persistence.schema import database as storage
 from robert_agent.configuration import command as validate_config
 from robert_agent.foundation.commands import ControlDeadlineExceeded
+from robert_agent.foundation import tapd_identity
 from robert_agent.adapters.github import read as github_read
 from robert_agent.adapters.github import recording as github_recording
 from robert_agent.adapters.github import budget as github_budget
+from robert_agent.adapters.notifications import wakeup as wakeup_notifier
+from robert_agent.work import queries as work_queries
+from robert_agent.work import repositories as work_repositories
 from robert_agent.work import scan_batches as scan_batches
+from robert_agent.work import tapd_policy, wakeup
+from robert_agent.work.application import tapd_scan
+from robert_agent.work import dependency_merge
 
 from robert_agent.work import source_policy as source_policy
 
@@ -50,7 +57,7 @@ def context_digest(repo, known_workstreams, *, config=None):
         repo["full_name"],
         repo["github_account"],
         sorted(repo.get("trusted_actors", [])),
-        sorted(known_workstreams),
+        sorted(item for item in known_workstreams if not tapd_identity.is_source_key(item)),
         review_allowlist(config, repo),
         os.environ.get("GH_HOST", "github.com"),
     ]
@@ -58,21 +65,29 @@ def context_digest(repo, known_workstreams, *, config=None):
 
 
 def scan_repo(config, repo, session, hints):
-    from robert_agent.work import queries as work_queries
-    from robert_agent.work import repositories as work_repositories
-
     db_path = config["db_path"]
-    recorded = github_recording.RecordingRunner(session)
+    automation = repo.get("pr_automation") or {}
+    ci = automation.get("ci") or {}
+    recorded = github_recording.RecordingRunner(session, max_job_log_chars=ci.get("max_failure_summary_chars", 0))
     with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
         repo_id = work_repositories.upsert_repo(conn, repo)
-        known = work_queries.load_known_workstreams(conn, repo_id)
+        known = {
+            workstream_id
+            for workstream_id in work_queries.load_known_workstreams(conn, repo_id)
+            if not tapd_identity.is_source_key(workstream_id)
+        }
         health_sources = {(row[0], row[1]) for row in db_read_workstreams.find_for_scan_repo(conn, repo_id)}
         sources = list(
             dict.fromkeys(
                 (row[4], row[5], (row[4], row[5]) in health_sources)
                 for row in work_queries.remote_source_rows(conn, repo_id)
+                if row[6] == "github"
             )
         )
+        dependency_numbers = {
+            int(json.loads(registration["metadata_json"])["dependency"]["pr_url"].rsplit("/", 1)[1])
+            for registration in dependency_merge.pending(conn, repo_id)
+        }
         pending_rows = db_read_github_scan_batches.find_for_scan_repo(conn, repo_id)
         pending = [(row[2],) for row in pending_rows]
         # A successful batch is not proof that every driving event created a
@@ -80,6 +95,18 @@ def scan_repo(config, repo, session, hints):
         # or its historical authorization without fresh source reads.
         trusted = list(repo.get("trusted_actors") or [])
         unlinked = db_read_github_events.scan_repo_filtered(conn, trusted, repo_id, repo["github_account"])
+        tapd = config.get("tapd") or {}
+        review_targets = (
+            [
+                number
+                for _stream, _source, number, project_key, _closed_at in db_read_workstreams.find_tapd_pull_requests_for_review_sync(
+                    conn, repo_id
+                )
+                if tapd_policy.project_for(tapd, project_key)
+            ]
+            if tapd.get("enabled")
+            else []
+        )
     hints = list(hints)
     recovery_events = [json.loads(encoded) for (encoded,) in unlinked]
     for raw in [
@@ -109,10 +136,8 @@ def scan_repo(config, repo, session, hints):
             remote_states[(source_type, number)] = github_sources.read_source_state(
                 repo["full_name"], source_type, number, recorded
             )
-            automation = repo.get("pr_automation") or {}
             if health_candidate and any((automation.get(k) or {}).get("enabled") for k in ("ci", "conflict")):
                 snapshot = pr_health.fetch_pr_snapshot(repo["full_name"], number, runner=recorded)
-                ci = automation.get("ci") or {}
                 if (
                     snapshot
                     and snapshot.get("author_login", "").casefold() == repo["github_account"].casefold()
@@ -123,9 +148,25 @@ def scan_repo(config, repo, session, hints):
                         repo["full_name"],
                         snapshot["head_sha"],
                         check_allowlist=ci["check_allowlist"],
+                        workflow_path_allowlist=ci.get("workflow_path_allowlist", []),
                         max_summary_chars=ci["max_failure_summary_chars"],
                         runner=recorded,
                     )
+        for number in sorted(dependency_numbers):
+            if ("pull_request", number) not in remote_states:
+                # Dependency reads do not import remote work. A verified merge
+                # can enqueue an observation for the normal local consumer.
+                remote_states[("pull_request", number)] = github_sources.read_source_state(
+                    repo["full_name"], "pull_request", number, recorded
+                )
+        # A newly closed PR's final review read must follow its state observation.
+        for number in review_targets:
+            try:
+                discover.reviewed_revisions(repo["full_name"], number, recorded, own_login=repo["github_account"])
+            except ControlDeadlineExceeded:
+                raise
+            except (OSError, subprocess.TimeoutExpired):
+                continue
         events = session.collect_events(
             repo,
             known_workstreams=known,
@@ -178,9 +219,23 @@ def scan_repo(config, repo, session, hints):
         events = source_policy.refresh_pending_events(
             events, [raw for (encoded,) in pending for raw in json.loads(encoded)], covered, repo
         )
-        identifier = scan_batches.save_batch(
-            db_path, repo_id, context, events, recorded.responses, complete_sources=covered
+        # Empty polling is not local work. Tracked or pending sources still
+        # need a batch for closure, remediation and current-authority checks.
+        dependency_ready = any(
+            dependency_merge.merge_proven(
+                remote_states.get(("pull_request", number)),
+                f"https://github.com/{repo['full_name']}/pull/{number}",
+            )
+            for number in dependency_numbers
         )
+        if events or sources or pending_rows or review_targets or dependency_ready:
+            identifier = scan_batches.save_batch(
+                db_path, repo_id, context, events, recorded.responses, complete_sources=covered
+            )
+        else:
+            identifier = None
+            with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
+                scan_batches.save_reads(conn, repo_id, recorded.responses, time.time())
     except Exception:
         # A later discovery/search failure must not resurrect an older successful
         # safety read. Publish both fresh state and explicit failed-read markers.
@@ -195,7 +250,31 @@ def scan_repo(config, repo, session, hints):
     return identifier
 
 
-def scan(config_path, *, runner=subprocess.run, refresh_context=False):
+def _wake_tapd_repositories(config, repos):
+    db_path = config["db_path"]
+    now = wakeup.utc_now()
+    ready = 0
+    with closing(db_database.connect(db_path, timeout=5)) as conn, conn:
+        for repo in repos:
+            repo_id = work_repositories.lookup_id(conn, repo["full_name"])
+            if not repo_id:
+                continue
+            pending = db_read_github_events.find_tapd_pending_triggers(conn, repo_id, 1)
+            ended = any(
+                provider == "tapd" and state == "closed"
+                for _stream, _task, _source, _key, _kind, _number, provider, state in work_queries.remote_source_rows(
+                    conn, repo_id
+                )
+            )
+            if not pending and not ended:
+                continue
+            wakeup.request_tapd_observation(conn, repo_id, now)
+            ready += 1
+    if ready:
+        wakeup_notifier.notify(db_path)
+
+
+def scan(config_path, *, runner=subprocess.run, refresh_context=False, tapd_runner=None):
     config = validate_config.validate_config(config_path, skip_external=True)
     if not config["ok"]:
         return config
@@ -240,20 +319,24 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False):
         if repo["github_account"] not in buckets:
             continue
         try:
-            batches.append(
-                scan_repo(
-                    config,
-                    repo,
-                    sessions[repo["github_account"]],
-                    buckets[repo["github_account"]].get(repo["full_name"], []),
-                )
+            identifier = scan_repo(
+                config,
+                repo,
+                sessions[repo["github_account"]],
+                buckets[repo["github_account"]].get(repo["full_name"], []),
             )
+            if identifier is not None:
+                batches.append(identifier)
         except ControlDeadlineExceeded:
             raise
         except (subprocess.SubprocessError, OSError, ValueError, db_errors.Error):
             failures.append({"repo": repo["full_name"], "reason": "repo_scan_failed"})
+    tapd = {} if refresh_context else tapd_scan.scan(config, runner=tapd_runner)
+    if tapd.get("enabled"):
+        _wake_tapd_repositories(config, repos)
     intervals = [session.poll_interval_seconds for session in sessions.values() if session.poll_interval_seconds]
     return {
+        **({"tapd": tapd} if tapd.get("enabled") else {}),
         "ok": not failures,
         "status": "scanned",
         "context_refresh": refresh_context,

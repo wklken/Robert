@@ -1,14 +1,14 @@
 """Shared queries operations for tasks."""
 
-from robert_agent.foundation.contracts.delivery import AuditStatus, OutputType, PublishStatus
+from robert_agent.foundation.contracts.delivery import AuditStatus, GitHubActionType, OutputType, PublishStatus
 from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
 from robert_agent.foundation.contracts.work import TaskKind, TaskLifecycle, WorkstreamLifecycle
 
 from functools import cache
 
-from robert_agent.persistence.expressions import sql_constant
+from robert_agent.persistence.expressions import sql_constant, valid_json_or_empty
 
-from robert_agent.persistence.predicates import runnable_task
+from robert_agent.persistence.predicates import occupied_attempt, runnable_task
 
 from sqlalchemy import (
     select,
@@ -1117,6 +1117,26 @@ def record_remote_terminal_state_locked(conn, workstream_id, workstream_id_2):
     return statements.read(conn, query3, {"p0": workstream_id, "p1": workstream_id_2})
 
 
+def find_active_tapd_opening_task(conn, ticket_stream, pr_url):
+    task, stream, action = tables["tasks"], tables["workstreams"], tables["github_actions"]
+    query = (
+        select(task.c.workstream_id, task.c.task_id)
+        .select_from(
+            task.join(stream, stream.c.active_task_id == task.c.task_id).join(
+                action, action.c.task_id == task.c.task_id
+            )
+        )
+        .where(
+            or_(stream.c.workstream_id == ticket_stream, stream.c.origin_workstream_id == ticket_stream),
+            action.c.action_type == GitHubActionType.OPEN_PR.value,
+            action.c.publish_status == PublishStatus.PUBLISHED.value,
+            action.c.target_url == pr_url,
+        )
+        .limit(1)
+    )
+    return statements.read(conn, query)
+
+
 def find_task_id_by_workstream_id_2(conn, workstream_id):
     query1 = (
         select(tables["tasks"].c["task_id"])
@@ -1309,8 +1329,10 @@ def find_for_task(conn, task_id):
     table2 = tables["workstreams"].alias("w")
     table3 = tables["repos"].alias("r")
     table4 = tables["github_sources"].alias("s")
-    query7 = select(table1.c["workstream_id"].label("id"), sql_constant(0).label("depth")).set_label_style(
-        LABEL_STYLE_NONE
+    query7 = (
+        select(table1.c["workstream_id"].label("id"), sql_constant(0).label("depth"))
+        .where(table1.c.task_id == bindparam("p0"))
+        .set_label_style(LABEL_STYLE_NONE)
     )
     cte8 = query7.cte("ancestry", recursive=True)
     table9 = tables["workstreams"].alias("w")
@@ -1375,19 +1397,17 @@ def find_for_task(conn, task_id):
 def collect_filtered(conn, items, value_1, value_2, value_3):
     table1 = tables["tasks"].alias("t")
     table2 = tables["workstreams"].alias("w")
-    table3 = tables["github_actions"].alias("ga")
-    query4 = (
+    attempt = tables["attempts"].alias("active_attempt")
+    active_attempt = (
         select(sql_constant(1))
-        .select_from(table3)
+        .select_from(attempt)
         .where(
             and_(
-                table3.c["task_id"] == table1.c["task_id"],
-                table3.c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
-                table3.c["publish_status"] == sql_constant(PublishStatus.NOT_PUBLISHED.value),
+                attempt.c.task_id == table1.c.task_id,
+                occupied_attempt(attempt),
             )
         )
-        .correlate_except(table3)
-        .set_label_style(LABEL_STYLE_NONE)
+        .correlate_except(attempt)
     )
     table6 = tables["github_actions"].alias("ga")
     query7 = (
@@ -1409,7 +1429,7 @@ def collect_filtered(conn, items, value_1, value_2, value_3):
         select(
             table1.c["task_id"],
             case(
-                (query4.exists(), sql_constant("publication_delayed")),
+                (query7.exists(), sql_constant("publication_delayed")),
                 else_=sql_constant("queue_delayed"),
             ),
         )
@@ -1429,6 +1449,7 @@ def collect_filtered(conn, items, value_1, value_2, value_3):
                 or_(
                     and_(
                         table1.c["lifecycle"] == sql_constant(TaskLifecycle.QUEUED.value),
+                        not_(active_attempt.exists()),
                         func.julianday(table1.c["created_at"])
                         < func.julianday(bindparam("p0")) - sql_constant(5.0) / sql_constant(1440),
                     ),
@@ -1658,7 +1679,7 @@ def ready_rows_filtered(conn, items, value_1, value_2):
     return statements.read(conn, _ready_rows_filtered_statement(), {"p0": value_1, "p1": value_2, "items": items})
 
 
-def github_followup_allows_new_subject_filtered(conn, items):
+def github_followup_allows_new_subject_filtered(conn, items, *, parked_task_id=None):
     query1 = (
         select(sql_constant(1))
         .select_from(tables["tasks"])
@@ -1683,6 +1704,8 @@ def github_followup_allows_new_subject_filtered(conn, items):
         .correlate_except(tables["tasks"])
         .set_label_style(LABEL_STYLE_NONE)
     )
+    if parked_task_id is not None:
+        query1 = query1.where(tables["tasks"].c.task_id != parked_task_id)
     return statements.read(conn, query1, {"items": items})
 
 
@@ -1754,7 +1777,7 @@ def _lifecycle_facts_filtered_2_statement():
         select(
             tables["tasks"].c["task_id"],
             func.json_extract(
-                tables["tasks"].c["metadata_json"],
+                valid_json_or_empty(tables["tasks"].c.metadata_json),
                 sql_constant("$.remediation_episode_id"),
             ),
         )

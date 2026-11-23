@@ -87,15 +87,26 @@ class GitHubSource(Base):
     repo_id: Mapped[str] = mapped_column(Text, ForeignKey("repos.repo_id", ondelete="CASCADE"))
     source_key: Mapped[str] = mapped_column(Text, unique=True)
     source_type: Mapped[str] = mapped_column(Text)
-    number: Mapped[int] = mapped_column(Integer)
+    number: Mapped[int | None] = mapped_column(Integer)
     html_url: Mapped[str | None] = mapped_column(Text)
     title: Mapped[str] = mapped_column(Text, server_default="")
     state: Mapped[str] = mapped_column(Text, server_default="open")
     author_login: Mapped[str | None] = mapped_column(Text)
     source_updated_at: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column(Text, server_default="{}")
+    provider: Mapped[str] = mapped_column(Text, server_default="github")
+    project_key: Mapped[str | None] = mapped_column(Text)
+    external_id: Mapped[str | None] = mapped_column(Text)
 
-    __table_args__ = (CheckConstraint("source_type IN ('issue', 'pull_request')"),)
+    __table_args__ = (
+        CheckConstraint("source_type IN ('issue', 'pull_request', 'tapd_story', 'tapd_bug')"),
+        CheckConstraint("provider IN ('github', 'tapd')"),
+        CheckConstraint(
+            "(provider = 'github' AND source_type IN ('issue', 'pull_request') AND number IS NOT NULL "
+            "AND project_key IS NULL AND external_id IS NULL) OR (provider = 'tapd' AND source_type IN "
+            "('tapd_story', 'tapd_bug') AND number IS NULL AND project_key IS NOT NULL AND external_id IS NOT NULL)"
+        ),
+    )
 
 
 class GitHubEvent(Base):
@@ -116,6 +127,8 @@ class GitHubEvent(Base):
     event_at: Mapped[str] = mapped_column(Text)
     payload_json: Mapped[str] = mapped_column(Text, server_default="{}")
 
+    __table_args__ = (Index("idx_github_events_recent", text("event_at DESC"), text("event_id DESC")),)
+
 
 class Workstream(Base):
     __tablename__ = "workstreams"
@@ -135,9 +148,16 @@ class Workstream(Base):
     created_at: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[str] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column(Text, server_default="{}")
+    public_ref: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         CheckConstraint("lifecycle IN ('active', 'completed', 'waiting_for_user', 'failed', 'canceled')"),
+        Index(
+            "idx_workstreams_public_ref",
+            "public_ref",
+            unique=True,
+            sqlite_where=text("public_ref IS NOT NULL"),
+        ),
     )
 
 
@@ -184,6 +204,7 @@ class Task(Base):
     metadata_json: Mapped[str] = mapped_column(Text, server_default="{}")
 
     __table_args__ = (
+        Index("idx_tasks_recent", text("updated_at DESC"), text("task_id DESC")),
         CheckConstraint("task_kind IN ('human_request', 'ci_remediation', 'merge_conflict_remediation')"),
         CheckConstraint(
             "lifecycle IN ('detected', 'authorized', 'classified', 'queued', 'running', 'completed', "
@@ -269,7 +290,7 @@ class WorkItem(Base):
 
     __table_args__ = (
         CheckConstraint("priority IN ('P0', 'P1', 'P2', 'P3')"),
-        CheckConstraint("origin_type IN ('web', 'github')"),
+        CheckConstraint("origin_type IN ('web', 'github', 'tapd')"),
         CheckConstraint("routing_mode IN ('auto', 'manual')"),
         CheckConstraint("version >= 1"),
         CheckConstraint(
@@ -405,3 +426,69 @@ class PrCiObservation(Base):
         UniqueConstraint("source_kind", "external_id", "attempt_no"),
         Index("idx_pr_ci_observations_episode", "episode_id", "completed_at"),
     )
+
+
+class Proposal(Base):
+    __tablename__ = "proposals"
+
+    proposal_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    source_identity: Mapped[str] = mapped_column(Text, unique=True)
+    repo_id: Mapped[str] = mapped_column(Text, ForeignKey("repos.repo_id"))
+    status: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer)
+    revision: Mapped[int] = mapped_column(Integer)
+    source_key: Mapped[str] = mapped_column(Text)
+    fingerprint: Mapped[str] = mapped_column(Text)
+    blocked_reason: Mapped[str] = mapped_column(Text, server_default="")
+    work_item_id: Mapped[str | None] = mapped_column(Text, ForeignKey("work_items.work_item_id", ondelete="SET NULL"))
+    workstream_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("workstreams.workstream_id", ondelete="SET NULL")
+    )
+    task_id: Mapped[str | None] = mapped_column(Text, ForeignKey("tasks.task_id", ondelete="SET NULL"))
+    created_at: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('evaluated', 'pending', 'held', 'discarded', 'approved', 'admitted', 'blocked')"),
+        CheckConstraint("version >= revision AND revision >= 0"),
+        Index("idx_proposals_status_updated", "status", "updated_at", "proposal_id"),
+    )
+
+
+class ProposalRevision(Base):
+    __tablename__ = "proposal_revisions"
+
+    proposal_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("proposals.proposal_id", ondelete="CASCADE"), primary_key=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_json: Mapped[str] = mapped_column(Text)
+    report_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+
+
+class ProposalDecision(Base):
+    __tablename__ = "proposal_decisions"
+
+    proposal_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("proposals.proposal_id", ondelete="CASCADE"), primary_key=True
+    )
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    action: Mapped[str] = mapped_column(Text)
+    actor: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("action IN ('approve', 'hold', 'discard')"),
+        UniqueConstraint("proposal_id", "idempotency_key"),
+    )
+
+
+class ProposalScan(Base):
+    __tablename__ = "proposal_scans"
+
+    slot: Mapped[str] = mapped_column(Text, primary_key=True)
+    completed_at: Mapped[str] = mapped_column(Text)

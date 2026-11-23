@@ -28,7 +28,7 @@ class ControlLaneRecoveryTests(unittest.TestCase):
         self.db = Path(tmp.name) / "state.sqlite3"
         storage.init_database(self.db)
 
-    def child(self, *, context=OLD_BOOT, active=False, identity=None):
+    def child(self, *, context=OLD_BOOT, active=False, identity=None, lane="scan"):
         when = "2099-01-01T00:00:00+00:00" if active else "2020-01-01T00:00:00+00:00"
         recorded = identity or {"pid": 999999, "process_group_id": 999999}
         if context is not None:
@@ -37,7 +37,7 @@ class ControlLaneRecoveryTests(unittest.TestCase):
             daemon_state.start_daemon_run(conn, config_path="/config", owner_id="old", now=when)
             daemon_state.acquire_daemon_lease(conn, resource_key="scope", owner_id="old", ttl_seconds=60, now=when)
             conn.execute(
-                "INSERT INTO github_control_children VALUES ('child','old','scan',?,'running')", (json.dumps(recorded),)
+                "INSERT INTO github_control_children VALUES ('child','old',?,?,'running')", (lane, json.dumps(recorded))
             )
 
     def state(self):
@@ -54,7 +54,7 @@ class ControlLaneRecoveryTests(unittest.TestCase):
                 side_effect=AssertionError("must not signal new boot PID"),
             ),
         ):
-            self.assertTrue(control_lane.recover(self.db, scope_key="scope", current_owner="new"))
+            self.assertTrue(control_lane.recover(self.db, scope_key="scope", current_owner="new")["ok"])
         self.assertEqual(self.state(), "stopped")
         with closing(sqlite3.connect(self.db)) as conn:
             evidence = json.loads(
@@ -80,14 +80,14 @@ class ControlLaneRecoveryTests(unittest.TestCase):
             mock.patch.object(control_lane, "_boot_context", return_value={**OLD_BOOT, "pid_namespace": "pid:[200]"}),
             mock.patch.object(os, "killpg", side_effect=AssertionError("unrelated process must not be signaled")),
         ):
-            self.assertFalse(control_lane.recover(self.db, scope_key="scope", current_owner="new"))
+            self.assertFalse(control_lane.recover(self.db, scope_key="scope", current_owner="new")["ok"])
         self.assertIsNone(process.poll())
         self.assertEqual(self.state(), "running")
 
     def test_legacy_unknown_can_be_inspected_and_explicitly_acknowledged(self):
         self.child(context=None)
         with mock.patch.object(worker_identity, "terminate_recorded_identity", return_value={"status": "attention"}):
-            self.assertFalse(control_lane.recover(self.db, scope_key="scope", current_owner="new"))
+            self.assertFalse(control_lane.recover(self.db, scope_key="scope", current_owner="new")["ok"])
         output = io.StringIO()
         with redirect_stdout(output):
             self.assertEqual(control_lane.main(["--db", str(self.db), "--list"]), 0)
@@ -104,7 +104,7 @@ class ControlLaneRecoveryTests(unittest.TestCase):
             ),
         ):
             self.assertEqual(control_lane.main(["--db", str(self.db), "--acknowledge-stopped", "--id", "child"]), 0)
-            self.assertTrue(control_lane.recover(self.db, scope_key="scope", current_owner="new"))
+            self.assertTrue(control_lane.recover(self.db, scope_key="scope", current_owner="new")["ok"])
         self.assertEqual(self.state(), "stopped")
         with closing(sqlite3.connect(self.db)) as conn:
             evidence = json.loads(
@@ -115,6 +115,53 @@ class ControlLaneRecoveryTests(unittest.TestCase):
         self.assertEqual(evidence["resolution"], "operator_acknowledged_stopped")
         self.assertEqual(evidence["child_id"], "child")
         self.assertEqual(evidence["acknowledged_by_uid"], os.getuid())
+
+    def test_known_previous_child_blocks_only_its_own_lane(self):
+        self.child(context=None, lane="publish")
+        with mock.patch.object(worker_identity, "terminate_recorded_identity", return_value={"status": "attention"}):
+            outcome = control_lane.recover(self.db, scope_key="scope", current_owner="new")
+        self.assertEqual(outcome, {"ok": False, "blocked_lanes": ["publish"], "unscoped_children": []})
+        self.assertEqual(self.state(), "running")
+
+    def test_unclassified_previous_child_keeps_global_startup_gate(self):
+        self.child(context=None, lane="legacy-unknown")
+        with mock.patch.object(worker_identity, "terminate_recorded_identity", return_value={"status": "attention"}):
+            outcome = control_lane.recover(self.db, scope_key="scope", current_owner="new")
+        self.assertEqual(outcome, {"ok": False, "blocked_lanes": [], "unscoped_children": ["child"]})
+        self.assertEqual(self.state(), "running")
+
+    def test_blocked_lane_does_not_skip_recovery_of_a_stopped_other_lane(self):
+        self.child(context=None)
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO github_control_children VALUES ('publish-child','old','publish',?,'running')",
+                (json.dumps({"pid": 999998, "process_group_id": 999998}),),
+            )
+
+        def terminate(recorded):
+            return {"status": "already_dead" if recorded["pid"] == 999998 else "attention"}
+
+        with (
+            mock.patch.object(worker_identity, "terminate_recorded_identity", side_effect=terminate),
+            mock.patch("robert_agent.adapters.processes.attempt.group_stopped", return_value=True),
+        ):
+            outcome = control_lane.recover(self.db, scope_key="scope", current_owner="new")
+        self.assertEqual(outcome, {"ok": False, "blocked_lanes": ["scan"], "unscoped_children": []})
+        self.assertEqual(self.state(), "running")
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(
+                conn.execute("SELECT status FROM github_control_children WHERE child_id='publish-child'").fetchone(),
+                ("stopped",),
+            )
+
+    def test_malformed_identity_keeps_global_startup_gate(self):
+        self.child(context=None)
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("UPDATE github_control_children SET identity_json='[]'")
+        with mock.patch.object(worker_identity, "terminate_recorded_identity") as terminate:
+            outcome = control_lane.recover(self.db, scope_key="scope", current_owner="new")
+        terminate.assert_not_called()
+        self.assertEqual(outcome, {"ok": False, "blocked_lanes": [], "unscoped_children": ["child"]})
 
     def test_acknowledgment_refuses_live_owner_without_clearing_record(self):
         self.child(active=True)
@@ -171,3 +218,41 @@ class ControlLaneRecoveryTests(unittest.TestCase):
                 {"execution_context": OLD_BOOT}, {**NEW_BOOT, "boot_source": "unknown_boot_format"}
             )
         )
+
+    def test_control_result_over_one_megabyte_is_not_truncated(self):
+        import time
+
+        lane = control_lane.ControlLane(self.db, "scan", "owner")
+        self.addCleanup(lane.stop)
+        lane.start(
+            [sys.executable, "-c", 'import json; print(json.dumps({"ok": True, "items": "x" * (1024 * 1024)}))'],
+            timeout_seconds=10,
+        )
+        deadline = time.monotonic() + 5
+        result = None
+        while time.monotonic() < deadline and result is None:
+            result = lane.poll()
+            if result is None:
+                time.sleep(0.01)
+        self.assertIsNotNone(result)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(result["items"]), 1024 * 1024)
+
+    def test_control_result_over_sixteen_megabytes_fails_closed(self):
+        import time
+
+        lane = control_lane.ControlLane(self.db, "scan", "owner")
+        self.addCleanup(lane.stop)
+        lane.start(
+            [sys.executable, "-c", 'import json; print(json.dumps({"ok": True, "items": "x" * (17 * 1024 * 1024)}))'],
+            timeout_seconds=10,
+        )
+        deadline = time.monotonic() + 5
+        result = None
+        while time.monotonic() < deadline and result is None:
+            result = lane.poll()
+            if result is None:
+                time.sleep(0.01)
+        self.assertIsNotNone(result)
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["status"], "child_failed")

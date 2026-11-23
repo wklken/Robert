@@ -11,6 +11,7 @@ from sqlalchemy.dialects.sqlite import dialect
 
 from robert_agent.persistence import statements
 from robert_agent.persistence.queries import attempts, notifications, tasks
+from robert_agent.persistence.schema import pre_pr_review
 from robert_agent.persistence.schema.database import init_database
 
 
@@ -19,6 +20,7 @@ class NotificationQueryPlanTests(unittest.TestCase):
         fixture = Path(__file__).parents[1] / "fixtures/persistence/pre_orm_5e0e952.sql"
         with closing(sqlite3.connect(":memory:")) as conn:
             conn.executescript(fixture.read_text())
+            pre_pr_review.initialize(conn)
             conn.execute(
                 "UPDATE attempts SET metadata_json=json_set(metadata_json, '$.resume.not_before_at', ?)",
                 ("2026-11-08T00:00:00+00:00",),
@@ -85,3 +87,26 @@ class NotificationQueryPlanTests(unittest.TestCase):
                 self.assertIn("idx_notifications_delivery_pending", plans[0])
                 self.assertIn("idx_notifications_delivery_pending", plans[1])
                 self.assertIn("idx_notifications_delivery_state", plans[2])
+
+    def test_recent_dashboard_queries_use_ordered_indexes(self):
+        from robert_agent.persistence.queries import github_actions, github_events, worker_results
+
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "state.db"
+            init_database(db)
+            with closing(sqlite3.connect(db)) as conn:
+                original = statements.read
+                plans = []
+
+                def inspect(connection, statement, parameters=()):
+                    compiled = statement.compile(dialect=dialect(paramstyle="qmark"))
+                    expanded = compiled.construct_expanded_state(dict(parameters))
+                    args = tuple(expanded.parameters[name] for name in expanded.positiontup)
+                    plans.append(connection.execute("EXPLAIN QUERY PLAN " + expanded.statement, args).fetchall())
+                    return original(connection, statement, parameters)
+
+                with patch.object(statements, "read", side_effect=inspect):
+                    for query in (tasks, github_actions, notifications, worker_results, github_events):
+                        query.find_for_build_dashboard_data(conn, 20)
+                for plan in plans:
+                    self.assertNotIn("USE TEMP B-TREE", str(plan))

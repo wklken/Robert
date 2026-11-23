@@ -231,3 +231,20 @@ class VerificationAuditTests(WorkerProtocolFixture):
 
         self.assertEqual(audit["status"], "failed")
         self.assertIn("expected_output new_pr", audit["safe_error"])
+
+    def test_final_audit_rejects_inconsistent_execution_evidence(self):
+        from robert_agent.delivery.application.audit import _audit_verification_entry
+
+        for entry in (
+            {"status": "passed"},
+            {"status": "passed", "exit_code": 1},
+            {"status": "failed", "exit_code": 0},
+            {"status": "passed", "exit_code": False},
+            {"status": "skipped", "exit_code": 0, "skipped_reason": "not run"},
+        ):
+            with self.subTest(entry=entry):
+                self.assertIsNotNone(
+                    _audit_verification_entry(
+                        {"command": "check", "purpose": "verify behavior", "required": True, **entry}, True
+                    )
+                )

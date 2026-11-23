@@ -201,7 +201,7 @@ def run_command_with_heartbeat(
     attempt_id,
     phase,
     command,
-    timeout_seconds=5400,
+    timeout_seconds=3600,
     heartbeat_interval_seconds=60,
     output_dir=None,
     tail_bytes=DEFAULT_TAIL_BYTES,

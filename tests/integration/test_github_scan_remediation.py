@@ -115,11 +115,66 @@ class GitHubScanRemediationTests(unittest.TestCase):
         ):
             result = synchronization.scan(fixture.config_path, runner=runner)
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["batch_count"], 3)
+        self.assertEqual(result["batch_count"], 1)
         self.assertEqual(observed, [item["full_name"] for item in config["repos"]])
         health.assert_called_once_with(repo["full_name"], 42, runner=mock.ANY)
         with closing(sqlite3.connect(config["db_path"])) as conn:
-            self.assertEqual(conn.execute("SELECT count(*) FROM github_scan_batches").fetchone()[0], 3)
+            self.assertEqual(conn.execute("SELECT count(*) FROM github_scan_batches").fetchone()[0], 1)
+
+    def test_scan_records_path_selected_workflow_logs_for_repair_replay(self):
+        from robert_agent.adapters.github.recording import ReplayRunner
+        from robert_agent.work.application import completion
+        from robert_agent.workflows import pr_health
+        from tests.support.pr_remediation_integration import PrRemediationIntegrationFixture
+
+        _, config, repo_id = self.fixture()
+        repo = config["repos"][0]
+        path = "dynamic/github-code-scanning/codeql"
+        repo["pr_automation"]["ci"].update(
+            enabled=True, check_mode="observed", check_allowlist=[], workflow_path_allowlist=[path]
+        )
+        now = "2026-11-19T00:00:00Z"
+        with closing(sqlite3.connect(config["db_path"])) as conn, conn:
+            conn.execute(
+                "INSERT INTO workstreams(workstream_id,repo_id,created_at,updated_at) VALUES ('origin',?,?,?)",
+                (repo_id, now, now),
+            )
+            completion._materialize_open_pr_workstream(
+                conn,
+                repo_id,
+                repo["full_name"],
+                "origin",
+                {"type": "open_pr", "url": f"https://github.com/{repo['full_name']}/pull/13"},
+                now,
+            )
+        runner = PrRemediationIntegrationFixture().runner(mergeable=True)
+        runner.responses[("gh", "api", "repos/example/backend/issues/13")] = {"state": "open"}
+        runner.responses.update(
+            {
+                (*key, "--hostname", "github.com"): value
+                for key, value in list(runner.responses.items())
+                if key[:2] == ("gh", "api")
+            }
+        )
+        runner.responses[
+            ("gh", "api", "repos/example/backend/actions/runs?head_sha=head-1&per_page=100", "--paginate", "--slurp")
+        ]["workflow_runs"][0].update(name="PR #13", path=path, workflow_id=51)
+        session = GitHubReadSession(config["db_path"], account=repo["github_account"], runner=runner)
+        with mock.patch.object(session, "collect_events", return_value=[]):
+            self.assertIsNotNone(synchronization.scan_repo(config, repo, session, []))
+        batch = scan_batches.next_batch(config["db_path"], repo_id)
+        replay = ReplayRunner(batch["responses"])
+        observations = pr_health.collect_ci_observations(
+            repo["full_name"],
+            "head-1",
+            check_allowlist=[],
+            workflow_path_allowlist=[path],
+            max_summary_chars=1000,
+            runner=replay,
+        )
+        summary = pr_health.summarize_ci(observations, [], workflow_path_allowlist=[path], check_mode="observed")
+        self.assertEqual(summary["status"], "failing", summary)
+        self.assertIn("expected 1 got 2", summary["failures"][0]["failure_summary"])
 
     def test_child_attention_is_reported_once_without_detaching_the_child(self):
         from robert_agent.runtime.control import ControlLane

@@ -112,7 +112,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn(
             'class="underline-nav-item selected" data-primary-view="operations" href="/operations"', operations_html
         )
-        self.assertIn('data-i18n="primaryWork"', operations_html)
+        self.assertIn('data-i18n="navWork"', operations_html)
         self.assertIn('data-i18n="navHistory"', operations_html)
         self.assertIn('data-i18n="navKnowledge"', operations_html)
         self.assertIn("navBoard: 'Board'", operations_html)
@@ -184,6 +184,43 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertIn(b'localStorage.setItem("robertWorkbenchTheme"', workbench_js)
         self.assertIn(b"function applyTranslations()", workbench_js)
 
+    def test_all_workbench_views_share_the_same_brand_and_navigation(self):
+        import re
+
+        from robert_agent.interfaces.web import server as web
+
+        def shell(route):
+            status, _, page = web.build_http_response(route, self.root / "unused.sqlite3")
+            self.assertEqual(status, 200)
+            icon = re.findall(rb'<link rel="icon"[^>]+>', page)
+            brand = re.findall(rb'<a class="brand"[^>]*>.*?</a>', page, re.DOTALL)
+            nav = re.findall(rb'<nav class="underline-nav"[^>]*>(.*?)</nav>', page, re.DOTALL)
+            self.assertEqual(len(nav), 1)
+            links = re.findall(rb'<a [^>]*href="([^"]+)"[^>]*>.*?</a>', nav[0], re.DOTALL)
+            self.assertEqual(len(icon), 1)
+            self.assertEqual(len(brand), 1)
+            self.assertEqual(
+                links,
+                [
+                    b"/work",
+                    b"/board",
+                    b"/work?bucket=history",
+                    b"/timeline",
+                    b"/proposals",
+                    b"/operations",
+                    b"/operations#knowledge",
+                ],
+            )
+            self.assertEqual(nav[0].count(b'class="nav-glyph"'), len(links))
+            self.assertEqual(page.count(b'id="theme-select"'), 1)
+            self.assertEqual(page.count(b'id="language-select"'), 1)
+            return icon, brand
+
+        baseline = shell("/work")
+        for route in ("/", "/board", "/work?bucket=history", "/operations", "/timeline", "/proposals"):
+            with self.subTest(route=route):
+                self.assertEqual(shell(route), baseline)
+
     def test_web_routes_root_to_html_and_data_json_to_payload(self):
         from robert_agent.interfaces.web import server as web
 
@@ -224,9 +261,9 @@ class WebPagesAndAssetsTests(SummaryFixture):
         self.assertEqual(headers["content-type"], "text/html; charset=utf-8")
         for text in (
             b"Backlog",
-            b"TODO",
-            b"Doing",
-            b"Waiting for you",
+            b"Queued",
+            b"Executing",
+            b"Needs attention",
             b"Review",
             b"Done",
             b"New task",

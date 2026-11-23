@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Robert · Proposals</title>
+  <!-- workbench-head -->
+  <link rel="stylesheet" href="/assets/github-shell.css">
+  <link rel="stylesheet" href="/assets/proposals.css">
+  <script src="/assets/proposals.js" defer></script>
+</head>
+<body>
+  <header class="global-bar">
+    <!-- workbench-brand -->
+    <div class="global-actions">
+      <!-- workbench-preferences -->
+    </div>
+  </header>
+  <header class="repo-header">
+    <!-- workbench-navigation -->
+  </header>
+  <main class="workbench-page">
+    <header class="workbench-page-heading">
+      <h1 data-i18n="navProposals">Proposals</h1>
+      <label class="shell-select"><span data-i18n="status">Status</span>
+        <select id="proposal-filter">
+          <option value="pending" data-i18n="pending">Needs decision</option>
+          <option value="held" data-i18n="held">On hold</option>
+          <option value="approved" data-i18n="approved">Approved, awaiting admission</option>
+          <option value="admitted" data-i18n="admitted">Admitted</option>
+          <option value="blocked" data-i18n="blocked">Needs review</option>
+          <option value="discarded" data-i18n="discarded">Discarded</option>
+          <option value="all" data-i18n="all">All</option>
+        </select>
+      </label>
+    </header>
+    <p id="proposal-message" role="status" data-i18n="loading">Loading proposals…</p>
+    <ul id="proposal-list" class="proposal-list"></ul>
+    <article id="proposal-detail" class="proposal-detail" hidden></article>
+  </main>
+</body>
+</html>

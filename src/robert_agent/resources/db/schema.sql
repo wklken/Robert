@@ -42,14 +42,21 @@ CREATE TABLE IF NOT EXISTS github_sources (
   source_id TEXT PRIMARY KEY,
   repo_id TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
   source_key TEXT NOT NULL UNIQUE,
-  source_type TEXT NOT NULL CHECK (source_type IN ('issue', 'pull_request')),
-  number INTEGER NOT NULL,
+  source_type TEXT NOT NULL CHECK (source_type IN ('issue', 'pull_request', 'tapd_story', 'tapd_bug')),
+  number INTEGER,
   html_url TEXT,
   title TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL DEFAULT 'open',
   author_login TEXT,
   source_updated_at TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}'
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  provider TEXT NOT NULL DEFAULT 'github' CHECK (provider IN ('github', 'tapd')),
+  project_key TEXT,
+  external_id TEXT,
+  CHECK ((provider = 'github' AND source_type IN ('issue', 'pull_request') AND number IS NOT NULL
+          AND project_key IS NULL AND external_id IS NULL)
+      OR (provider = 'tapd' AND source_type IN ('tapd_story', 'tapd_bug') AND number IS NULL
+          AND project_key IS NOT NULL AND external_id IS NOT NULL))
 );
 
 CREATE TABLE IF NOT EXISTS github_events (
@@ -75,7 +82,8 @@ CREATE TABLE IF NOT EXISTS workstreams (
   active_task_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}'
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  public_ref TEXT
 );
 
 CREATE TABLE IF NOT EXISTS workstream_sources (
@@ -155,7 +163,7 @@ CREATE TABLE IF NOT EXISTS work_items (
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   priority TEXT NOT NULL DEFAULT 'P2' CHECK (priority IN ('P0', 'P1', 'P2', 'P3')),
-  origin_type TEXT NOT NULL CHECK (origin_type IN ('web', 'github')),
+  origin_type TEXT NOT NULL CHECK (origin_type IN ('web', 'github', 'tapd')),
   origin_source_id TEXT REFERENCES github_sources(source_id) ON DELETE SET NULL,
   routing_mode TEXT NOT NULL DEFAULT 'auto' CHECK (routing_mode IN ('auto', 'manual')),
   requested_worker TEXT,
@@ -348,6 +356,19 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   error_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS diagnostic_run_summaries (
+  summary_id TEXT PRIMARY KEY NOT NULL,
+  summary_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_run_summary_refs (
+  run_id TEXT PRIMARY KEY NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+  summary_id TEXT NOT NULL REFERENCES diagnostic_run_summaries(summary_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_run_summary_refs_summary
+ON agent_run_summary_refs(summary_id);
+
 CREATE TABLE IF NOT EXISTS run_steps (
   step_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
@@ -372,6 +393,9 @@ CREATE TABLE IF NOT EXISTS run_repo_steps (
   error_json TEXT,
   UNIQUE(run_id, repo_id, step_key)
 );
+
+CREATE INDEX IF NOT EXISTS idx_run_repo_steps_consumer_completed
+ON run_repo_steps(repo_id, step_key, status, finished_at);
 
 CREATE TABLE IF NOT EXISTS leases (
   lease_id TEXT PRIMARY KEY,
@@ -530,6 +554,15 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_retention
 ON agent_runs(status, julianday(finished_at));
 CREATE INDEX IF NOT EXISTS idx_agent_runs_started
 ON agent_runs(started_at DESC, run_id DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_detail_compaction
+ON agent_runs(status,
+  json_extract(CASE WHEN json_valid(summary_json) THEN summary_json ELSE '{}' END, '$.diagnostics.detail_status'),
+  julianday(finished_at));
+CREATE INDEX IF NOT EXISTS idx_run_steps_summary_references
+ON run_steps(step_key,
+  json_type(CASE WHEN json_valid(output_json) THEN output_json ELSE '{}' END, '$.summary_ref'),
+  json_type(CASE WHEN json_valid(output_json) THEN output_json ELSE '{}' END, '$.repo_summaries_ref'),
+  status);
 CREATE INDEX IF NOT EXISTS idx_daemon_events_retention
 ON daemon_events(julianday(created_at));
 CREATE INDEX IF NOT EXISTS idx_leases_released_retention
@@ -589,6 +622,16 @@ CREATE TABLE IF NOT EXISTS github_scan_reads (
   response_json TEXT,
   observed_at REAL NOT NULL,
   PRIMARY KEY(repo_id,command_key)
+);
+
+-- One TAPD comment discovery watermark per project, written in the transaction that records its events.
+-- pending_json keeps first-observed requests whose ticket could not be read, for retry by ticket.
+CREATE TABLE IF NOT EXISTS tapd_scan_state (
+  project_key TEXT PRIMARY KEY,
+  watermark_created TEXT NOT NULL,
+  watermark_comment_id TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  pending_json TEXT NOT NULL DEFAULT '[]'
 );
 
 -- Supervision records supplement the business state and do not own tasks.
@@ -695,3 +738,66 @@ CREATE TABLE IF NOT EXISTS dispatch_requests (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dispatch_requests_pending ON dispatch_requests(status, created_at);
+
+-- Recent dashboard pages read in index order instead of sorting all history.
+CREATE INDEX IF NOT EXISTS idx_tasks_recent ON tasks(updated_at DESC, task_id DESC);
+CREATE INDEX IF NOT EXISTS idx_github_actions_recent ON github_actions(created_at DESC, action_id DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_recent ON notifications(created_at DESC, notification_id DESC);
+CREATE INDEX IF NOT EXISTS idx_worker_results_recent ON worker_results(created_at DESC, result_id DESC);
+CREATE INDEX IF NOT EXISTS idx_github_events_recent ON github_events(event_at DESC, event_id DESC);
+
+CREATE TABLE IF NOT EXISTS proposals (
+  proposal_id TEXT PRIMARY KEY NOT NULL,
+  source_identity TEXT NOT NULL UNIQUE,
+  repo_id TEXT NOT NULL REFERENCES repos(repo_id),
+  status TEXT NOT NULL CHECK (status IN ('evaluated', 'pending', 'held', 'discarded', 'approved', 'admitted', 'blocked')),
+  version INTEGER NOT NULL,
+  revision INTEGER NOT NULL,
+  source_key TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  blocked_reason TEXT NOT NULL DEFAULT '',
+  work_item_id TEXT REFERENCES work_items(work_item_id) ON DELETE SET NULL,
+  workstream_id TEXT REFERENCES workstreams(workstream_id) ON DELETE SET NULL,
+  task_id TEXT REFERENCES tasks(task_id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (version >= revision AND revision >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_proposals_status_updated ON proposals(status, updated_at, proposal_id);
+
+CREATE TABLE IF NOT EXISTS proposal_revisions (
+  proposal_id TEXT NOT NULL REFERENCES proposals(proposal_id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  source_json TEXT NOT NULL,
+  report_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (proposal_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS proposal_decisions (
+  proposal_id TEXT NOT NULL REFERENCES proposals(proposal_id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  revision INTEGER NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('approve', 'hold', 'discard')),
+  actor TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (proposal_id, version),
+  UNIQUE (proposal_id, idempotency_key)
+);
+
+CREATE TABLE IF NOT EXISTS proposal_scans (
+  slot TEXT PRIMARY KEY NOT NULL,
+  completed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS model_usage (
+  kind TEXT NOT NULL,
+  call_id TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  usage_json TEXT NOT NULL,
+  PRIMARY KEY(kind, call_id)
+);
+CREATE INDEX IF NOT EXISTS idx_model_usage_scope ON model_usage(kind, scope_id, recorded_at);

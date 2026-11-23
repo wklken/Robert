@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from robert_agent.context.memory_policy import memory_delta_error
+
 from robert_agent.foundation.contracts.delivery import (
     AuditStatus,
     GitHubActionType,
@@ -7,7 +9,7 @@ from robert_agent.foundation.contracts.delivery import (
     ReviewAction,
     VerificationStatus,
 )
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskKind
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, SourceProvider, TaskKind
 
 import argparse
 import json
@@ -16,9 +18,12 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
+from robert_agent.delivery import contract as result_contract
 from robert_agent.delivery import policies
+from robert_agent.foundation import tapd_identity
 from robert_agent.foundation.commands import emit
 from robert_agent.security import redaction
+from robert_agent.work import tapd_policy
 from robert_agent.workflows.review import publish as review_publish
 from robert_agent.workflows.vote import publish as vote_publish
 
@@ -54,6 +59,7 @@ CLASSIFICATION_RECOMMENDED_ROUTES = {
     "review-pr",
     "waiting-for-user",
 }
+TAPD_RECOMMENDED_ROUTES = CLASSIFICATION_RECOMMENDED_ROUTES & tapd_policy.ROUTE_IDS
 BRANCH_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 MAX_BRANCH_SLUG_LENGTH = 60
 
@@ -220,7 +226,18 @@ def action_scope_violation(actions, action_scope):
     scoped_sources = {
         (source.get("source_type"), source.get("number")) for source in raw_sources if isinstance(source, dict)
     }
+    tapd_targets = {
+        url for url in result_contract.target_urls(action_scope) if tapd_identity.parse_ticket_url(url) is not None
+    }
     for action in actions:
+        if action.get("type") == GitHubActionType.COMMENT and not vote_publish.is_vote(action):
+            target_url = _string_value(action, "target_url", "url")
+            if tapd_identity.parse_ticket_url(target_url) is not None:
+                if target_url not in tapd_targets:
+                    return "comment target TAPD ticket is outside the workstream"
+                continue
+            if tapd_targets:
+                return "a TAPD request can only be answered on its own TAPD ticket"
         action_type = action.get("type")
         if action_type == GitHubActionType.SUBMIT_PR_REVIEW:
             try:
@@ -334,7 +351,7 @@ def _audit_expected_actions(output_type, actual_types):
     return None
 
 
-def _audit_pr_review_author_mention(result):
+def _audit_pr_review_author_mention(result, action_scope):
     if result.get("output_type") != OutputType.PR_REVIEW_COMMENT:
         return None
     comment_actions = [
@@ -346,8 +363,14 @@ def _audit_pr_review_author_mention(result):
         pr_author_login = _string_value(action, "pr_author_login")
         if not pr_author_login:
             return "pr_review_comment comment action requires pr_author_login"
-        required_mention = f"@{pr_author_login}"
-        if required_mention not in _string_value(action, "body"):
+        decision_login = _string_value(action, "decision_owner_login")
+        if decision_login and action_scope is not None and "decision_owner" in action_scope:
+            expected = (action_scope.get("decision_owner") or {}).get("login") or "wklken"
+            if decision_login != expected:
+                return "pr_review_comment decision owner does not match the confirmed request owner"
+        # Historical normalized results have only the author field.
+        required_mention = f"@{decision_login or pr_author_login}"
+        if not re.search(re.escape(required_mention) + r"(?![A-Za-z0-9-])", _string_value(action, "body")):
             return f"pr_review_comment comment body must mention {required_mention}"
     return None
 
@@ -503,8 +526,14 @@ def _audit_verification_entry(entry, allow_skipped):
         return "skipped verification entry requires skipped_reason"
     if entry.get("required") is True and status == VerificationStatus.SKIPPED.value and not allow_skipped:
         return "required verification cannot be skipped for this route"
-    if "exit_code" in entry and not isinstance(entry.get("exit_code"), int):
-        return "verification entry exit_code must be an integer"
+    if status == VerificationStatus.SKIPPED.value:
+        if "exit_code" in entry:
+            return "skipped verification cannot claim an execution exit code"
+    else:
+        if type(entry.get("exit_code")) is not int:
+            return "executed verification requires an integer exit code"
+        if (status == VerificationStatus.PASSED.value) != (entry["exit_code"] == 0):
+            return "verification status and exit code disagree"
     if "required" in entry and not isinstance(entry.get("required"), bool):
         return "verification entry required must be a boolean"
     return None
@@ -598,6 +627,29 @@ def audit_result(
                 "ok": False,
                 "status": AuditStatus.FAILED.value,
                 "safe_error": "Issue dispatch implementation requires an Issue result comment as well as a PR.",
+            }
+    if (
+        origin_type == SourceProvider.TAPD
+        and result.get("output_type") == OutputType.CLASSIFICATION_RESULT
+        and result.get("recommended_route") not in {None, "", *TAPD_RECOMMENDED_ROUTES}
+    ):
+        return {
+            "ok": False,
+            "status": AuditStatus.FAILED.value,
+            "safe_error": "TAPD classification requires an analysis, clarification or pull request route.",
+        }
+    if origin_type == SourceProvider.TAPD and result.get("output_type") in {
+        OutputType.NEW_PR,
+        OutputType.UPDATE_EXISTING_PR,
+    }:
+        types = [action.get("type") for action in result.get("planned_github_actions", [])]
+        comments = [index for index, kind in enumerate(types) if kind == GitHubActionType.COMMENT]
+        others = [index for index, kind in enumerate(types) if kind != GitHubActionType.COMMENT]
+        if not comments or (others and min(comments) < max(others)):
+            return {
+                "ok": False,
+                "status": AuditStatus.FAILED.value,
+                "safe_error": "TAPD pull request results end with a comment on the TAPD ticket after the pull request actions.",
             }
     if origin_type == "web":
         if not result.get("consumed_work_item_event_ids"):
@@ -700,11 +752,21 @@ def audit_result(
                 "status": AuditStatus.FAILED.value,
                 "safe_error": question_error,
             }
-        if origin_type == "github" and GitHubActionType.COMMENT.value not in actual_types:
+        if origin_type in set(SourceProvider) and GitHubActionType.COMMENT.value not in actual_types:
             return {
                 "ok": False,
                 "status": AuditStatus.FAILED.value,
                 "safe_error": "GitHub waiting_for_user requires a public comment action",
+            }
+
+    if "memory_delta" in result:
+        memory_error = memory_delta_error(result["memory_delta"])
+        if memory_error:
+            return {
+                "ok": False,
+                "status": AuditStatus.POLICY_VIOLATION.value,
+                "violations": ["invalid_memory_delta"],
+                "safe_error": memory_error,
             }
 
     redaction_violation = _audit_public_text(actions)
@@ -743,7 +805,7 @@ def audit_result(
             "safe_error": expected_action_error,
         }
 
-    pr_review_author_error = _audit_pr_review_author_mention(result)
+    pr_review_author_error = _audit_pr_review_author_mention(result, action_scope)
     if pr_review_author_error:
         return {
             "ok": False,

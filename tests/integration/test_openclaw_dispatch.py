@@ -3,6 +3,7 @@ import json
 import sqlite3
 from types import SimpleNamespace
 
+from tests.support.work_items import example_choices
 from tests.support.dispatch_requests import DispatchFixture
 from robert_agent.work.application import dispatch_requests, admission
 from robert_agent.delivery.application import submission, publish, notifications
@@ -221,7 +222,8 @@ class OpenClawDispatchTests(DispatchFixture):
 
         notifications.deliver_pending(self.db_path, config=self.config, runner=send)
         notifications.deliver_pending(self.db_path, config=self.config, runner=send)
-        self.assertEqual(sum("dispatch_completed" in item for item in sent), 1)
+        self.assertEqual(sum("请求已完成，结果已发布" in item for item in sent), 1)
+        self.assertTrue(all("dispatch_completed" not in item for item in sent))
         self.assertTrue(any("issuecomment-987" in item for item in sent))
 
     def test_implementation_is_selected_without_user_specifying_pr(self):
@@ -287,7 +289,11 @@ class OpenClawDispatchTests(DispatchFixture):
                     "verification": [],
                     "handoff": "等待确认范围",
                     "used_skills": [],
-                    "operator_question": {"kind": "clarification", "summary": "调查哪个启动阶段？", "choices": []},
+                    "operator_question": {
+                        "kind": "clarification",
+                        "summary": "调查哪个启动阶段？",
+                        "choices": example_choices(),
+                    },
                 },
             },
         )

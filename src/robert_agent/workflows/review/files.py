@@ -7,6 +7,7 @@ untrusted data; no field here grants publication or execution authority.
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import tempfile
 
@@ -25,14 +26,19 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def safe_path(path, root):
+def safe_path(path, root, *, subdirectory=None):
     """Reject links/escapes inside an already trusted artifact directory."""
-    root = Path(root).resolve()
+    configured_root = Path(os.path.abspath(root))
+    root = configured_root.resolve()
     path = Path(os.path.abspath(path))
     try:
-        relative = path.relative_to(root)
+        relative = path.relative_to(configured_root if path.is_relative_to(configured_root) else root)
     except ValueError as exc:
         raise ValueError("review artifact is outside its registered directory") from exc
+    if subdirectory is not None and not relative.is_relative_to(subdirectory):
+        raise ValueError("review artifact is outside its registered directory")
+    # Resolve only the trusted root; links below it must remain visible to the checks.
+    path = root / relative
     current = root
     for part in relative.parts:
         current = current / part
@@ -80,6 +86,8 @@ def _text(value, label):
 
 def _source_path(value):
     _text(value, "source path")
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("source location contains control characters")
     path = PurePosixPath(value)
     if path.is_absolute() or ".." in path.parts or "\\" in value or value in (".", ""):
         raise ValueError("source location must be a relative repository path")
@@ -115,7 +123,7 @@ def _finding(finding, dismissed=False):
 
 
 def read_result(path, manifest):
-    path = safe_path(path, Path(manifest["artifact_root"]) / "runs")
+    path = safe_path(path, manifest["artifact_root"], subdirectory="runs")
     if path.name != "result.json":
         raise ValueError("only the committed result.json is accepted")
     document = _read_json(path)
@@ -143,6 +151,13 @@ def read_result(path, manifest):
     return document
 
 
+def _code_span(text):
+    # CommonMark closes a code span only with a run matching its opener.
+    fence = "`" * (1 + max((len(run) for run in re.findall(r"`+", text)), default=0))
+    content = f" {text} " if "`" in text else text
+    return f"{fence}{content}{fence}"
+
+
 def _location(finding):
     location = finding["location"]
     return f"{location['path']}:{location['line']}"
@@ -150,7 +165,7 @@ def _location(finding):
 
 def _finding_lines(finding):
     return [
-        f"- **[{finding['severity'].upper()}] {finding['title']}** — `{_location(finding)}`",
+        f"- **[{finding['severity'].upper()}] {finding['title']}** — {_code_span(_location(finding))}",
         f"  - 触发：{finding['trigger']}",
         f"  - 影响：{finding['impact']}",
         f"  - 证据：{finding['evidence']}",
@@ -175,12 +190,17 @@ def render_individual(result, worker_id, model):
     if not result["dismissed_findings"]:
         lines.append("无")
     coverage = result["coverage"]
+    coverage_lines = [json.dumps(coverage, ensure_ascii=False)]
+    # Existing reports are byte-checked during resume. Fence only paths that
+    # the previous validator could not accept, preserving all older artifacts.
+    if any("`" in path for key in ("reviewed_paths", "unreviewed_paths") for path in coverage[key]):
+        coverage_lines = ["```json", *coverage_lines, "```"]
     lines.extend(
         [
             "",
             "## Coverage",
             "",
-            json.dumps(coverage, ensure_ascii=False),
+            *coverage_lines,
             "",
             f"**合并建议**：{result['merge_recommendation']}",
             "",
@@ -204,7 +224,7 @@ def _validated_records(manifest, records):
         for key in ("model", "run_id"):
             _text(record.get(key), key)
         for kind in ("result", "report"):
-            path = safe_path(record.get(f"{kind}_path", ""), Path(manifest["artifact_root"]) / "runs")
+            path = safe_path(record.get(f"{kind}_path", ""), manifest["artifact_root"], subdirectory="runs")
             if path.name != f"{kind}.json" and not (kind == "report" and path.name == "report.md"):
                 raise ValueError("unexpected selected artifact filename")
             try:
@@ -240,7 +260,7 @@ def write_synthesis_inputs(manifest, records):
 
 def read_evaluation(path, manifest, records):
     documents = _validated_records(manifest, records)
-    path = safe_path(path, Path(manifest["artifact_root"]) / "synthesis")
+    path = safe_path(path, manifest["artifact_root"], subdirectory="synthesis")
     if path.name != "evaluation.json":
         raise ValueError("only the committed evaluation.json is accepted")
     document = _read_json(path)
@@ -288,15 +308,18 @@ def render_merged(manifest, records, evaluation):
     models = " + ".join(labels)
     distinct = len({record["model"] for record in records}) == len(records)
     mode = "多模型" if distinct and all(record["model"] != "default" for record in records) else "多 reviewer"
+    title = f"PR #{manifest['pr_number']}" if manifest["pr_number"] else "候选提交"
+    trigger = manifest.get("trigger_url") or manifest.get("trigger_event_fingerprint", manifest["round_id"])
+    context = f"；触发：{trigger}" if manifest["pr_number"] else ""
     lines = [
-        f"# PR #{manifest['pr_number']} Code Review 汇总报告",
+        f"# {title} Code Review 汇总报告",
         "",
         f"> 由 {models} {mode} review，主 agent 汇总整理。",
         "",
         "## Report",
         "",
         f"审查轮次：{manifest.get('round_no', manifest['round_id'])}；代码快照：{manifest['head_sha']}；"
-        f"目标分支：{manifest['base_ref']}；触发：{manifest.get('trigger_url') or manifest.get('trigger_event_fingerprint', manifest['round_id'])}。",
+        f"目标分支：{manifest['base_ref']}{context}。",
         "",
     ]
     for severity in SEVERITIES:
@@ -314,37 +337,15 @@ def render_merged(manifest, records, evaluation):
     dismissed = [item for item in evaluation["items"] if item["disposition"] != "confirmed"]
     for finding in dismissed:
         label = "误报" if finding["disposition"] == "dismissed" else "需人工确认"
-        lines.append(f"- **{label}：{finding['title']}** — `{_location(finding)}`：{finding['reason']}")
+        lines.append(f"- **{label}：{finding['title']}** — {_code_span(_location(finding))}：{finding['reason']}")
     if not dismissed:
         lines.append("无")
     lines.extend(
         [
             "",
-            "### Review Coverage and Limitations",
-            "",
-            "以下为各 reviewer 声明的审查范围；未发现缺陷不代表验证全部行为，模型一致也不替代验证证据。",
-            "",
-        ]
-    )
-    for record in records:
-        coverage = result_lookup[record["worker_id"]]["coverage"]
-        reviewed = ", ".join(f"`{path}`" for path in coverage["reviewed_paths"]) or "未列出"
-        unreviewed = ", ".join(f"`{path}`" for path in coverage["unreviewed_paths"]) or "未列出（不表示完整覆盖）"
-        lines.extend(
-            [
-                f"#### {record['worker_id']} ({record['model']})",
-                "",
-                f"- 已审查：{reviewed}",
-                f"- 未审查：{unreviewed}",
-                f"- 检查、局限与待确认事项：{coverage['notes']}",
-                "",
-            ]
-        )
-    lines.extend(
-        [
             "### Agent Agreement Summary",
             "",
-            "| Issue | " + " | ".join(_table(label) for label in labels) + " | Verdict |",
+            "| Issue | " + " | ".join(_table(record["worker_id"]) for record in records) + " | Verdict |",
             "|-------|" + "|".join("----------" for _ in records) + "|---------|",
         ]
     )

@@ -15,7 +15,7 @@ def build_launch(
     reasoning_effort,
     prompt_transport="stdin",
     environment_allowlist=(),
-    timeout_seconds=5400,
+    timeout_seconds=3600,
 ):
     command = [*command_argv, "-p"]
     if model != "default":
@@ -47,4 +47,7 @@ def build_launch(
         stdout_format="stream-json",
         environment_allowlist=tuple(environment_allowlist),
         timeout_seconds=int(timeout_seconds),
+        # The wrapper otherwise updates and exits successfully before running
+        # the model, leaving unattended reviews without their result artifact.
+        environment=(("TCLAUDE_SKIP_UPDATE", "1"),),
     )

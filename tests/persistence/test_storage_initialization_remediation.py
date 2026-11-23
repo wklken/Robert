@@ -150,3 +150,29 @@ class StorageInitializationRemediationTests(unittest.TestCase):
         self.assertEqual(self.markers(), [])
         storage.init_database(self.db)
         self.assertEqual(self.markers(), [(name,) for name in DATA_MIGRATIONS])
+
+    def test_late_failure_rolls_back_converted_rows_and_backfill(self):
+        with patch.object(vote_schema, "initialize", side_effect=RuntimeError("late failure")):
+            with self.assertRaisesRegex(RuntimeError, "late failure"):
+                storage.init_database(self.db)
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(
+                conn.execute("SELECT workstream_id FROM tasks WHERE task_id='t'").fetchone()[0], "github:example/r#1"
+            )
+            self.assertEqual(conn.execute("SELECT count(*) FROM work_items").fetchone()[0], 0)
+            self.assertFalse(
+                conn.execute("SELECT 1 FROM workstreams WHERE workstream_id='github:example/r!2'").fetchone()
+            )
+
+    def test_waiting_migration_preserves_active_state_and_iso_timestamps(self):
+        from datetime import datetime
+
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute("UPDATE tasks SET lifecycle='waiting_for_user'")
+        storage.init_database(self.db)
+        with closing(sqlite3.connect(self.db)) as conn:
+            row = conn.execute(
+                "SELECT lifecycle,active_task_id,created_at FROM workstreams WHERE workstream_id='github:example/r!2'"
+            ).fetchone()
+            self.assertEqual(row[:2], ("active", "t"))
+            self.assertIsNotNone(datetime.fromisoformat(row[2]).tzinfo)

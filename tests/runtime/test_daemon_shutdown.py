@@ -156,3 +156,22 @@ class DaemonGracefulStopTests(DaemonFixture):
             )
         self.assertTrue(lease["ok"], lease)
         return config_path
+
+    def test_cooperative_zero_exit_after_stop_is_still_stopped(self):
+        from robert_agent.runtime import daemon
+
+        process = mock.Mock(pid=123, returncode=0)
+
+        def communicate(**kwargs):
+            daemon._STOP_REQUESTED = True
+            return '{"ok":true}', ""
+
+        process.communicate.side_effect = communicate
+        with (
+            mock.patch.object(daemon.subprocess, "Popen", return_value=process),
+            mock.patch.object(daemon, "_signal_child_group"),
+            mock.patch.object(daemon.attempt_process, "group_stopped", return_value=True),
+        ):
+            result = daemon.run_child_json(["child"], timeout_seconds=10)
+        self.assertEqual(result["status"], "child_stopped")
+        self.assertFalse(result["ok"])

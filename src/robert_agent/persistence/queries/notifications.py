@@ -1,6 +1,9 @@
 """Shared queries operations for notifications."""
 
 from robert_agent.persistence.expressions import sql_constant
+from robert_agent.foundation.contracts.delivery import PR_REMEDIATION_NOTIFICATION_TYPES
+from robert_agent.foundation.contracts.work import WorkstreamLifecycle
+from robert_agent.persistence.dialects import sqlite
 
 from sqlalchemy import (
     select,
@@ -33,6 +36,61 @@ def find_task_id_and_notification_type_and_status_and_metadata_json_by_notificat
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query1, {"p0": notification_id})
+
+
+def find_existing_ids(conn, notification_ids):
+    notice = tables["notifications"]
+    query = (
+        select(notice.c["notification_id"])
+        .where(notice.c["notification_id"].in_(bindparam("items", expanding=True)))
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    return statements.read(conn, query, {"items": list(notification_ids)})
+
+
+def pending_tapd_notice_exists(source):
+    notice = tables["notifications"]
+    return (
+        select(1)
+        .where(
+            notice.c.channel == "tapd",
+            notice.c.status == "pending",
+            func.json_extract(notice.c.metadata_json, "$.project_key") == source.c.project_key,
+            func.json_extract(notice.c.metadata_json, "$.external_id") == source.c.external_id,
+        )
+        .correlate(source)
+        .exists()
+    )
+
+
+def find_delivered_tapd_comment_ids(conn, project_key):
+    notice = tables["notifications"]
+    comment_id = func.json_extract(notice.c.metadata_json, "$.tapd_delivery.comment_id")
+    query = select(comment_id).where(
+        notice.c.channel == "tapd",
+        notice.c.status == "delivered",
+        func.json_extract(notice.c.metadata_json, "$.project_key") == project_key,
+        comment_id.is_not(None),
+    )
+    return statements.read(conn, query)
+
+
+def find_pending_tapd(conn, now, limit):
+    """TAPD ticket notices whose next bounded delivery attempt is due."""
+    notice = tables["notifications"]
+    retry_at = func.json_extract(notice.c.metadata_json, sql_constant("$.tapd_delivery.next_retry_at"))
+    query = (
+        select(notice.c.notification_id, notice.c.notification_type, notice.c.metadata_json)
+        .where(
+            notice.c.channel == sql_constant("tapd"),
+            notice.c.status == sql_constant("pending"),
+            or_(retry_at.is_(None), func.julianday(retry_at) <= func.julianday(bindparam("p0"))),
+        )
+        .order_by(notice.c.created_at, notice.c.notification_id)
+        .limit(limit)
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    return statements.read(conn, query, {"p0": now})
 
 
 def find_metadata_json_by_notification_id(conn, notification_id):
@@ -215,7 +273,55 @@ def find_for_notify_exhausted_episode(conn, notification_type, episode_id):
     return statements.read(conn, query1, {"p0": notification_type, "p1": episode_id})
 
 
-def find_for_deliver_pending(conn, now, limit, repo_ids=(), *, messaging_repo_ids=None, messaging_settings=None):
+def find_open_remediation_notices(conn, workstream_id, *, notification_type=None):
+    notice = tables["notifications"]
+    stmt = (
+        select(notice.c.notification_id, notice.c.metadata_json)
+        .where(
+            notice.c.channel == "local",
+            notice.c.status != "resolved",
+            notice.c.notification_type.in_(sorted(PR_REMEDIATION_NOTIFICATION_TYPES)),
+            func.json_extract(notice.c.metadata_json, "$.workstream_id") == workstream_id,
+        )
+        .order_by(notice.c.created_at, notice.c.notification_id)
+    )
+    if notification_type is not None:
+        stmt = stmt.where(notice.c.notification_type == notification_type)
+    return statements.read(conn, stmt)
+
+
+def is_open_for_delivery(conn, notification_id):
+    notice = tables["notifications"]
+    return statements.read(
+        conn,
+        select(1).where(
+            notice.c.notification_id == notification_id,
+            notice.c.status != "resolved",
+            _active_remediation_notice(),
+        ),
+    )
+
+
+def _active_remediation_notice():
+    notice, stream, task = (tables[name] for name in ("notifications", "workstreams", "tasks"))
+    task_stream = (
+        select(task.c.workstream_id).where(task.c.task_id == notice.c.task_id).correlate(notice).scalar_subquery()
+    )
+    canceled = (
+        select(1)
+        .where(
+            stream.c.workstream_id
+            == func.coalesce(func.json_extract(notice.c.metadata_json, "$.workstream_id"), task_stream),
+            stream.c.lifecycle == WorkstreamLifecycle.CANCELED.value,
+        )
+        .correlate(notice)
+        .exists()
+    )
+    return or_(notice.c.notification_type.not_in(sorted(PR_REMEDIATION_NOTIFICATION_TYPES)), ~canceled)
+
+
+def find_for_deliver_pending(conn, now, limit, repo_ids=None, *, messaging_repo_ids=None, messaging_settings=None):
+    sqlite.register_timestamp_after(conn)
     notification = tables["notifications"]
     stmt = (
         select(notification.c.notification_id)
@@ -223,11 +329,50 @@ def find_for_deliver_pending(conn, now, limit, repo_ids=(), *, messaging_repo_id
             _pending_delivery(now, repo_ids),
             _pending_attention(messaging_repo_ids),
             _dispatch_identity(messaging_settings),
+            _delivery_window(messaging_settings),
         )
         .order_by(notification.c.created_at, notification.c.notification_id)
         .limit(limit)
     )
     return statements.read(conn, stmt)
+
+
+def receipt_events(conn, *, destination, after, now, kinds, repo_ids, messaging_settings, limit):
+    sqlite.register_timestamp_after(conn)
+    notice = tables["notifications"].c
+    query = (
+        select(
+            notice.notification_id, notice.notification_type, notice.created_at, notice.metadata_json, notice.task_id
+        )
+        .where(
+            notice.channel == "receipt",
+            notice.notification_type.in_(kinds),
+            func.json_extract(notice.metadata_json, "$.destination") == destination,
+            func.json_extract(notice.metadata_json, "$.repo_id").in_(repo_ids),
+            func.json_extract(notice.metadata_json, "$.delivery.batch_id").is_(None),
+            _dispatch_identity(messaging_settings),
+            func.python_timestamp_after(notice.created_at, after) == 1,
+            func.python_timestamp_after(notice.created_at, now) == 0,
+        )
+        .order_by(notice.created_at, notice.notification_id)
+        .limit(limit)
+    )
+    return statements.read(conn, query)
+
+
+def latest_receipt_digest(conn, destination):
+    notice = tables["notifications"].c
+    return statements.read(
+        conn,
+        select(notice.created_at)
+        .where(
+            notice.channel == "receipt",
+            notice.notification_type == "agent_receipt_digest",
+            func.json_extract(notice.metadata_json, "$.destination") == destination,
+        )
+        .order_by(notice.created_at.desc())
+        .limit(1),
+    )
 
 
 def update_failure(conn, kind, key):
@@ -263,6 +408,7 @@ def update_failure(conn, kind, key):
 
 
 def has_pending_local_delivery_filtered(conn, repo_ids, now, *, messaging_repo_ids=None, messaging_settings=None):
+    sqlite.register_timestamp_after(conn)
     stmt = (
         select(sql_constant(1))
         .select_from(tables["notifications"])
@@ -270,11 +416,66 @@ def has_pending_local_delivery_filtered(conn, repo_ids, now, *, messaging_repo_i
             _pending_delivery(now, repo_ids),
             _pending_attention(messaging_repo_ids),
             _dispatch_identity(messaging_settings),
+            _delivery_window(messaging_settings),
         )
     )
-    if not repo_ids:
-        stmt = stmt.where(tables["notifications"].c.task_id.is_(None))
     return statements.read(conn, stmt.limit(1))
+
+
+def _delivery_window(settings):
+    """External activation never consumes history; inbox visibility is unchanged."""
+    settings = settings or {}
+    if not settings.get("enabled") and "send_after" not in settings:
+        return sql_constant(1) == sql_constant(1)
+    # A missing or invalid boundary withholds delivery even for unvalidated callers.
+    created = tables["notifications"].c.created_at
+    return func.python_timestamp_after(created, settings.get("send_after")) == sql_constant(1)
+
+
+def find_message_context(conn, notification_id):
+    """Read current business facts without changing notification or task state."""
+    notice, task, stream = tables["notifications"], tables["tasks"], tables["workstreams"]
+    item, repo, source, attempt = (tables[name] for name in ("work_items", "repos", "github_sources", "attempts"))
+    item_id = func.json_extract(notice.c.metadata_json, "$.work_item_id")
+    attempt_id = func.json_extract(notice.c.metadata_json, "$.attempt_id")
+    joins = (
+        notice.outerjoin(task, task.c.task_id == notice.c.task_id)
+        .outerjoin(
+            item,
+            or_(item.c.work_item_id == item_id, and_(item_id.is_(None), item.c.workstream_id == task.c.workstream_id)),
+        )
+        .outerjoin(
+            stream,
+            stream.c.workstream_id
+            == func.coalesce(
+                task.c.workstream_id, item.c.workstream_id, func.json_extract(notice.c.metadata_json, "$.workstream_id")
+            ),
+        )
+        .outerjoin(
+            repo,
+            repo.c.repo_id
+            == func.coalesce(item.c.repo_id, stream.c.repo_id, func.json_extract(notice.c.metadata_json, "$.repo_id")),
+        )
+        .outerjoin(source, source.c.source_id == func.coalesce(stream.c.primary_source_id, item.c.origin_source_id))
+        .outerjoin(attempt, and_(attempt.c.attempt_id == attempt_id, attempt.c.task_id == task.c.task_id))
+    )
+    return statements.read(
+        conn,
+        select(
+            notice.c.created_at.label("occurred_at"),
+            repo.c.full_name.label("repository"),
+            func.coalesce(item.c.title, source.c.title).label("title"),
+            task.c.lifecycle.label("task_status"),
+            task.c.route_id,
+            stream.c.workstream_id,
+            stream.c.lifecycle.label("workstream_status"),
+            source.c.source_type,
+            source.c.html_url,
+            attempt.c.failure_json,
+        )
+        .select_from(joins)
+        .where(notice.c.notification_id == notification_id),
+    )
 
 
 def _pending_delivery(now, repo_ids):
@@ -289,7 +490,7 @@ def _pending_delivery(now, repo_ids):
         ).not_in((sql_constant("sent"), sql_constant("exhausted"))),
         or_(retry_at.is_(None), func.julianday(retry_at) <= func.julianday(now)),
     )
-    if repo_ids:
+    if repo_ids is not None:
         task, stream = tables["tasks"], tables["workstreams"]
         scoped = (
             select(task.c.task_id)
@@ -324,7 +525,7 @@ def _pending_attention(repo_ids):
         .correlate(notice)
         .exists()
     )
-    predicate = or_(attention_id.is_(None), open_attention)
+    predicate = and_(or_(attention_id.is_(None), open_attention), _active_remediation_notice())
     if repo_ids is None:
         return predicate
     task, stream = tables["tasks"], tables["workstreams"]
@@ -388,6 +589,54 @@ def find_local_response(conn, notification_id):
         select(notice.c.task_id, notice.c.metadata_json).where(
             notice.c.notification_id == notification_id, notice.c.channel == "local"
         ),
+    )
+
+
+def find_chat_question(conn, *, messaging_repo_ids, messaging_settings, notification_id=None, message_id=None):
+    """Match only delivered questions from the currently authorized endpoint."""
+    notice = tables["notifications"]
+    predicates = [
+        notice.c.channel == "local",
+        func.json_extract(notice.c.metadata_json, "$.delivery.status") == "sent",
+        _dispatch_identity(messaging_settings),
+    ]
+    for field in ("provider", "channel", "account", "conversation", "thread"):
+        predicates.append(
+            func.json_extract(notice.c.metadata_json, "$.delivery.endpoint." + field)
+            == messaging_settings.get(field, "")
+        )
+    event, item = tables["work_item_events"], tables["work_items"]
+    attention_id = func.json_extract(notice.c.metadata_json, "$.attention_event_id")
+    item_id = func.json_extract(notice.c.metadata_json, "$.work_item_id")
+    predicates.append(
+        select(1)
+        .select_from(event.join(item, item.c.work_item_id == event.c.work_item_id))
+        .where(
+            event.c.event_id == attention_id,
+            item.c.work_item_id == item_id,
+            item.c.repo_id.in_(sorted(messaging_repo_ids)),
+            event.c.event_type == "operator_question",
+            func.coalesce(func.json_extract(event.c.metadata_json, "$.kind"), "") != "result_contract_cutover",
+        )
+        .correlate(notice)
+        .exists()
+    )
+    if notification_id is not None:
+        predicates.append(notice.c.notification_id == notification_id)
+    if message_id is not None:
+        predicates.append(func.json_extract(notice.c.metadata_json, "$.delivery.message_id") == message_id)
+    if notification_id is None and message_id is None:
+        predicates.extend([notice.c.status != "resolved", _pending_attention(messaging_repo_ids)])
+    return statements.read(
+        conn,
+        select(notice.c.notification_id, notice.c.metadata_json, notice.c.status)
+        .where(*predicates)
+        .order_by(
+            func.julianday(func.json_extract(notice.c.metadata_json, "$.delivery.sent_at")).desc(),
+            func.julianday(notice.c.created_at).desc(),
+            notice.c.notification_id.desc(),
+        )
+        .limit(2 if notification_id is not None or message_id is not None else 1),
     )
 
 

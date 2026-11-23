@@ -1,6 +1,6 @@
 """Prepare work already admitted by operators or durable workflows."""
 
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, RemediationStatus, TaskKind
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, RemediationStatus, SourceProvider, TaskKind
 
 import json
 import subprocess
@@ -29,17 +29,19 @@ from robert_agent.persistence.queries import (
     work_item_events as db_read_work_item_events,
 )
 from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.persistence.rounds import vote as vote_store
 from robert_agent.persistence.stores import attempts as db_write_attempts
 from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import wakeups as db_write_wakeups
 from robert_agent.supervision import store as supervision_store
-from robert_agent.work import source_policy
+from robert_agent.work import source_policy, backports
 from robert_agent.work import queries as work_queries
 from robert_agent.work import streams as workstream
 from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import lifecycle as work_application_lifecycle
-from robert_agent.work.application import preparation, source_lifecycle
+from robert_agent.work.application import preparation, source_lifecycle, tapd_intake
+from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from robert_agent.workflows import pr_remediation as remediation
 from robert_agent.workflows import routes as route
 from robert_agent.workflows import routing as workflow_routing
@@ -260,6 +262,14 @@ def prepare_detected_local_tasks(
         preparation.upsert_route_decision(conn, task_id, route_result, run_now)
         task_metadata = values.json_object(task_metadata_json)
         task_metadata["local_source_reference"] = source_reference
+        review_plan = route_result.get("pre_pr_review_plan")
+        retry_review = (
+            pre_pr_review.session(conn, task_id=task_metadata["pre_pr_review_retry"])
+            if route_result["route_id"] == "new-pr" and task_metadata.get("pre_pr_review_retry")
+            else None
+        )
+        if review_plan or retry_review:
+            task_metadata["pre_pr_review_required"] = True
         task_metadata["review_input_policy"] = route.review_input_policy(route_result["expected_output"], normalized)
         db_write_tasks.update_for_prepare_detected_local_tasks(
             conn,
@@ -294,6 +304,27 @@ def prepare_detected_local_tasks(
                 }
             ),
         )
+        if review_plan or retry_review:
+            review_inputs = [
+                {**normalized, "routing_mode": routing_mode, "requested_worker": requested_worker},
+                *(
+                    event["body"]
+                    for event in local_events
+                    if event["event_type"] in {"user_response", "changes_requested"}
+                ),
+            ]
+            preparation.bind_pre_pr_review(
+                conn,
+                repo,
+                normalized,
+                review_inputs,
+                review_plan,
+                task_id,
+                attempt_id,
+                prompt_path,
+                worktree_result,
+                previous_review=retry_review,
+            )
         preparation.insert_file_artifact(conn, task_id, attempt_id, "task_context", context_path, run_now)
         preparation.insert_file_artifact(conn, task_id, attempt_id, "prompt", prompt_path, run_now)
         db_write_wakeups.update_for_prepare_detected_local_tasks(conn, run_id, run_now, work_item_id, task_id)
@@ -319,7 +350,7 @@ def prepare_detected_local_tasks(
     return prepared
 
 
-def prepare_github_operator_tasks(
+def prepare_operator_tasks(
     conn,
     data_dir,
     db_path,
@@ -334,14 +365,14 @@ def prepare_github_operator_tasks(
     config_result=None,
 ):
     from robert_agent.delivery.lock import task_publication_lock
-    from robert_agent.work import operator_queries as github_operator
+    from robert_agent.work import operator_queries
 
-    for pending in github_operator.pending_tasks(conn, [repo_id]):
+    for pending in operator_queries.pending_tasks(conn, [repo_id]):
         if dispatch_budget["remaining"] <= 0:
             break
-        if github_operator.blocked(conn, pending):
+        if operator_queries.blocked(conn, pending):
             continue
-        observed, source = github_operator.source_read(conn, pending)
+        observed, source = operator_queries.source_read(conn, pending)
         if not observed:
             continue
         task_id = pending["task_id"]
@@ -349,10 +380,13 @@ def prepare_github_operator_tasks(
         with task_publication_lock(db_path, task_id) as acquired:
             if not acquired:
                 continue
-            current = next(iter(github_operator.pending_tasks(conn, [repo_id], task_id=task_id)), None)
-            if not current or github_operator.blocked(conn, current):
+            current = next(iter(operator_queries.pending_tasks(conn, [repo_id], task_id=task_id)), None)
+            if not current or operator_queries.blocked(conn, current):
                 continue
+            provider = current["provider"]
+            source_name = "TAPD" if provider == SourceProvider.TAPD else "GitHub"
             context_task = current["parent_task_id"]
+            delivery = work_queries.waiting_delivery_context(conn, context_task)
             events = []
             seen = set()
             while context_task and context_task not in seen and not events:
@@ -360,6 +394,8 @@ def prepare_github_operator_tasks(
                 events = work_queries.task_related_events(conn, context_task, include_consumed=True)
                 parent = db_records.first(db_read_tasks.find_parent_task_id_by_task_id(conn, context_task))
                 context_task = parent[0] if parent else None
+            if delivery:
+                events = work_queries.task_related_events(conn, delivery["task_id"], include_consumed=True)
             # Notification trust is derived from the current configuration,
             # never from a persisted boolean set by an earlier scanner.
             trusted = {login.casefold() for login in repo.get("trusted_actors", [])}
@@ -405,11 +441,11 @@ def prepare_github_operator_tasks(
                 authorized = list(events[:1])
             reason = None
             if not isinstance(source, dict) or "body" not in source:
-                reason = "github_operator_context_unavailable"
+                reason = f"{provider}_operator_context_unavailable"
             elif source.get("state", "").lower() != "open":
-                reason = "github_operator_source_closed"
+                reason = f"{provider}_operator_source_closed"
             elif not authorized:
-                reason = "github_operator_authorization_unavailable"
+                reason = f"{provider}_operator_authorization_unavailable"
             if reason:
                 if work_application_lifecycle.finalize_failed_task(
                     conn, task_id, current["workstream_id"], run_now, {"status": reason}
@@ -418,8 +454,11 @@ def prepare_github_operator_tasks(
                         conn,
                         current["work_item_id"],
                         event_type="execution_failed",
-                        idempotency_key="github-operator-failed:" + task_id,
-                        body="GitHub operator request stopped: " + reason + ". Inspect the source and retry execution.",
+                        idempotency_key=f"{provider}-operator-failed:" + task_id,
+                        body=source_name
+                        + " operator request stopped: "
+                        + reason
+                        + ". Inspect the source and retry execution.",
                         metadata={"task_id": task_id, "reason_code": reason},
                         now=run_now,
                     )
@@ -431,6 +470,64 @@ def prepare_github_operator_tasks(
             operator_responses = [
                 dict(zip(("event_id", "event_type", "actor_identity", "body", "created_at"), row)) for row in responses
             ]
+            command_key = values.json_object(current["metadata_json"]).get("trigger_work_item_event_id")
+            command = (
+                db_records.first(
+                    db_read_work_item_events.record_system_event(
+                        conn,
+                        current["work_item_id"],
+                        command_key,
+                    )
+                )
+                if command_key
+                else None
+            )
+            request = (
+                backports.parse_request(
+                    command["body"],
+                    (config_result.get("tapd") or {}).get("mention_name", ""),
+                )
+                if command and provider == SourceProvider.TAPD
+                else None
+            )
+            if request and command["event_type"] == "user_response":
+                command_result = values.json_object(command["metadata_json"]).get("command_result") or {}
+                if command_result.get("task_id") != task_id:
+                    continue
+                trigger = authorized[0]
+                fingerprints = tapd_intake.expand_backport(
+                    conn,
+                    event={
+                        **trigger,
+                        "event_fingerprint": "tapd-operator:" + command["event_id"],
+                        "body": command["body"],
+                        "operator_responses": operator_responses,
+                    },
+                    request=request,
+                    repo_id=repo_id,
+                    public_ref=trigger["public_ref"],
+                    now=run_now,
+                )
+                # The accepted command now owns durable target requests, not another inherited update worker.
+                db_write_tasks.update_for_finish_parent_for_child(conn, run_now, task_id)
+                db_write_workstreams.update_for_execute_command(conn, run_now, current["workstream_id"])
+                execution_ownership.close_terminal_task(conn, task_id, run_now)
+                work_items.record_system_event(
+                    conn,
+                    current["work_item_id"],
+                    event_type="routing_selected",
+                    idempotency_key="backport-dispatch:" + command["event_id"],
+                    body="Accepted backport request queued independently for each target branch.",
+                    metadata={
+                        "task_id": task_id,
+                        "request_event_fingerprints": fingerprints,
+                        "source_pr": request.source_pr,
+                        "target_base_branches": list(request.targets),
+                    },
+                    now=run_now,
+                )
+                db_write_wakeups.update_for_prepare_github_operator_tasks(conn, run_id, run_now, current["wakeup_id"])
+                continue
             refreshed = []
             trigger = authorized[0]
             for event in [trigger, *(item for item in events if item is not trigger)]:
@@ -462,6 +559,8 @@ def prepare_github_operator_tasks(
             event = refreshed[0]
             parent_route = db_records.first(db_read_tasks.find_route_id_by_task_id(conn, current["parent_task_id"]))
             route_id = parent_route[0] if parent_route else None
+            if delivery:
+                route_id = delivery["route_id"]
             if operator_episode_reply:
                 route_id = None
             elif route_id in {None, "waiting-for-user"}:
@@ -469,17 +568,21 @@ def prepare_github_operator_tasks(
             route_result = workflow_routing.effective_route(config_result, repo, event, route_id=route_id)
             conn.commit()
             try:
-                worktree_result = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
+                worktree_result = (
+                    assigned_workspace.prepare_delivery_continuation(repo, delivery, dry_run)
+                    if delivery
+                    else assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
+                )
             except ControlDeadlineExceeded:
                 raise
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-                worktree_result = {"ok": False, "status": "github_operator_worktree_unavailable"}
+                worktree_result = {"ok": False, "status": f"{provider}_operator_worktree_unavailable"}
             # Cancellation and source reconciliation may run during Git I/O.
-            current = next(iter(github_operator.pending_tasks(conn, [repo_id], task_id=task_id)), None)
+            current = next(iter(operator_queries.pending_tasks(conn, [repo_id], task_id=task_id)), None)
             if (
                 not current
-                or github_operator.blocked(conn, current)
-                or github_operator.source_read(conn, current) != (observed, source)
+                or operator_queries.blocked(conn, current)
+                or operator_queries.source_read(conn, current) != (observed, source)
             ):
                 continue
             info = preparation.create_task_attempt_and_prompt(

@@ -2,10 +2,13 @@
 
 from robert_agent.persistence.schema import execution_control as execution_schema
 
+from robert_agent.persistence.schema import pre_pr_review
 from robert_agent.persistence.schema import review_rounds as review_schema
+from robert_agent.persistence.schema import source_providers
 from robert_agent.persistence.schema import vote_rounds as vote_schema
 
 from contextlib import closing
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -27,6 +30,17 @@ RECOMMENDED_SKILLS_MIGRATION_CHECKSUM = hashlib.sha256(RECOMMENDED_SKILLS_MIGRAT
 SUPERVISION_MIGRATION_VERSION = 6
 SUPERVISION_MIGRATION_NAME = "robert-supervision-v1"
 SUPERVISION_MIGRATION_CHECKSUM = hashlib.sha256(SUPERVISION_MIGRATION_NAME.encode("utf-8")).hexdigest()
+
+
+def _execute_script(conn, script):
+    """Execute schema statements without sqlite3.executescript's implicit commit."""
+    start = 0
+    for end, char in enumerate(script, 1):
+        if char == ";" and sqlite3.complete_statement(script[start:end]):
+            conn.execute(script[start:end])
+            start = end
+    if script[start:].strip():
+        conn.execute(script[start:])
 
 
 def _data_migration_pending(conn, name, checksum):
@@ -65,7 +79,7 @@ def _has_active_task(conn, workstream_id):
         SELECT 1
         FROM tasks
         WHERE workstream_id = ?
-          AND lifecycle IN ('detected', 'authorized', 'classified', 'queued', 'running')
+          AND lifecycle IN ('detected', 'authorized', 'classified', 'queued', 'running', 'waiting_for_user')
         LIMIT 1
         """,
         (workstream_id,),
@@ -109,7 +123,7 @@ def _migrate_pr_mainline_workstreams(conn):
           AND t.workstream_id != gs.source_key
         """
     ).fetchall()
-    now = conn.execute("SELECT datetime('now')").fetchone()[0]
+    now = datetime.now(timezone.utc).isoformat()
     for task_id, task_lifecycle, repo_id, source_id, source_key, payload_json in rows:
         try:
             payload = json.loads(payload_json or "{}")
@@ -127,6 +141,7 @@ def _migrate_pr_mainline_workstreams(conn):
                 "classified",
                 "queued",
                 "running",
+                "waiting_for_user",
             }
             else None
         )
@@ -137,7 +152,7 @@ def _migrate_pr_mainline_workstreams(conn):
               workstream_id, repo_id, primary_source_id, origin_workstream_id,
               lifecycle, active_task_id, created_at, updated_at, metadata_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), '{}')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}')
             ON CONFLICT(workstream_id) DO UPDATE SET
               origin_workstream_id = excluded.origin_workstream_id,
               primary_source_id = excluded.primary_source_id,
@@ -152,6 +167,8 @@ def _migrate_pr_mainline_workstreams(conn):
                 origin_workstream_id,
                 workstream_lifecycle,
                 active_task_id,
+                now,
+                now,
             ),
         )
         conn.execute(
@@ -161,10 +178,10 @@ def _migrate_pr_mainline_workstreams(conn):
         conn.execute(
             """
             INSERT INTO workstream_sources(workstream_id, source_id, relationship, created_at)
-            VALUES (?, ?, 'derived_pr', datetime('now'))
+            VALUES (?, ?, 'derived_pr', ?)
             ON CONFLICT(workstream_id, source_id) DO NOTHING
             """,
-            (source_key, source_id),
+            (source_key, source_id, now),
         )
         _repair_origin_workstream_after_task_move(conn, origin_workstream_id, task_id, now)
 
@@ -232,7 +249,8 @@ def _migrate_pr_remediation(conn):
         "CHECK (task_kind IN ('human_request', 'ci_remediation', "
         "'merge_conflict_remediation'))",
     )
-    conn.executescript(
+    _execute_script(
+        conn,
         """
         CREATE TABLE IF NOT EXISTS pr_remediation_episodes (
           episode_id TEXT PRIMARY KEY,
@@ -282,7 +300,7 @@ def _migrate_pr_remediation(conn):
 
         CREATE INDEX IF NOT EXISTS idx_pr_ci_observations_episode
         ON pr_ci_observations(episode_id, completed_at);
-        """
+        """,
     )
 
 
@@ -453,9 +471,15 @@ def init_database(db_path, schema_path=None):
     else:
         schema_path = Path(schema_path)
         schema = schema_path.read_text(encoding="utf-8")
+    if built_in_schema:
+        source_providers.rebuild_legacy_tables(db_path, schema)
 
     with closing(sqlite3.connect(db_path)) as conn, conn:
-        conn.executescript(schema)
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("BEGIN IMMEDIATE")
+        _execute_script(conn, schema)
         _ensure_column(
             conn,
             "github_scan_batches",
@@ -463,6 +487,7 @@ def init_database(db_path, schema_path=None):
             "retry_count INTEGER NOT NULL DEFAULT 0",
         )
         _ensure_column(conn, "github_scan_batches", "attention_reason", "attention_reason TEXT")
+        source_providers.initialize(conn)
         pending = []
         pr_pending = _data_migration_pending(conn, PR_MAINLINE_MIGRATION_NAME, PR_MAINLINE_MIGRATION_CHECKSUM)
         skills_pending = _data_migration_pending(
@@ -496,6 +521,7 @@ def init_database(db_path, schema_path=None):
         _migrate_pr_remediation(conn)
         review_schema.initialize(conn)
         vote_schema.initialize(conn)
+        pre_pr_review.initialize(conn)
         if built_in_schema and _data_migration_pending(
             conn, SUPERVISION_MIGRATION_NAME, SUPERVISION_MIGRATION_CHECKSUM
         ):

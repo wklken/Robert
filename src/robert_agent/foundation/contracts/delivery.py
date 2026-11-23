@@ -3,6 +3,17 @@
 from enum import StrEnum, unique
 
 
+PR_REMEDIATION_NOTIFICATION_TYPES = frozenset(
+    {
+        "pr_remediation_needs_evidence",
+        "pr_remediation_manual_conclusion",
+        "pr_remediation_dirty_worktree",
+        "pr_remediation_snapshot_unavailable",
+        "pr_remediation_exhausted",
+    }
+)
+
+
 @unique
 class GitHubActionType(StrEnum):
     COMMENT = "comment"

@@ -18,7 +18,7 @@ from robert_agent.persistence.queries import worker_results as db_read_worker_re
 from robert_agent.work import repositories as work_repositories
 from robert_agent.supervision import decisions as supervision_decisions
 from robert_agent.work import wakeup
-from robert_agent.work import dispatch_requests
+from robert_agent.work import dispatch_requests, proposal_requests
 from robert_agent.work.application import completion
 from robert_agent.work.application import handoff as pending_handoff
 
@@ -48,7 +48,7 @@ def _supervision_transition_due(conn, repo_ids, config, now):
             started_at,
             now=now_dt,
             heartbeat_stale_seconds=config.get("heartbeat_stale_seconds", 1200),
-            global_timeout_seconds=config.get("hard_timeout_seconds", 2700),
+            global_timeout_seconds=config.get("hard_timeout_seconds", 3600),
             hard_timeout_seconds=timeout,
         )
         process = attempt_process.dispatch_status(metadata)
@@ -80,7 +80,7 @@ def _published_result_needs_finalization(conn, repo_ids):
     return any(results.result_actions_all_published(conn, row[0]) for row in rows)
 
 
-def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publication=True):
+def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publication=True, capacity_repo_ids=None):
     now = now or wakeup.utc_now()
     if not isinstance(now, str):
         now = now.isoformat()
@@ -112,6 +112,7 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
     if _supervision_transition_due(conn, repo_ids, config_result or {}, now):
         return True
     scoped_repos = repo_ids or work_repositories.list_ids(conn)
+    capacity_scope = scoped_repos if capacity_repo_ids is None else capacity_repo_ids
     if pending_handoff.ready_rows(conn, scoped_repos, now, config=config_result):
         return True
     if completion.has_orphaned_classification_result(conn, scoped_repos, now):
@@ -122,10 +123,11 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
     if recovery_pending:
         return True
     pending_dispatch = dispatch_requests.pending(conn, config_result, repo_ids=scoped_repos)
+    pending_dispatch += proposal_requests.pending(conn, config_result, repo_ids=scoped_repos)
     if pending_dispatch:
         global_limit = config_result.get("max_concurrency", 1)
         limits = {repo["full_name"]: repo.get("max_concurrency", global_limit) for repo in config_result["repos"]}
-        if capacity.running_attempt_count_for_repos(conn, scoped_repos) < global_limit and any(
+        if capacity.running_attempt_count_for_repos(conn, capacity_scope) < global_limit and any(
             capacity.running_attempt_count(conn, row["repo_id"]) < limits[row["repo_id"].removeprefix("repo:")]
             for row in pending_dispatch
         ):
@@ -139,7 +141,7 @@ def has_local_work(conn, repo_ids, *, config_result=None, now=None, include_publ
         global_limit = config_result.get("max_concurrency", 1)
         if any(resumable for _, _, resumable in prepared):
             return True
-        if capacity.running_attempt_count_for_repos(conn, scoped_repos) < global_limit:
+        if capacity.running_attempt_count_for_repos(conn, capacity_scope) < global_limit:
             limits = {
                 repo["full_name"]: repo.get("max_concurrency", global_limit) for repo in config_result.get("repos", [])
             }

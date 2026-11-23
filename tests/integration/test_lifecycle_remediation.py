@@ -163,7 +163,7 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
             self.assertEqual(conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
 
     def test_result_arriving_during_timeout_cleanup_is_not_failed(self):
-        fixture, process, repo, now = self.running_fixture(age_minutes=50)
+        fixture, process, repo, now = self.running_fixture(age_minutes=70)
         receipts = []
 
         def terminate(*args, **kwargs):
@@ -328,7 +328,14 @@ class LifecycleRemediationTests(LifecycleRemediationFixture):
                 "2026-10-26T00:00:00+00:00",
             )
         self.assertEqual(len(decisions), 2)
-        self.assertEqual(len(observed), 2)
+        self.assertEqual(
+            set(observed),
+            {
+                "repos/example/backend/pulls/13",
+                "repos/example/backend/pulls/14",
+                "repos/example/backend/git/ref/heads/main",
+            },
+        )
 
     def test_remote_close_stops_registered_native_models(self):
         fixture = review_fixture.ReviewCoordinatorFixture()

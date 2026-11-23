@@ -19,6 +19,10 @@ harnesses and `browser/` for frontend behavior.
 - Keep new package directories discoverable with `__init__.py`. Run a
   targeted check with `python3 -B -m unittest tests.<domain>.<test_module>`.
   Run `python3 -B -m unittest discover -s tests` for the complete suite.
+- CI runs the same discovery through `python3 -B -m tests.run --workers 4`,
+  with one isolated subprocess per module. Keep module/class fixtures together,
+  use temporary paths and dynamically assigned ports, and preserve the serial
+  full-suite command. Use `--list` to compare test inventories after changes.
 - After moving a test, compare discovered IDs with an explicit relocation
   map. Preserve each distinct assertion and check embedded subprocess
   imports, fixture paths and targeted test commands.

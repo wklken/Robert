@@ -12,6 +12,7 @@ from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.work.application import source_events
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.supervision import decisions as supervision_decisions
+from robert_agent.supervision.policy import current_config
 from robert_agent.workflows import pr_health
 from robert_agent.workflows import pr_remediation as remediation
 
@@ -104,6 +105,9 @@ def collect_pr_remediation_decisions(
 ):
     config = config or {}
     automation = repo.get("pr_automation") or {}
+    direct_dispatch = automation.get("dispatch_mode") == "direct"
+    model_enabled = supervision_decisions.enabled(config)
+    observe_only = model_enabled or direct_dispatch
     conflict_policy = automation.get("conflict") or {}
     ci_policy = automation.get("ci") or {}
     repo_with_id = {**repo, "repo_id": repo_id}
@@ -138,12 +142,15 @@ def collect_pr_remediation_decisions(
                 repo["full_name"],
                 snapshot["head_sha"],
                 check_allowlist=ci_policy["check_allowlist"],
+                workflow_path_allowlist=ci_policy.get("workflow_path_allowlist", []),
                 max_summary_chars=ci_policy["max_failure_summary_chars"],
                 runner=runner,
             )
             ci_summary = pr_health.summarize_ci(
                 observations,
                 ci_policy["check_allowlist"],
+                workflow_path_allowlist=ci_policy.get("workflow_path_allowlist", []),
+                check_mode=ci_policy.get("check_mode", "all"),
             )
         workstream_record = {
             "workstream_id": workstream_id,
@@ -182,16 +189,17 @@ def collect_pr_remediation_decisions(
             source_events.insert_source_and_event(
                 conn,
                 repo_id,
-                {**event, "creates_task": False, "drives_execution": False}
-                if supervision_decisions.enabled(config)
-                else event,
+                {**event, "creates_task": False, "drives_execution": False} if observe_only else event,
                 run_now,
             )
-            if not supervision_decisions.enabled(config) or snapshot.get("mergeable") is False:
+            if snapshot.get("mergeable") is False or not observe_only:
                 event_by_episode[conflict_episode["episode_id"]] = event
                 snapshot_by_episode[conflict_episode["episode_id"]] = snapshot
         ci_episode = episodes.get("ci")
         if ci_episode:
+            conflict_pending = (
+                direct_dispatch and conflict_policy.get("enabled") and snapshot.get("mergeable") is not True
+            )
             ci_observations = ci_summary.get("observations", []) if ci_summary else []
             completed = [observation for observation in ci_observations if observation.get("status") == "completed"]
             for observation in completed:
@@ -209,16 +217,14 @@ def collect_pr_remediation_decisions(
                 source_events.insert_source_and_event(
                     conn,
                     repo_id,
-                    {**event, "creates_task": False, "drives_execution": False}
-                    if supervision_decisions.enabled(config)
-                    else event,
+                    {**event, "creates_task": False, "drives_execution": False} if observe_only else event,
                     run_now,
                 )
-                if observation.get("conclusion") == "failure":
+                if observation.get("conclusion") == "failure" and not conflict_pending:
                     event_by_episode.setdefault(ci_episode["episode_id"], event)
                     snapshot_by_episode[ci_episode["episode_id"]] = snapshot
 
-    if supervision_decisions.enabled(config) and observed_workstreams:
+    if model_enabled and observed_workstreams:
         if not conn.in_transaction:
             transactions.begin(conn, immediate=True)
         for workstream_id in observed_workstreams:
@@ -228,10 +234,22 @@ def collect_pr_remediation_decisions(
         repo=repo_with_id,
         now=run_now,
     )
-    events = []
+    if direct_dispatch and decisions:
+        current = current_config(conn, config, reload_for_dispatch=True)
+        # The runtime attaches the Python executable to the repository before the cycle.
+        configured_repo = {key: value for key, value in repo.items() if key != "python_bin"}
+        if (
+            current is None
+            or not current.get("daemon", {}).get("enabled", True)
+            or configured_repo not in current.get("repos", [configured_repo])
+        ):
+            return []
+    model_episodes = set()
     for decision in decisions:
-        event = event_by_episode.get(decision["episode_id"])
-        if event and supervision_decisions.enabled(config):
+        episode_id = decision["episode_id"]
+        event = event_by_episode.get(episode_id)
+        if event and model_enabled and (not direct_dispatch or decision["attempt_count"]):
+            model_episodes.add(episode_id)
             supervision_decisions.offer(
                 conn,
                 config,
@@ -243,6 +261,7 @@ def collect_pr_remediation_decisions(
                 facts=_decision_facts(decision),
                 now=run_now,
             )
+    events = []
     for decision in decisions:
         episode_id = decision["episode_id"]
         event = event_by_episode.get(episode_id)
@@ -257,6 +276,9 @@ def collect_pr_remediation_decisions(
         )
         if eligibility["status"] != "eligible":
             continue
+        if direct_dispatch and decision["attempt_count"] and not model_enabled:
+            remediation.exhaust_episode(conn, episode_id=episode_id, reason="repair_requires_supervision", now=run_now)
+            continue
         policy_key = "conflict" if decision["episode_kind"] == "merge_conflict" else "ci"
         event["metadata"]["remediation"]["budget"] = {
             "limits": repo["pr_automation"][policy_key],
@@ -267,7 +289,7 @@ def collect_pr_remediation_decisions(
             if decision["episode_kind"] == "merge_conflict"
             else DecisionAction.REPAIR_CI.value
         )
-        if not supervision_decisions.permit(
+        if (not direct_dispatch or episode_id in model_episodes) and not supervision_decisions.permit(
             conn,
             config,
             workstream_id=decision["workstream_id"],
@@ -285,17 +307,18 @@ def collect_pr_remediation_decisions(
         episode_id = ((event.get("metadata") or {}).get("remediation") or {}).get("episode_id")
         if execution_ownership.claim_episode(conn, episode_id, run_now):
             accepted.append(event)
-            supervision_decisions.executed(
-                conn,
-                config,
-                event["workstream_id"],
-                {
-                    "episode_id": episode_id,
-                    "event_fingerprint": event["event_fingerprint"],
-                    "status": "accepted_for_preparation",
-                },
-                run_now,
-            )
+            if episode_id in model_episodes:
+                supervision_decisions.executed(
+                    conn,
+                    config,
+                    event["workstream_id"],
+                    {
+                        "episode_id": episode_id,
+                        "event_fingerprint": event["event_fingerprint"],
+                        "status": "accepted_for_preparation",
+                    },
+                    run_now,
+                )
     return accepted
 
 

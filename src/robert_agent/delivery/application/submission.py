@@ -1,11 +1,13 @@
+from robert_agent.foundation import question_choices
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
 from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskLifecycle
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, SourceProvider, TaskLifecycle
 
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import errors as db_errors
 from robert_agent.persistence import transactions as db_transactions
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.persistence.dialects import sqlite as db_sqlite
 
 from robert_agent.persistence import records as db_records
@@ -28,10 +30,12 @@ from uuid import uuid4
 from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 from robert_agent.persistence import execution_control as execution_store
 from robert_agent.execution import spool as result_spool
+from robert_agent.delivery import policies
 from robert_agent.delivery.application import validation as result_validation
 from robert_agent.delivery import contract as result_contract
 from robert_agent.delivery.application import audit as audit_result
 from robert_agent.delivery.application import scope as action_scope
+from robert_agent.security.redaction import redact_text
 
 
 def _insert_worker_result_wakeup(conn, payload, result_id, created_at):
@@ -95,27 +99,9 @@ def _validate_verification(verification):
 def _validate_operator_question(question):
     if question is None:
         return None, None
-    if not isinstance(question, dict):
-        return None, "operator_question must be an object"
-    if question.get("kind") not in {
-        "clarification",
-        "scope_decision",
-        "completion_acceptance",
-    }:
-        return None, "operator_question.kind is invalid"
-    summary = question.get("summary")
-    if not isinstance(summary, str) or not summary.strip() or len(summary) > 2000:
-        return None, "operator_question.summary is invalid"
-    choices = question.get("choices", [])
-    if not isinstance(choices, list) or len(choices) > 5:
-        return None, "operator_question.choices is invalid"
-    for choice in choices:
-        if not isinstance(choice, dict):
-            return None, "operator_question choices must be objects"
-        if not isinstance(choice.get("id"), str) or not choice["id"]:
-            return None, "operator_question choice id is required"
-        if not isinstance(choice.get("label"), str) or not choice["label"]:
-            return None, "operator_question choice label is required"
+    error = policies.validate_operator_question({"operator_question": question})
+    if error:
+        return None, error
     return question, None
 
 
@@ -143,6 +129,7 @@ def build_result(
     operator_question=None,
     remediation_evidence=None,
     review_input_kind=None,
+    receipt_summary=None,
 ):
     payload = {
         "task_id": task_id,
@@ -155,6 +142,8 @@ def build_result(
         "handoff": handoff,
         "used_skills": list(used_skills or []),
     }
+    if receipt_summary is not None:
+        payload["receipt_summary"] = receipt_summary
     if memory_delta is not None:
         payload["memory_delta"] = memory_delta
     if used_memory_ids is not None:
@@ -219,16 +208,50 @@ def _lookup(db_path, envelope, digest):
         }
 
 
+def _review_required():
+    return {
+        "ok": False,
+        "status": "failed_validation",
+        "reason_code": "pre_pr_review_required",
+        "safe_error": "The configured pre-publication review and finding dispositions must finish first.",
+    }
+
+
+def _normalize_receipt_summary(result, output_type):
+    # A presentation-only field must not block an otherwise valid delivery.
+    summary = result.pop("receipt_summary", None)
+    if output_type in {OutputType.CLASSIFICATION_RESULT, OutputType.WAITING_FOR_USER}:
+        return
+    if not isinstance(summary, str) or not summary.strip() or len(summary) > 280:
+        return
+    redacted = redact_text(summary, strict_assignments=True)
+    if redacted["ok"]:
+        result["receipt_summary"] = " ".join(redacted["text"].split())
+
+
 def _prepare(db_path, envelope):
     with closing(db_database.connect(db_path, timeout=0.1)) as conn:
-        settings, rejection = result_validation.context(conn, envelope["task_id"], envelope["attempt_id"])
+        settings, rejection = result_validation.context(
+            conn, envelope["task_id"], envelope["attempt_id"], allow_completed=False, include_question_contract=True
+        )
         if rejection:
             return None, rejection
+        reviewed = pre_pr_review.session(conn, task_id=envelope["task_id"])
+        if (reviewed or pre_pr_review.required(conn, envelope["task_id"])) and (
+            not reviewed
+            or not pre_pr_review.matches_submission(
+                reviewed, envelope["attempt_id"], result_contract.semantic_fingerprint(envelope)
+            )
+        ):
+            return None, _review_required()
         try:
             normalized = result_contract.normalize(envelope, settings)
+            _normalize_receipt_summary(normalized, envelope["output_type"])
+            result_validation.validate_question_submission(normalized, settings)
         except result_contract.InvalidSubmission as exc:
             response = exc.response()
         else:
+            settings.pop(question_choices.REQUIRED_FLAG)
             checked = audit_result.audit_result(normalized, final=False, **settings)
             if checked["ok"]:
                 if any(
@@ -376,6 +399,17 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
         bound = db_records.first(db_read_attempts.record_result_db(conn, payload["attempt_id"], payload["task_id"]))
         if not bound or json.loads(bound[0] or "{}").get("result_contract") != result_contract.CONTRACT_ID:
             return {"ok": False, "status": "unsupported_contract"}
+        reviewed = pre_pr_review.session(conn, task_id=payload["task_id"])
+        if (reviewed or pre_pr_review.required(conn, payload["task_id"])) and (
+            not reviewed
+            or not pre_pr_review.matches_submission(
+                reviewed,
+                payload["attempt_id"],
+                metadata["submission_fingerprint"],
+                head=metadata["submission_head_sha"] or "",
+            )
+        ):
+            return _review_required()
         existing = db_records.first(
             db_read_worker_results.find_result_id_and_metadata_json_by_attempt_id(conn, payload["attempt_id"])
         )
@@ -408,7 +442,9 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
             error = None
             if operator_question is None:
                 error = "waiting_for_user requires operator_question"
-            elif (not origin or origin[0] == "github") and not any(a.get("type") == "comment" for a in actions):
+            elif (not origin or origin[0] in set(SourceProvider)) and not any(
+                a.get("type") == "comment" for a in actions
+            ):
                 error = "GitHub waiting_for_user requires a public comment action"
             if error:
                 return {
@@ -430,7 +466,9 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
                 generation=metadata["submission_fingerprint"],
                 now=result_created_at,
                 config=recovery_config,
-                native_retry=True,
+                # This is the first DB ingestion of the already durable submission.
+                # Active recovery ownership still fences the original operation.
+                native_retry=False,
             )
             if gate["status"] == "blocked":
                 return {"ok": True, "status": "replay_blocked"}
@@ -447,6 +485,8 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
             result_created_at,
             json.dumps(metadata, sort_keys=True),
         )
+        if reviewed:
+            pre_pr_review.bind_result(conn, reviewed["round_id"], result_id)
         for index, action in enumerate(actions):
             action_created_at = (created_at + timedelta(microseconds=index)).isoformat()
             db_write_github_actions.record_result_db(

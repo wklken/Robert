@@ -195,6 +195,21 @@ class WorkerLivenessTests(RepositoryCycleFixture):
         self.assertTrue(first["ok"], first)
         db_path = self.data_dir / "dd.sqlite3"
         now = datetime.now(timezone.utc).isoformat()
+        stdout = self.data_dir / "failed-worker.stdout.log"
+        stdout.write_text(
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 20,
+                        "output_tokens": 2,
+                        "cached_input_tokens": 6,
+                        "cache_write_input_tokens": 1,
+                    },
+                }
+            )
+            + "\n"
+        )
         with closing(sqlite3.connect(db_path)) as conn, conn:
             task_id, attempt_id = conn.execute("SELECT task_id, attempt_id FROM attempts").fetchone()
             conn.execute(
@@ -210,7 +225,7 @@ class WorkerLivenessTests(RepositoryCycleFixture):
                 (
                     now,
                     now,
-                    json.dumps({"dispatch": self._recorded_identity(987654)}),
+                    json.dumps({"dispatch": {**self._recorded_identity(987654), "stdout_path": str(stdout)}}),
                     attempt_id,
                 ),
             )
@@ -228,7 +243,13 @@ class WorkerLivenessTests(RepositoryCycleFixture):
             worker_identity.inspect_recorded_identity = original_inspect
 
         self.assertTrue(second["ok"], second)
+        stdout.unlink()
         with closing(sqlite3.connect(db_path)) as conn, conn:
+            usage = conn.execute(
+                "SELECT usage_json FROM model_usage WHERE kind='worker' AND call_id=?", (attempt_id,)
+            ).fetchone()
+            self.assertIsNotNone(usage)
+            self.assertEqual(json.loads(usage[0])["usage"]["cached_input_tokens"], 6)
             attempt_status, failure_json = conn.execute(
                 "SELECT status, failure_json FROM attempts WHERE attempt_id = ?",
                 (attempt_id,),

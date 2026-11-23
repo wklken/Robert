@@ -16,7 +16,7 @@ from robert_agent.adapters.processes import identity
 from robert_agent.configuration.command import validate_config
 from robert_agent.execution import runtime_state
 from robert_agent.runtime import cycle, daemon
-from robert_agent.supervision import decisions
+from robert_agent.supervision import decisions, store
 from robert_agent.supervision.application.decision_loop import DecisionLoop
 from tests.support.repository_cycle import RepositoryCycleFixture
 
@@ -78,6 +78,19 @@ class DecisionRecoveryReadinessTests(unittest.TestCase):
                 wait = conn.execute("SELECT json_extract(failure_json,'$.status') FROM attempts").fetchone()[0]
                 assert wait == "waiting_for_model_decision", wait
             with closing(runtime_state.connect(db)) as conn, conn:
+                store.update_checkpoint(
+                    conn,
+                    *decisions.RUNNER_KEY,
+                    now=now,
+                    metadata={
+                        "claim": {
+                            "bundle_id": "stranded-decision",
+                            "root_id": "old-workstream",
+                            "claimed_at": now,
+                            "owner_identity": observed,
+                        }
+                    },
+                )
                 run_id = runtime_state.start_daemon_run(
                     conn, config_path=str(f.config_path), owner_id="probe", now=now
                 )["daemon_run_id"]
@@ -112,6 +125,7 @@ class DecisionRecoveryReadinessTests(unittest.TestCase):
                 return result
 
             before = daemon.run_once_decision(context, now=now, child_runner=safe_child)
+            self.assertEqual(loop.poll(config, now=now)["status"], "process_attention")
             deadline = time.monotonic() + 6
             while time.monotonic() < deadline:
                 model_result = loop.poll(config, now=now)
@@ -121,6 +135,8 @@ class DecisionRecoveryReadinessTests(unittest.TestCase):
             else:
                 raise AssertionError(model_result)
             with closing(runtime_state.connect(db)) as conn:
+                runner = store.get_checkpoint(conn, *decisions.RUNNER_KEY)["metadata"]
+                self.assertEqual(runner["attention_claims"]["old-workstream"]["bundle_id"], "stranded-decision")
                 approval = decisions.read(conn, root)["status"]
                 with closing(sqlite3.connect(db)) as raw:
                     wakes = raw.execute("SELECT count(*) FROM wakeups WHERE status='pending'").fetchone()[0]

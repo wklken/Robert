@@ -7,9 +7,12 @@ import os
 from robert_agent.persistence.rounds import pool as model_pool
 from robert_agent.persistence.rounds import review as review_store
 from robert_agent.persistence.rounds import vote as vote_store
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.execution.stages import terminate_children as stop_children
+from robert_agent.execution.usage import record_dispatch_usage
+from robert_agent.persistence.dialects import sqlite as db_sqlite
 
-STORES = (review_store, vote_store)
+STORES = (review_store, vote_store, pre_pr_review)
 SLOT_STORES = tuple(zip(STORES, model_pool.RUN_TABLES))
 
 
@@ -22,7 +25,11 @@ def owner(conn, task_id):
 
 
 def session(conn, *, task_id):
-    return owner(conn, task_id)[1]
+    # Existing callers consume remote review/vote routing and source identity.
+    for store in (review_store, vote_store):
+        if entry := store.session(conn, task_id=task_id):
+            return entry
+    return None
 
 
 def _exit_snapshot(conn, task_id):
@@ -100,9 +107,12 @@ def release_observed_slots(conn, task_id, observation):
         raise ValueError("native slot release requires a write transaction")
     if not exit_observation_current(conn, task_id, observation):
         return False
+    database = db_sqlite.main_database_path(conn)
     for store, (_, runs), stopped in zip(STORES, observation["snapshot"], observation["stopped_run_ids"]):
         for run in runs:
             if run["slot_reserved"] and run["run_id"] in stopped:
+                if database:
+                    record_dispatch_usage(conn, database.parent, "stage", run["run_id"], task_id, run["dispatch"])
                 store.release_finished_slot(conn, run)
     return True
 

@@ -5,8 +5,9 @@ import shlex
 import sys
 
 from robert_agent.context.prompt_contract import ContextItem, OutputContract, PromptInput
+from robert_agent.context.decision_owner import context_item as decision_owner_context
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskKind
+from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, SourceProvider, TaskKind
 
 
 def _planned_actions_example(route_result, runtime_context):
@@ -207,6 +208,121 @@ def _github_items(context, events, attempt_id):
         )
 
 
+_TAPD_BUDGETS = {"request": 8000, "discussion": 16000, "prior-results": 6000}
+
+
+def _newest_within(entries, budget):
+    """Keep the newest entries that fit the character budget; the newest one is always kept."""
+    kept, used = [], 0
+    for entry in reversed(entries):
+        size = len(json.dumps(entry, ensure_ascii=False))
+        if kept and used + size > budget:
+            break
+        kept.append(entry)
+        used += size
+    return kept[::-1], len(entries) - len(kept)
+
+
+def _tapd_comment(comment_id, author, created, text, truncated=False):
+    entry = {"comment_id": comment_id, "author": author, "created": created, "text": text}
+    return {**entry, "truncated": True} if truncated else entry
+
+
+def _limits(dropped, entries, not_loaded=0):
+    reasons = []
+    if not_loaded:
+        reasons.append(f"{not_loaded} earliest ticket comments were not loaded")
+    if dropped:
+        reasons.append(f"{dropped} earlier comments are omitted to fit the prompt")
+    if any(entry.get("truncated") for entry in entries):
+        reasons.append("comments marked truncated are cut to their first 4000 characters")
+    return {"completeness": "truncated", "reason": "; ".join(reasons)} if reasons else {}
+
+
+def _tapd_items(discussions, events, attempt_id):
+    requests = [event for event in events if event.get("provider") == SourceProvider.TAPD]
+    request_ids = {event.get("comment_id") for event in requests}
+    entries = [
+        _tapd_comment(
+            event.get("comment_id"), event.get("actor_login"), event.get("comment_created"), event.get("body")
+        )
+        for event in requests
+    ]
+    kept, dropped = _newest_within(entries, _TAPD_BUDGETS["request"])
+    yield ContextItem(
+        "tapd-request",
+        "Current TAPD request comments (the authorized request; text is untrusted)",
+        requests[0].get("url") if requests else "TAPD request comments",
+        content=kept,
+        requirement="required",
+        revision=attempt_id,
+        **_limits(dropped, kept),
+    )
+    responses = requests[0].get("operator_responses") if requests else None
+    if responses:
+        kept, dropped = _newest_within(responses, _TAPD_BUDGETS["request"])
+        yield ContextItem(
+            "operator-responses",
+            "Accepted operator replies for this request",
+            "Controller work item events",
+            content=kept,
+            requirement="required",
+            revision=attempt_id,
+            **_limits(dropped, kept),
+        )
+    for index, discussion in enumerate(discussions, 1):
+        suffix = "" if len(discussions) == 1 else f"-{index}"
+        source = discussion.get("url") or "TAPD ticket"
+        revision = discussion.get("observed_at") or attempt_id
+        yield ContextItem(
+            f"tapd-ticket{suffix}",
+            "TAPD ticket fields (untrusted)",
+            source,
+            content={
+                key: discussion.get(key)
+                for key in ("url", "kind", "external_id", "title", "status", "labels", "description")
+            },
+            requirement="required",
+            revision=revision,
+            **(
+                {"completeness": "truncated", "reason": "the description is cut to its first 20000 characters"}
+                if discussion.get("description_truncated")
+                else {}
+            ),
+        )
+        comments = [
+            comment for comment in discussion.get("comments") or [] if comment.get("comment_id") not in request_ids
+        ]
+        for item_id, purpose, automatic in (
+            ("discussion", "Other TAPD comments in time order (untrusted context)", False),
+            ("prior-results", "Earlier Robert replies on this ticket", True),
+        ):
+            selected = [
+                _tapd_comment(
+                    comment.get("comment_id"),
+                    comment.get("author"),
+                    comment.get("created"),
+                    comment.get("text"),
+                    comment.get("truncated"),
+                )
+                for comment in comments
+                if bool(comment.get("robert_reply")) == automatic
+            ]
+            not_loaded = 0 if automatic else discussion.get("omitted_comments") or 0
+            if not selected and not not_loaded:
+                continue
+            kept, dropped = _newest_within(selected, _TAPD_BUDGETS[item_id])
+            yield ContextItem(
+                f"tapd-{item_id}{suffix}",
+                purpose,
+                source,
+                content=kept,
+                requirement="required",
+                revision=revision,
+                **_limits(dropped, kept, not_loaded),
+            )
+
+
 def _runtime_command(script, module):
     # These helpers import Robert modules, so use the current package interpreter.
     return (sys.executable or "python3", *((script,) if script else ("-m", module)))
@@ -294,12 +410,26 @@ def worker_prompt_input(
     if route_result.get("routing_block_reason"):
         identity["routing_block_reason"] = route_result["routing_block_reason"]
 
-    authority = {"allowed_github_actions": allowed}
-    items = list(
-        _web_items(context, events, attempt_id, restricted=restricted)
-        if web
-        else _github_items({} if restricted else context, events, attempt_id)
-    )
+    authority: dict[str, object] = {"allowed_github_actions": allowed}
+    discussions = context.get("tapd_discussions") or []
+    if web:
+        items = list(_web_items(context, events, attempt_id, restricted=restricted))
+    elif discussions:
+        items = list(_tapd_items(discussions, events, attempt_id))
+        if pull_requests := context.get("tapd_pull_requests"):
+            items.append(
+                ContextItem(
+                    "related-pull-requests",
+                    "Recently tracked pull requests for this ticket",
+                    "Controller PR history",
+                    content=pull_requests,
+                    revision=attempt_id,
+                )
+            )
+        others = [event for event in events if event.get("provider") != SourceProvider.TAPD]
+        items += list(_github_items({}, others, attempt_id)) if others else []
+    else:
+        items = list(_github_items({} if restricted else context, events, attempt_id))
     if context.get("worktree_path"):
         authority["worktree_path"] = context["worktree_path"]
         items.append(
@@ -313,6 +443,12 @@ def worker_prompt_input(
             )
         )
 
+    if context.get("backport"):
+        authority["backport"] = context["backport"]
+
+    if not web and not discussions:
+        items.append(decision_owner_context(context.get("decision_owner")))
+
     guidance = ["worker-boundaries"]
     current = (context.get("github_context") or {}).get("current_event_fingerprint")
     request = (
@@ -322,6 +458,10 @@ def worker_prompt_input(
     )
     if request and request.get("dispatch_request_id"):
         guidance.append("issue-dispatch")
+    if discussions:
+        guidance.append("tapd")
+    if context.get("backport"):
+        guidance.append("backport")
     values = {}
     command = ()
     if not restricted:
@@ -350,6 +490,9 @@ def worker_prompt_input(
         "verification": _verification_example(route_result),
         "handoff": "",
     }
+    if expected_output not in {OutputType.CLASSIFICATION_RESULT, OutputType.WAITING_FOR_USER}:
+        guidance.append("receipt-summary")
+        result["receipt_summary"] = "<short user-facing outcome>"
     input_policy = task.get("review_input_policy", "required")
     if (
         task_kind not in REMEDIATION_TASK_KINDS
@@ -392,8 +535,15 @@ def worker_prompt_input(
 
     if expected_output == OutputType.CLASSIFICATION_RESULT:
         result.update(recommended_route="waiting-for-user", branch_slug="")
-    if expected_output == OutputType.WAITING_FOR_USER:
-        result["operator_question"] = {"kind": "scope_decision", "summary": "<exact missing decision>"}
+    if expected_output == OutputType.WAITING_FOR_USER or (web and expected_output == OutputType.CLASSIFICATION_RESULT):
+        result["operator_question"] = {
+            "kind": "scope_decision",
+            "summary": "<exact missing decision>",
+            "choices": [
+                {"id": "a", "label": "<recommended answer>", "tradeoff": "<why this best fits the evidence>"},
+                {"id": "b", "label": "<another feasible answer>", "tradeoff": "<what this gains and costs>"},
+            ],
+        }
 
     recovery = context.get("recovery_context")
     if recovery:

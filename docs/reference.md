@@ -27,6 +27,7 @@ structural validation and defaults. SQLite is the execution engine.
 | `skills` | Skill search paths. |
 | `routes` | Worker, ordinary automatic model/effort overrides, skills, native review/vote settings. |
 | `repos` | Checkouts, worktrees, branch, trust, task capacity, route overrides and opt-in PR automation. |
+| `tapd` | Optional [TAPD source](features/tapd.md): CLI executable, mention name, and per-project trusted user, start time and label-to-repository rules; no credentials. |
 
 A complete minimal example follows. Replace repository paths, branch, account
 and trusted actor with your deployment values:
@@ -79,7 +80,7 @@ PR-author eligibility are checked independently of worker selection.
 Repository max_concurrency cannot exceed scheduler.max_concurrency. Trusted
 actors must be nonempty; these remain repository-scoped authorization settings.
 
-The default hard worker timeout is 45 minutes. When a worker defines
+The default hard worker timeout is one hour. When a worker defines
 `fallback_model`, Robert uses it on the third run after the two immediately
 preceding terminal attempts in the same workstream both end in
 `failed_timeout`. A successful attempt or any other failure type resets the
@@ -94,10 +95,52 @@ fallback stops automatic recovery and records the failure. Quoted error text
 and errors followed by a successful protocol completion do not trigger a switch.
 Native review/vote stages apply the same switch per stage and worker, preserve
 their shared prompt and snapshot, and stop if the fallback is also rate limited.
-`pr_automation` is optional and defaults to disabled. Enabling CI remediation
-requires a non-empty `check_allowlist`; its limits are per durable PR snapshot
-episode. Conflict remediation and CI publication use ordinary non-force pushes
-only after the current remote PR head and base match the audited snapshot.
+`pr_automation.ci` and `pr_automation.conflict` default to disabled. CI
+remediation requires a non-empty `check_allowlist` or `workflow_path_allowlist`.
+Names and paths are exact selectors; either can select a workflow. Paths match
+Actions workflow runs, including dynamically named runs such as CodeQL, while
+names also match external check runs. `check_mode: all` (the default) waits for
+every configured name and path. Use `check_mode: observed` for component workflows
+with path filters: only selected workflows and checks observed for the current
+PR head must complete. No selected observations or an unsuccessful CI API read
+leaves CI waiting. Failed checks still require available failure evidence.
+When `dispatch_mode` is
+`follow_supervision` (the default), `supervision.mode: decide` requires a
+matching model grant for each repair. Set `dispatch_mode: direct` on a
+repository to dispatch the first eligible attempt for each PR snapshot.
+When conflict repair is enabled too, CI repair waits for confirmed
+mergeability. If failed Actions logs arrive late, the same snapshot becomes
+eligible on a later poll while its attempt remains unclaimed and in budget.
+An eligible retry after a failed repair needs a Supervisor decision in `decide` mode. Otherwise Robert records it for operator attention.
+Configure `skills.search_paths` so Robert can find the
+[skills required by the remediation routes](../src/robert_agent/workflows/routes.py).
+
+```yaml
+pr_automation:
+  dispatch_mode: direct
+  conflict:
+    enabled: true
+  ci:
+    enabled: true
+    check_allowlist: [CI]
+```
+
+For component workflows or dynamically named runs, select their stable paths:
+
+```yaml
+pr_automation:
+  ci:
+    enabled: true
+    check_mode: observed
+    workflow_path_allowlist:
+      - .github/workflows/backend.yml
+      - .github/workflows/frontend.yml
+      - dynamic/github-code-scanning/codeql
+```
+
+Episode limits apply to the observed PR snapshot. The publisher uses a
+non-force push to the existing PR after checking its current head and base.
+The next health observation verifies the pushed SHA.
 
 ### Scheduling and timeout defaults
 
@@ -108,7 +151,7 @@ only after the current remote PR head and base match the audited snapshot.
 | `scheduler.local_poll_seconds` | 5 | Local polling and supervision cadence. |
 | `scheduler.lease_ttl_seconds` | 540 | Task lease. |
 | `supervision.heartbeat_stale_seconds` | 1200 | Heartbeat staleness. |
-| `supervision.hard_timeout_seconds` | 2700 | Global supervision wall-time ceiling. |
+| `supervision.hard_timeout_seconds` | 3600 | Global supervision wall-time ceiling. |
 | `supervision.startup_grace_seconds` | 300 | Starting worker grace. |
 | `github.polling.fallback_seconds` | 300 | Startup/error fallback; normal synchronous interval. |
 | `github.polling.synchronous.full_capacity_seconds` | 600 | Synchronous full-capacity interval only. |
@@ -233,6 +276,29 @@ Major table groups:
 
 Schema initialization is idempotent and applies guarded migrations. Do not edit
 rows manually while Robert is running.
+
+Each source row records its provider. GitHub sources keep their Issue or pull
+request number; TAPD story and bug sources have no number and store their TAPD
+project and item IDs instead. `tapd_scan_state` keeps one comment watermark per
+TAPD project, together with first-observed requests whose ticket could not be read
+yet. A workstream can hold a unique public reference
+(`rbt-` followed by lowercase letters and digits). Branches and workspaces for
+sources without a number are named by this reference. TAPD-derived pull requests
+use it in the GitHub workstream marker. The controller resolves the reference to
+the local ticket and uses the open PR's workstream for subsequent TAPD requests.
+
+If the source tables still predate provider identities, initialization rebuilds
+them in one transaction and checks row counts and foreign keys before committing.
+It first copies the database to `<database>.pre-source-providers`. The copy does
+not include `<database>.results/`. Initialization refuses and changes nothing while
+a lease is active, a Worker launch or exit is unconfirmed, or a review or vote
+model process has not been proven to exit. The error names
+the blocking records.
+
+If an upgrade is refused, use the previous Robert version to finish or reconcile
+in-flight work, ingest its result spool, and confirm that Workers and model
+processes have exited. Stop the daemon normally and back up the database and
+result spool before retrying the upgrade.
 
 ```bash
 robert status --config ~/.config/robert/config.yml --output json
@@ -434,6 +500,14 @@ three-attempt/10-minute budget. Without configuration, notifications remain loca
 recording a notification does not mean it was delivered. Delivery attempts run
 outside database transactions with a bounded per-cycle time budget. Health events
 report whether delivery is configured; notification metadata records its outcome.
+
+TAPD ticket notices (`channel=tapd`) are delivered by the publication lane as
+ticket comments, separately from operator delivery. They share the same
+three-attempt/10-minute budget, may be repeated once after an unknown write, and
+are skipped once the ticket has ended. PR status, remediation outcomes, and
+review reminders are deduplicated by PR and terminal state, episode outcome,
+and reviewed PR head commit respectively. Reviews submitted by the repository's
+`github_account` do not produce reminders. The notice contains fixed text and a PR link.
 
 Maintenance records `reliability_health` events containing database/WAL/reusable
 bytes and bounded samples of delayed tasks, pending notifications and stale runs.

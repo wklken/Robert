@@ -44,6 +44,14 @@ class ConfigV2Tests(ConfigV2Fixture):
                 if field == "version" and value == 1:
                     self.assertIn("docs/reference.md#configuration", result["safe_error"])
 
+    def test_pr_automation_direct_dispatch_is_an_explicit_repository_choice(self):
+        automation = self.validate()["repos"][0]["pr_automation"]
+        self.assertEqual(automation["dispatch_mode"], "follow_supervision")
+        self.config["repos"][0]["pr_automation"] = {"dispatch_mode": "direct", "conflict": {"enabled": True}}
+        self.assertEqual(self.validate()["repos"][0]["pr_automation"]["dispatch_mode"], "direct")
+        self.config["repos"][0]["pr_automation"]["dispatch_mode"] = "unknown"
+        self.assertIn("dispatch_mode", self.validate()["safe_error"])
+
     def test_duplicate_yaml_keys_fail(self):
         self.validate()
         self.path.write_text(self.path.read_text() + "\nversion: 2\n")
@@ -176,7 +184,8 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
         self.assertEqual(result["python_bin"], sys.executable)
         self.assertEqual(result["max_concurrency"], 3)
         self.assertEqual(result["model_max_concurrency"], 4)
-        self.assertEqual(result["hard_timeout_seconds"], 2700)
+        self.assertEqual(result["hard_timeout_seconds"], 3600)
+        self.assertTrue(all(worker["timeout_seconds"] == 3600 for worker in result["workers"]))
         self.assertEqual(result["heartbeat_stale_seconds"], 1200)
         self.assertEqual(result["lease_ttl_seconds"], 540)
         self.assertEqual(result["worker_startup_grace_seconds"], 300)
@@ -319,6 +328,38 @@ assert not loaded, f'configuration loaded supervision services: {sorted(loaded)}
                     global_timeout_seconds=config["hard_timeout_seconds"],
                 )
                 self.assertEqual(state["status"], expected)
+
+    def test_empty_skill_search_path_is_rejected(self):
+        for value in ("", "   "):
+            self.config["skills"] = {"search_paths": [value]}
+            with self.subTest(value=value):
+                self.assertFalse(self.validate()["ok"])
+
+    def test_diagnosis_cannot_receive_package_or_cluster_credentials(self):
+        from robert_agent.configuration.supervision import normalize
+
+        for name in ("NPM_TOKEN", "NODE_AUTH_TOKEN", "KUBECONFIG", "AZURE_CLIENT_SECRET"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "prohibited"):
+                normalize({"diagnosis": {"command": ["/usr/bin/model"], "environment_allowlist": [name]}})
+        self.assertEqual(
+            normalize({"diagnosis": {"command": ["/usr/bin/model"], "environment_allowlist": ["OPENAI_API_KEY"]}})[
+                "diagnosis"
+            ]["environment_allowlist"],
+            ["OPENAI_API_KEY"],
+        )
+
+    def test_google_model_authentication_is_an_explicit_profile_allowlist_choice(self):
+        from robert_agent.configuration.supervision import normalize
+
+        for field in ("diagnosis", "decision"):
+            with self.subTest(field=field):
+                profile = {"command": ["/usr/bin/model"], "environment_allowlist": ["GOOGLE_APPLICATION_CREDENTIALS"]}
+                self.assertEqual(
+                    normalize({field: profile})[field]["environment_allowlist"], ["GOOGLE_APPLICATION_CREDENTIALS"]
+                )
+                self.assertEqual(
+                    normalize({field: {"command": ["/usr/bin/model"]}})[field]["environment_allowlist"], []
+                )
 
 
 if __name__ == "__main__":

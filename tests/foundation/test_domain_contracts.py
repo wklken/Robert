@@ -24,6 +24,8 @@ class DomainContractTests(unittest.TestCase):
             ("tasks", "lifecycle"): work.TaskLifecycle,
             ("tasks", "task_kind"): work.TaskKind,
             ("workstreams", "lifecycle"): work.WorkstreamLifecycle,
+            ("github_sources", "provider"): work.SourceProvider,
+            ("github_sources", "source_type"): work.SourceType,
             ("attempts", "status"): execution.AttemptStatus,
             ("wakeups", "status"): work.WakeupStatus,
             ("pr_remediation_episodes", "status"): work.RemediationStatus,

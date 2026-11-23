@@ -14,6 +14,32 @@ from robert_agent.persistence.schema import database as storage
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_database_deadline_reason_survives_health_and_delivery_without_repeat(self):
+        from robert_agent.supervision.application.observation import ObservationUnavailable
+
+        calls = []
+
+        def sent(argv, **kwargs):
+            calls.append(json.loads(kwargs["input"]))
+            return subprocess.CompletedProcess(argv, 0)
+
+        with patch.dict("os.environ", {"ROBERT_NOTIFICATION_COMMAND": "notify-fixture"}):
+            for minute, reason in enumerate(
+                ("database_observation_deadline", "database_observation_deadline", "database_busy")
+            ):
+                with patch(
+                    "robert_agent.supervision.application.observation.collect",
+                    side_effect=ObservationUnavailable(reason),
+                ):
+                    result = supervision_checks.check(self.config, record=True, now=f"2026-11-09T00:0{minute}:00Z")
+                self.assertEqual(result["reason_code"], reason)
+                self.assertEqual(supervision_health.read_health(self.config)["reason_code"], reason)
+                supervision_checks.deliver_health(self.db, supervision_health.health_path(self.config), runner=sent)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["reason_code"], "database_observation_deadline")
+        self.assertIn("超时", calls[0]["safe_error"])
+        self.assertIn("查询", calls[0]["required_action"])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -116,7 +142,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("delivery_id", calls[0])
         self.assertFalse(Path(self.config["db_path"]).exists())
 
-    def test_brief_writer_collision_records_health_without_notice_and_resets_episode(self):
+    def test_isolated_writer_collisions_record_health_without_notice(self):
         calls = []
 
         def sent(argv, **kwargs):
@@ -133,5 +159,5 @@ class SupervisorTests(unittest.TestCase):
                     self.assertEqual(calls, [])
                 result = supervision_checks.check(self.config, record=True, now=f"2026-11-06T00:0{minute}:01+00:00")
                 self.assertTrue(result["ok"])
-                self.assertNotIn("first_failed_at", json.loads(supervision_health.health_path(self.config).read_text()))
+                self.assertTrue(json.loads(supervision_health.health_path(self.config).read_text())["ok"])
         self.assertEqual(calls, [])

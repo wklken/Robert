@@ -127,6 +127,7 @@ class SourceLifecycleTests(RepositoryCycleFixture):
 
     def test_remote_completed_issue_marks_its_item_done(self):
         from robert_agent.readmodels import board
+        from robert_agent.work import wakeup
         from robert_agent.runtime import cycle as run_once
 
         self.assertTrue(
@@ -142,6 +143,15 @@ class SourceLifecycleTests(RepositoryCycleFixture):
             conn.row_factory = sqlite3.Row
             item = dict(conn.execute("SELECT * FROM work_items").fetchone())
             task_id = conn.execute("SELECT task_id FROM tasks").fetchone()[0]
+            pending = wakeup.request_wakeup(
+                conn,
+                repo_id=item["repo_id"],
+                task_id=task_id,
+                work_item_id=item["work_item_id"],
+                reason="manual_operator_request",
+                dedupe_key="source-close-pending",
+                now="2026-07-31T09:00:00+00:00",
+            )
             remote = {
                 "state": "closed",
                 "state_reason": "completed",
@@ -163,10 +173,18 @@ class SourceLifecycleTests(RepositoryCycleFixture):
                     "2026-10-27T00:00:00+00:00",
                 )
             )
+            self.assertEqual(
+                conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (task_id,)).fetchone()[0],
+                "canceled",
+            )
+            self.assertEqual(
+                conn.execute("SELECT status FROM wakeups WHERE wakeup_id=?", (pending["wakeup_id"],)).fetchone()[0],
+                "canceled",
+            )
         detail = board.get_work_item_detail(db, item["work_item_id"])
         self.assertEqual(detail["column"], "done")
         self.assertEqual(detail["completed_at"], remote["closed_at"])
-        self.assertEqual(detail["valid_commands"], [])
+        self.assertEqual(detail["valid_commands"], ["cancel"])
 
     def test_active_issue_task_is_canceled_when_remote_issue_closes(self):
         from robert_agent.runtime import cycle as run_once

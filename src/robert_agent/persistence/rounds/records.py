@@ -7,7 +7,14 @@ from robert_agent.persistence.catalog import tables
 
 
 def round_table(name):
-    if name not in {"review_sessions", "review_runs", "vote_sessions", "vote_runs"}:
+    if name not in {
+        "review_sessions",
+        "review_runs",
+        "vote_sessions",
+        "vote_runs",
+        "pre_pr_review_sessions",
+        "pre_pr_review_runs",
+    }:
         raise ValueError("unknown model round table")
     return tables[name]
 
@@ -33,6 +40,8 @@ def update_session(conn, table_name, round_id, fields):
     }
     if table_name == "vote_sessions":
         allowed.add("request_json")
+    if table_name == "pre_pr_review_sessions":
+        allowed |= {"proof_json", "final_result_id", "snapshot_id", "request_json", "deadline_at", "next_retry_at"}
     if not set(fields) <= allowed:
         raise ValueError("invalid round session fields")
     return statements.write(conn, update(table).where(table.c.round_id == round_id).values(fields))

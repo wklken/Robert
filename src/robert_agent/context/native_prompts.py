@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from robert_agent.context.prompt_contract import ContextItem, OutputContract, PromptInput
+from robert_agent.context.decision_owner import context_item as decision_owner_context
 
 
 _REVIEW_DIR = "ROBERT_REVIEW_OUTPUT_DIR"
@@ -80,7 +81,12 @@ def _review_input(stage, manifest, output, *, prepared=False, extra=(), values=N
         _identity(manifest),
         output,
         authority={"source_access": "read-only", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
-        context_items=(*_snapshot_context(manifest, "review snapshot", files), source, *extra),
+        context_items=(
+            *_snapshot_context(manifest, "review snapshot", files),
+            source,
+            decision_owner_context(manifest.get("decision_owner")),
+            *extra,
+        ),
         values=values or {},
     )
 
@@ -151,6 +157,7 @@ def review_synthesize_input(manifest, inputs, *, severities, recommendations, di
         ],
         "merge_recommendation": recommendations[1],
         "merge_reason": "中文合并理由",
+        "receipt_summary": "<short user-facing review outcome>",
     }
     output = _files_output("review_evaluation", _REVIEW_DIR, ("evaluation.json",), "Review coordinator", example)
     selected = _file_item(
@@ -199,7 +206,7 @@ def _vote_input(stage, manifest, output, *, frozen=False, extra=()):
             "allowed_github_actions": [],
             "output_directory": _VOTE_DIR,
         },
-        context_items=(*items, *extra),
+        context_items=(*items, decision_owner_context(manifest.get("decision_owner")), *extra),
     )
 
 
@@ -239,6 +246,7 @@ def vote_synthesize_input(manifest, inputs_path, inputs_hash, records):
         "inputs_sha256": inputs_hash,
         "ballot_refs": [record["ballot_sha256"] for record in records],
         "summary": "Explain the comparison",
+        "receipt_summary": "<short user-facing vote outcome>",
         "recommendation": "Advisory recommendation and reasons",
         "agreements": [],
         "disagreements": [],
@@ -253,3 +261,115 @@ def vote_synthesize_input(manifest, inputs_path, inputs_hash, records):
         inputs_hash,
     )
     return _vote_input("vote.synthesize", manifest, output, frozen=True, extra=(selected,))
+
+
+def address_findings_input(manifest, candidate_path, report_path, report_sha, decision_ids, *, operator_reply=None):
+    identity = {"candidate_sha": manifest["head_sha"], "report_sha256": report_sha}
+    output = _files_output(
+        "review_dispositions",
+        _REVIEW_DIR,
+        ("dispositions.json",),
+        "Robert's new-pr coordinator",
+        {
+            **identity,
+            "final_sha": "<full HEAD SHA after committing>",
+            "dispositions": [
+                {"id": finding, "status": "fixed", "reason": "<concrete change and evidence>"}
+                for finding in decision_ids
+            ],
+            "verification": [
+                {
+                    "command": ["<check>"],
+                    "status": "passed",
+                    "purpose": "<behavior tested>",
+                    "exit_code": 0,
+                    "required": True,
+                    "source": "worker_reported",
+                }
+            ],
+            "body": "<updated original PR description>",
+            "receipt_summary": "<short outcome for the final implementation>",
+        },
+    )
+    return PromptInput(
+        "review.address_findings",
+        identity,
+        output,
+        authority={"source_access": "assigned worktree", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
+        context_items=(
+            decision_owner_context(manifest.get("decision_owner")),
+            _file_item(
+                "candidate",
+                "Original implementation and verification handoff",
+                "Robert",
+                candidate_path,
+                manifest["head_sha"],
+            ),
+            _file_item("report", "Frozen report with the findings to address", "Robert", report_path, report_sha),
+            *(
+                (
+                    ContextItem(
+                        "operator_reply",
+                        "Authenticated clarification within the original frozen task scope; no additional authority",
+                        "versioned operator reply",
+                        requirement="required",
+                        content=operator_reply,
+                    ),
+                )
+                if operator_reply
+                else ()
+            ),
+        ),
+    )
+
+
+def final_review_input(inputs, input_path):
+    identity = {
+        key: inputs[key]
+        for key in (
+            "round_id",
+            "snapshot_id",
+            "candidate_sha",
+            "final_sha",
+            "report_sha256",
+            "dispositions_sha256",
+            "additional_diff_sha256",
+        )
+    }
+    return PromptInput(
+        "review.verify_final",
+        identity,
+        _files_output(
+            "final_review",
+            _REVIEW_DIR,
+            ("final-verification.json",),
+            "Pre-PR release gate",
+            {
+                "schema_version": 1,
+                **identity,
+                "recommendation": "approved",
+                "checked_findings": [
+                    {"id": item, "status": "resolved", "reason": "concrete final source evidence"}
+                    for item in inputs["finding_ids"]
+                ],
+                "blocking_findings": [],
+            },
+        ),
+        authority={"source_access": "read-only", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
+        context_items=(
+            _file_item(
+                "final-review-inputs",
+                "Pinned findings, dispositions, additional diff and their digests",
+                "Robert",
+                input_path,
+                inputs["final_sha"],
+            ),
+            _file_item(
+                "final-worktree",
+                "Actual final candidate source, callers and tests",
+                "Robert",
+                inputs["worktree_path"],
+                inputs["final_sha"],
+            ),
+        ),
+    )

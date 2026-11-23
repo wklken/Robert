@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     messaging_parser = subparsers.add_parser("messages", help="Authenticated local messaging bridge.")
-    messaging_parser.add_argument("messages_command", choices=["inbox", "respond", "dispatch"])
+    messaging_parser.add_argument("messages_command", choices=["inbox", "respond", "reply", "dispatch"])
     _add_config_argument(messaging_parser)
     _add_output_argument(messaging_parser)
 
@@ -232,11 +232,13 @@ def build_parser() -> argparse.ArgumentParser:
     maintenance_parser = subparsers.add_parser("maintenance", help="Manage diagnostic history.")
     prune_parser = maintenance_parser.add_subparsers(dest="maintenance_command", required=True).add_parser(
         "prune",
-        help="Preview one retention batch; --apply deletes expired diagnostics.",
+        help="Preview expired diagnostics and older no-action detail; --apply performs cleanup.",
     )
     _add_config_argument(prune_parser)
     _add_output_argument(prune_parser)
-    prune_parser.add_argument("--apply", action="store_true", help="Apply retention (default: read-only preview).")
+    prune_parser.add_argument(
+        "--apply", action="store_true", help="Delete expired history and compact no-action detail (default: preview)."
+    )
     prune_parser.add_argument("--batch-size", type=int, help="Runs, events and leases per transaction (1-500).")
     prune_parser.add_argument(
         "--batches", type=int, default=1, help="Maximum apply transactions (1-1000); preview always shows one batch."
@@ -277,6 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     web_run.add_argument("--writable", action="store_true")
     web_run.add_argument("--allow-remote", action="store_true")
     web_run.add_argument("--json", action="store_true")
+    web.add_receipt_fx_arguments(web_run)
 
     openclaw_parser = subparsers.add_parser(
         "openclaw",
@@ -416,6 +419,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if args.messages_command == "dispatch"
                     else messaging.inbox(validated, request)
                     if args.messages_command == "inbox"
+                    else messaging.reply(validated, request)
+                    if args.messages_command == "reply"
                     else messaging.respond(validated, request)
                 )
             except (WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError) as exc:
@@ -552,6 +557,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 web_argv.extend(["--config", args.config])
             if args.public_origin is not None:
                 web_argv.extend(["--public-origin", args.public_origin])
+            if args.receipt_fx_rate is not None:
+                web_argv.extend(["--receipt-fx-rate", args.receipt_fx_rate])
+            if args.receipt_fx_date is not None:
+                web_argv.extend(["--receipt-fx-date", args.receipt_fx_date])
             if args.writable:
                 web_argv.append("--writable")
             if args.allow_remote:

@@ -45,12 +45,12 @@ Paths below are relative to `src/robert_agent/`.
 | `delivery/` | Submission contract, pure policies, locks, result/intent facts, selection and notification persistence | `delivery/application/`: audit, submission, trusted scope, guarded effects, intents, receipts, notifications, reconciliation and publication |
 | `supervision/` | Rules, lineage, model decision grants, durable recovery records, receipt proof and health projections | `supervision/application/`: observation, checks, decision calls and replies, publication recovery coordination |
 | `context/` | Unified prompt contracts/rendering, stage inputs, skills, review guidance, project memory and runtime knowledge | `context/application/`: transactional human knowledge review |
-| `workflows/` | Concrete review, vote, PR remediation and maintenance policies/processes | Compose domain capabilities; shared execution does not select a workflow implementation |
+| `workflows/` | Concrete review, pre-publication PR review, vote, PR remediation and maintenance policies/processes | Compose domain capabilities; shared execution does not select a workflow implementation |
 | `configuration/` | v2 loading, normalization, schema validation and route/supervision settings | Boundary parsing only; no execution or workflow imports |
 | `readmodels/` | Read-only dashboard, board, status, execution, usage and history projections | No HTTP dependency and no lifecycle mutations |
 | `models/` | Static SQLAlchemy table mappings preserving existing storage encodings | No I/O or imports of persistence or domain callers |
 | `persistence/` | Shared queries, writes, conditional mutations, transactions, schema and SQLite dialect mechanics | No reverse imports of domain/use-case callers; return materialized records or affected counts |
-| `adapters/` | GitHub, Git, processes, notifications and native services | External protocols; no reverse imports of their application callers |
+| `adapters/` | GitHub, Git, TAPD CLI, processes, notifications and native services | External protocols; no reverse imports of their application callers |
 | `runtime/` | Cycle, loop, daemon, scanner, supervisor and child entrypoints | Scheduling, resource lifetime and invoking use cases; no business SQL |
 | `application/` | Cross-domain repository-cycle composition | Explicit coordination only; domain-owned use cases live under their own domain |
 | `interfaces/web/`, `cli/`, `worker/`, `integrations/` | HTTP/CLI/Worker/OpenClaw input and output contracts | Translate input, authenticate and call use cases; no business SQL in HTTP |
@@ -67,6 +67,18 @@ Paths below are relative to `src/robert_agent/`.
   importing another domain's implementation. Keep distinct state machines in
   separate enum classes; use `.value` at database and serialization boundaries.
   Stored strings, schema constraints and protocol values must stay aligned.
+- `foundation/timestamps.py` is a standard-library-only leaf for timezone-aware
+  UTC parsing and exact comparisons. Configuration, persistence and supervision
+ share it for notification activation boundaries; it must not acquire I/O or
+ domain dependencies.
+- `foundation/tapd_identity.py` is a standard-library-only leaf for TAPD host,
+ project key, ticket URL, source key and comment fingerprint syntax. Configuration,
+ the TAPD adapter, source owners and `delivery.contract` import it directly; it
+ must not acquire I/O or domain dependencies.
+- `foundation/question_choices.py` owns the shared ordered option shape and
+  labels for Agent questions. Prompt, Worker result, supervision and notification
+  consumers share this standard-library leaf. The delivery use case owns public
+  text validation and the operator command owns selection against a saved question.
 - Group by domain first, then split a domain into responsibility/layer submodules.
   Reuse the domain's existing input types, errors, policies, facts and public
   capabilities. Do not scatter another implementation of the same concept into

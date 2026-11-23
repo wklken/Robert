@@ -10,10 +10,12 @@ import threading
 import os
 
 from robert_agent.adapters.processes import identity, model_command
+from robert_agent.persistence.stores import model_usage
 from robert_agent.configuration.supervision import normalize_diagnosis
 from robert_agent.persistence import database, errors, transactions
 from robert_agent.persistence.queries import supervision_decisions as queries
 from robert_agent.persistence.stores import notifications
+from robert_agent.security.text import safe_text
 from robert_agent.supervision import decisions, store
 from robert_agent.supervision.rules import timestamp
 
@@ -28,6 +30,18 @@ def _read_runner(conn):
 
 def _write_runner(conn, value, now):
     store.update_checkpoint(conn, *decisions.RUNNER_KEY, now=now, metadata=value)
+
+
+def _record_usage(conn, claim, root_id, now, observed):
+    task_id = claim.get("usage_task_id")
+    model_usage.record(
+        conn,
+        "decision" if task_id else "decision_workstream",
+        claim["bundle_id"],
+        task_id or root_id or claim["bundle_id"],
+        now,
+        observed or {},
+    )
 
 
 class DecisionLoop:
@@ -73,8 +87,10 @@ class DecisionLoop:
                         output = None
                 except (ValueError, RecursionError, UnicodeError):
                     outcome["status"] = ModelCommandStatus.INVALID_OUTPUT.value
+                    outcome["safe_error"] = outcome.get("safe_error") or "Model output failed the decision contract."
             if outcome["status"] == ModelCommandStatus.READ.value and output is None:
                 outcome["status"] = ModelCommandStatus.INVALID_OUTPUT.value
+                outcome["safe_error"] = outcome.get("safe_error") or "Model returned no valid decision."
             self.result = (request, outcome, output)
         except (OSError, errors.Error, ValueError):
             # An unresolved identity keeps its durable claim for reconciliation.
@@ -88,8 +104,19 @@ class DecisionLoop:
             claim = runner.get("claim") or {}
             if claim.get("bundle_id") != request["bundle_id"]:
                 return {"status": DecisionRunStatus.CLAIM_CHANGED.value}
+            if outcome.get("launched"):
+                _record_usage(conn, claim, request["root_id"], now, outcome.get("usage"))
+            if not outcome["stopped"]:
+                # _finish runs only after the owned launcher thread returns.
+                # Persist that it can no longer spawn or checkpoint a child.
+                claim = {**claim, "launcher_finished_at": now}
+                if outcome.get("process_identity"):
+                    claim["process_identity"] = outcome["process_identity"]
             state = decisions.read(conn, request["root_id"])
             status = outcome["status"]
+            if not outcome["stopped"]:
+                status = ModelCommandStatus.PROCESS_ATTENTION.value
+                output = None
             if output is not None:
                 status = (
                     DecisionRunStatus.DECIDED.value
@@ -97,6 +124,26 @@ class DecisionLoop:
                     else DecisionRunStatus.STALE_EVIDENCE.value
                 )
             if status != DecisionRunStatus.DECIDED.value:
+                if output is None:
+                    failure = {
+                        "decision_id": request["bundle_id"],
+                        "status": status,
+                        "failed_at": now,
+                        "safe_error": safe_text(outcome.get("safe_error"), 2000),
+                        "exit_code": outcome.get("exit_code"),
+                        "stderr_truncated": bool(outcome.get("stderr_truncated")),
+                        **{key: outcome[key] for key in ("failure_phase", "error_class") if key in outcome},
+                    }
+                    state = {**state, "last_failure": failure}
+                    runner["last_failure"] = failure
+                    store.update_checkpoint(
+                        conn,
+                        "decision_record",
+                        request["root_id"],
+                        request["bundle_id"],
+                        now=now,
+                        metadata={"status": status, "last_failure": failure},
+                    )
                 decisions.write(
                     conn,
                     request["root_id"],
@@ -131,7 +178,12 @@ class DecisionLoop:
                     decisions.encode(
                         {
                             "reason_code": status,
-                            "required_action": "Inspect the supervisor decision service; automatic decisions are waiting.",
+                            "decision_id": request["bundle_id"],
+                            "exit_code": outcome.get("exit_code"),
+                            # Repository diagnostics stay in the checkpoints above;
+                            # this service health alert is delivered globally.
+                            "summary": "自动决策调用连续失败。这是全局监督服务告警，Kanban 不会生成任务确认项。",
+                            "required_action": "在 /operations 通知中心或 robert supervisor status 中检查决策服务；ack 仅记录收悉，后续有效模型调用会自动解除告警。",
                             "retryable": False,
                         }
                     ),
@@ -139,12 +191,44 @@ class DecisionLoop:
                 runner["notice_sent"] = True
             if not failures:
                 runner["notice_sent"] = False
+                notifications.resolve_decision_unavailable(conn, now, request["bundle_id"])
             _write_runner(conn, runner, now)
         return {"status": status, "workstream_id": request["root_id"]}
 
     def _recover_previous(self, config, claim, now):
         recorded = claim.get("process_identity")
         if not recorded:
+            owner = claim.get("owner_identity")
+            launcher_finished = bool(claim.get("launcher_finished_at"))
+            owner_dead = owner and identity.inspect_recorded_identity(owner) == "dead"
+            if claim.get("root_id") and (launcher_finished or owner_dead):
+                # The launcher cannot produce a late spawn or checkpoint.
+                # Unknown children continue fencing their own root.
+                with closing(_connect(config)) as conn, conn:
+                    transactions.begin(conn, immediate=True)
+                    runner = _read_runner(conn)
+                    if runner.get("claim") != claim:
+                        return {"status": DecisionRunStatus.CLAIM_CHANGED.value}
+                    attention = runner.get("attention_claims", {})
+                    if claim["root_id"] in attention:
+                        return {"status": DecisionRunStatus.PROCESS_ATTENTION.value}
+                    _write_runner(
+                        conn,
+                        {
+                            **runner,
+                            "claim": None,
+                            "attention_claims": {**attention, claim["root_id"]: claim},
+                            "last_status": DecisionRunStatus.PROCESS_ATTENTION.value,
+                        },
+                        now,
+                    )
+                    previous = decisions.read(conn, claim["root_id"])
+                    decisions.write(
+                        conn,
+                        claim["root_id"],
+                        {**previous, "status": DecisionRunStatus.PROCESS_ATTENTION.value},
+                        now,
+                    )
             return {"status": DecisionRunStatus.PROCESS_ATTENTION.value}
         state = identity.inspect_recorded_identity(recorded)
         if state == "alive_same" and timestamp(now) >= timestamp(claim["deadline_at"]):
@@ -162,6 +246,7 @@ class DecisionLoop:
             runner = _read_runner(conn)
             if (runner.get("claim") or {}).get("bundle_id") != claim["bundle_id"]:
                 return {"status": DecisionRunStatus.CLAIM_CHANGED.value}
+            _record_usage(conn, claim, claim.get("root_id"), now, {})
             _write_runner(
                 conn,
                 {
@@ -211,6 +296,8 @@ class DecisionLoop:
                 for target in targets:
                     root_id = target["workstream_id"]
                     runner["cursor"] = root_id
+                    if root_id in runner.get("attention_claims", {}):
+                        continue
                     previous = decisions.read(conn, root_id)
                     if previous.get("status") == DecisionStatus.ASK_USER:
                         continue
@@ -245,7 +332,13 @@ class DecisionLoop:
                             now,
                         )
                         continue
+                    active_tasks = {
+                        stream["active_task_id"]
+                        for stream in snapshot["context"]["streams"]
+                        if stream.get("active_task_id")
+                    }
                     claim = {
+                        "usage_task_id": next(iter(active_tasks)) if len(active_tasks) == 1 else None,
                         "bundle_id": request["bundle_id"],
                         "root_id": root_id,
                         "claimed_at": now,
@@ -262,7 +355,11 @@ class DecisionLoop:
                     self.thread.start()
                     return {"status": DecisionRunStatus.LAUNCHED.value, "workstream_id": root_id}
                 _write_runner(conn, runner, now)
-                return {"status": DecisionRunStatus.IDLE.value}
+                return {
+                    "status": DecisionRunStatus.PROCESS_ATTENTION.value
+                    if runner.get("attention_claims")
+                    else DecisionRunStatus.IDLE.value
+                }
         except (OSError, errors.Error, ValueError, RecursionError, identity.IdentityReadError):
             return {"status": DecisionRunStatus.UNAVAILABLE.value}
 

@@ -4,13 +4,62 @@
 
 The resident daemon runs three independently supervised lanes:
 
-- **Scanner:** reads GitHub through `gh`, commits observations and a wakeup per repository, then continues scanning. Remote I/O does not hold the repository's task-processing lease.
+- **Scanner:** reads GitHub through `gh`, commits observations and a wakeup for repositories with events or tracked/pending sources, then continues scanning. Empty scans still refresh read caches without waking local execution. Remote I/O does not hold the repository's task-processing lease.
 - **Local drain:** authorizes and routes observations against current local state, supervises workers, audits results, and finalizes published results. Each repository's prepared tasks can dispatch immediately after its transaction commits, within the existing global and repository capacity limits.
 - **Publisher:** performs audited GitHub actions and configured operator notification delivery. It retains the existing task publication locks, fresh remote validation, retry policy, and idempotency checks. A slow publish does not block unrelated local dispatch.
 
 The daemon owns scanner and publisher subprocesses. Their startup identity is persisted before they execute remote work. Stop/restart checks process identity and process-group cleanup; unproven cleanup is reported as attention rather than treated as successful termination. Recovery is limited to expired/released prior owners of the same daemon scope.
 
 `robert daemon run --once` and standalone `run once` retain the synchronous diagnostic path. The three lanes apply to the resident service.
+
+The resident local drain checks readiness again before creating run diagnostics
+and before entering each repository pipeline. Idle repositories create no step
+or lease records. A pending operator notification schedules the publisher
+independently; it does not start repository pipelines. Empty event lists still
+reach local processing when tracked sources need closure or PR health checks.
+The drain compares durable work states within its configured repositories.
+Task or attempt phase changes can continue a drain even when counts are steady.
+Heartbeat updates and repeated diagnostics do not keep a drain running.
+
+Replayed comments that already triggered a completed, failed or canceled task,
+or were consumed by an earlier task, are skipped before applying execution facts.
+New inputs apply facts only to active execution controls; terminal and attention
+controls retain their state and evidence. Fresh trusted follow-up requests still
+use the existing admission checks; replay alone does not retry a failed task.
+
+## Diagnostic history
+
+Run summaries and business events remain separate from detailed controller steps.
+The pipeline step references its completed run's repository summaries
+instead of storing the same list twice. Existing full outputs remain readable.
+For a local drain with explicit no-action evidence, the start row becomes its
+completion row. This retains the run references, start time, and elapsed
+wall-clock time in one record. Running drains, work with recorded effects,
+failures and uncertain outcomes keep their normal diagnostic trail.
+
+Maintenance keeps full detail for the newest 200 runs, running/failed runs, runs
+referenced by wakeups or active leases, and each repository's latest successful
+route completion. Older successful runs with every execution, publication and
+reconciliation counter explicitly zero retain their summary while step rows and
+released repository leases are compacted. Reading events or authorizing inputs
+alone does not require retaining every no-action step. Missing counters, malformed
+summaries and recorded step failures retain their detail. CLI and Web projections
+explain when a run's details were compacted.
+
+Identical compacted summaries share one diagnostic record, with a foreign-key
+reference from each run. CLI and Web queries resolve the complete summary in
+the same database statement. Maintenance also replaces historical summarize
+and pipeline outputs with references when their content exactly matches the
+run summary. Other output fields, step timing and errors remain intact.
+Malformed, differing or unfinished outputs are retained. Shared summaries are
+removed only after their last run reference disappears. JSON whitespace and
+object key order may change; decoded values remain the same.
+
+Configured run and failure retention periods still govern whole-history removal.
+`robert maintenance prune` previews the affected row counts; `--apply` performs
+bounded transactions. Maintenance does not automatically vacuum the database.
+The result also reports `deduplicated_summaries`, `referenced_step_outputs` and
+`pruned_shared_summaries`, separately from deleted row counts.
 
 ## Read reuse and polling
 
@@ -21,7 +70,7 @@ The daemon owns scanner and publisher subprocesses. Their startup identity is pe
 | Search | Successful results are reused for five minutes. Changed notification hints for that repository force a refresh. A search-quota shortage can reuse the last successful snapshot up to thirty minutes old while notifications continue. The five-minute freshness deadline and thirty-minute retention deadline are separate; older snapshots are not replayed. |
 | Source discovery | Complete event outputs are cached by source version, notification hints, account/host, trust settings, effective review allowlist, and known-workstream membership. The cache expires after thirty minutes, forcing a full detail refresh. |
 | Reconciliation | Sources selected by the existing workstream reconciliation query, plus sources in pending non-attention batches, are checked each scan. Historical unauthorized sources without a workstream do not enter that query. An open PR needs only its issue state; a closed PR uses `pull_request.merged_at`, with a pull-detail fallback when that field is absent. |
-| CI and publication validation | Continue their own current-state checks; discovery caches do not authorize publication or replace CI evidence. |
+| CI and publication validation | Resolve the current base branch ref alongside PR head and mergeability. The scanner retains a bounded, redacted excerpt of failed Actions steps for local replay. If redaction blocks an excerpt, the replay retains a safe failure category and the workflow observation retains available GitHub job and failed step numbers. Blocked evidence cannot authorize remediation. Discovery caches do not authorize publication or replace CI evidence. |
 
 Notification polling follows `X-Poll-Interval` when supplied, with a 60-second fallback after a completed scan. `Retry-After` on notification responses and core-quota reset times can extend the delay. A full worker pool does not increase the resident scanner interval to 600 seconds. `github.polling.fallback_seconds` still controls delayed startup and recovery after a scanner failure without a returned interval. Polling is scheduled after a scan completes, so a slow scan cannot overlap another scan in the same daemon. While a scan is running, the daemon waits on its local polling/wakeup interval instead of treating the elapsed remote poll deadline as immediate work. An unchanged child-attention condition is reported once.
 
@@ -89,7 +138,7 @@ python3 -m robert_agent.runtime.scan --config ~/.config/robert/config.yml --retr
 
 Retry is limited to repositories in that configuration. It resets the retry budget, preserves the original events, and wakes the daemon. A mismatched context still waits for the next permitted remote scan. A batch returning HTTP 410 is retained for inspection rather than silently discarded or retried forever.
 
-Control children record a Linux boot ID/PID namespace or macOS boot-session UUID. A proven change of boot session on the execution host retires the old record without signaling a potentially reused PID. A namespace change alone, missing boot evidence, or ambiguous same-boot PID reuse does **not** prove that old descendants stopped; daemon startup remains blocked in those cases.
+Control children record a Linux boot ID/PID namespace or macOS boot-session UUID. A proven change of boot session on the execution host retires the old record without signaling a potentially reused PID. A namespace change alone, missing boot evidence, or ambiguous same-boot PID reuse cannot establish that old descendants stopped. With a known scan or publish lane, that lane stays paused while the others start. An unclassifiable child still blocks daemon startup.
 
 For that fallback, first stop the service and verify that its old scanner/publisher execution context and descendants have stopped. Then inspect the saved records and explicitly acknowledge only the relevant child:
 

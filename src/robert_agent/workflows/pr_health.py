@@ -1,14 +1,17 @@
 """Read-only GitHub PR health and CI evidence normalization."""
 
 from robert_agent.adapters.github import client as github_client
+from robert_agent.adapters.github.recording import JobLogBlocked
 
 import hashlib
 import json
 import re
 import subprocess
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from robert_agent.security import redaction
+from robert_agent.security.text import strip_ansi
 from robert_agent.foundation.commands import run_command
 
 
@@ -20,7 +23,6 @@ MANUAL_CONCLUSIONS = {
     "startup_failure",
     "timed_out",
 }
-ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 TIMESTAMP_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b")
 WHITESPACE_RE = re.compile(r"[ \t]+")
 
@@ -40,22 +42,39 @@ def fetch_pr_snapshot(repo_full_name, number, runner=subprocess.run):
     base = _mapping(payload.get("base"))
     head_repo = _mapping(head.get("repo"))
     author = _mapping(payload.get("user"))
+    state = payload.get("state") or "open"
+    merged = bool(payload.get("merged") or payload.get("merged_at"))
+    base_ref = base.get("ref") or ""
+    base_sha = base.get("sha") or ""
+    if state == "open" and not merged:
+        if not base_ref:
+            return None
+        # GitHub's PR base SHA can lag the branch even after mergeability changes.
+        ref = github_client.try_read_json(
+            ["gh", "api", f"repos/{repo_full_name}/git/ref/heads/{quote(base_ref, safe='/')}"],
+            runner=runner,
+        )
+        if not isinstance(ref, dict) or ref.get("ref") != f"refs/heads/{base_ref}":
+            return None
+        base_sha = _mapping(ref.get("object")).get("sha") or ""
+        if not base_sha:
+            return None
     return {
-        "state": payload.get("state") or "open",
-        "merged": bool(payload.get("merged") or payload.get("merged_at")),
+        "state": state,
+        "merged": merged,
         "mergeable": payload.get("mergeable"),
         "head_sha": head.get("sha") or "",
         "head_ref": head.get("ref") or "",
         "head_repo_full_name": head_repo.get("full_name") or "",
-        "base_sha": base.get("sha") or "",
-        "base_ref": base.get("ref") or "",
+        "base_sha": base_sha,
+        "base_ref": base_ref,
         "author_login": author.get("login") or "",
         "html_url": payload.get("html_url"),
         "updated_at": payload.get("updated_at"),
     }
 
 
-def _try_run_text(args, runner):
+def _read_job_log(args, runner):
     try:
         completed = run_command(
             args,
@@ -64,12 +83,17 @@ def _try_run_text(args, runner):
             capture_output=True,
             check=True,
         )
-    except (FileNotFoundError, OSError, subprocess.CalledProcessError):
-        return None
-    return completed.stdout
+    except JobLogBlocked:
+        return "", "blocked_secret"
+    except (OSError, subprocess.CalledProcessError):
+        return "", "unavailable"
+    log = completed.stdout or ""
+    return (log, "available") if strip_ansi(log).strip() else ("", "unavailable")
 
 
 def _items(payload, key):
+    if isinstance(payload, list):
+        return [item for page in payload for item in _items(page, key)]
     if not isinstance(payload, dict):
         return []
     value = payload.get(key)
@@ -77,7 +101,7 @@ def _items(payload, key):
 
 
 def _normalize_failure_text(text):
-    without_ansi = ANSI_ESCAPE_RE.sub("", text or "")
+    without_ansi = strip_ansi(text or "")
     redacted_result = redaction.redact_text(without_ansi)
     if not redacted_result["ok"]:
         return ""
@@ -111,7 +135,7 @@ def failure_signature(failures):
 
 
 def _evidence(text, max_summary_chars):
-    clean_text = ANSI_ESCAPE_RE.sub("", text or "").strip()
+    clean_text = strip_ansi(text or "").strip()
     if not clean_text:
         return {
             "evidence_status": "unavailable",
@@ -154,6 +178,7 @@ def _workflow_observation(
     check_name = str(workflow.get("name") or "")
     conclusion = workflow.get("conclusion")
     evidence = {}
+    failed_job_locations = []
     if conclusion == "failure":
         jobs_payload = github_client.try_read_json(
             [
@@ -165,22 +190,33 @@ def _workflow_observation(
         )
         failed_jobs = [job for job in _items(jobs_payload, "jobs") if job.get("conclusion") == "failure"]
         excerpts = []
-        evidence_status = "available"
+        incomplete_logs = set()
         for job in failed_jobs:
-            log = _try_run_text(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{repo_full_name}/actions/jobs/{job.get('id')}/logs",
-                ],
+            job_id = job.get("id")
+            if type(job_id) is not int or job_id <= 0:
+                incomplete_logs.add("unavailable")
+                continue
+            failed_step_numbers = [
+                step["number"]
+                for step in _items(job, "steps")
+                if isinstance(step, dict)
+                and step.get("conclusion") == "failure"
+                and type(step.get("number")) is int
+                and step["number"] > 0
+            ]
+            failed_job_locations.append({"job_id": job_id, "failed_step_numbers": failed_step_numbers})
+            log, status = _read_job_log(
+                ["gh", "run", "view", "--repo", repo_full_name, "--job", str(job_id), "--log-failed"],
                 runner,
             )
-            if log is None:
-                evidence_status = "unavailable"
-                continue
-            excerpts.append(f"[job: {job.get('name') or job.get('id')}]\n{log}")
+            if status != "available":
+                incomplete_logs.add(status)
+            else:
+                excerpts.append(f"[job: {job.get('name') or job_id}]\n{log}")
         evidence = _evidence("\n".join(excerpts), max_summary_chars)
-        if evidence_status == "unavailable":
+        if "blocked_secret" in incomplete_logs:
+            evidence.update(evidence_status="blocked_secret", failure_summary="", failure_signature="")
+        elif incomplete_logs and evidence["evidence_status"] != "blocked_secret":
             evidence["evidence_status"] = "unavailable"
     observation = {
         "source_kind": "workflow_run",
@@ -194,6 +230,7 @@ def _workflow_observation(
         "external_id": str(workflow.get("id") or ""),
         "attempt_no": int(workflow.get("run_attempt") or 1),
         "check_name": check_name,
+        "workflow_path": str(workflow.get("path") or ""),
         "status": workflow.get("status") or "",
         "conclusion": conclusion,
         "details_url": workflow.get("html_url"),
@@ -201,6 +238,7 @@ def _workflow_observation(
         "freshness_at": workflow.get("updated_at"),
     }
     if evidence:
+        observation["failed_jobs"] = failed_job_locations
         evidence["failure_signature"] = (
             failure_signature(
                 [
@@ -306,17 +344,35 @@ def collect_ci_observations(
     *,
     check_allowlist,
     max_summary_chars,
+    workflow_path_allowlist=(),
     runner=subprocess.run,
 ):
     allowed = set(check_allowlist)
+    allowed_paths = set(workflow_path_allowlist)
     workflow_payload = github_client.try_read_json(
         [
             "gh",
             "api",
             f"repos/{repo_full_name}/actions/runs?head_sha={head_sha}&per_page=100",
+            "--paginate",
+            "--slurp",
         ],
         runner=runner,
     )
+    if workflow_payload is None:
+        return []
+    checks_payload = github_client.try_read_json(
+        [
+            "gh",
+            "api",
+            f"repos/{repo_full_name}/commits/{head_sha}/check-runs?per_page=100",
+            "--paginate",
+            "--slurp",
+        ],
+        runner=runner,
+    )
+    if checks_payload is None:
+        return []
     observations = [
         _workflow_observation(
             repo_full_name,
@@ -325,17 +381,9 @@ def collect_ci_observations(
             runner=runner,
         )
         for workflow in _items(workflow_payload, "workflow_runs")
-        if workflow.get("head_sha") == head_sha and workflow.get("name") in allowed
+        if workflow.get("head_sha") == head_sha
+        and (workflow.get("name") in allowed or workflow.get("path") in allowed_paths)
     ]
-
-    checks_payload = github_client.try_read_json(
-        [
-            "gh",
-            "api",
-            f"repos/{repo_full_name}/commits/{head_sha}/check-runs?per_page=100",
-        ],
-        runner=runner,
-    )
     observations.extend(
         _check_observation(
             repo_full_name,
@@ -365,26 +413,44 @@ def _observation_freshness(observation):
     )
 
 
-def summarize_ci(observations, check_allowlist):
+def summarize_ci(observations, check_allowlist, *, workflow_path_allowlist=(), check_mode="all"):
+    allowed = set(check_allowlist)
+    allowed_paths = set(workflow_path_allowlist)
     latest = {}
     for observation in observations:
         check_name = observation.get("check_name")
-        if check_name not in check_allowlist:
+        selected_path = (
+            observation.get("workflow_path")
+            if observation.get("source_kind") == "workflow_run" and observation.get("workflow_path") in allowed_paths
+            else None
+        )
+        if check_name not in allowed and not selected_path:
             continue
-        identity = (observation.get("source_kind", ""), observation.get("producer_id", ""), check_name)
+        identity = (
+            observation.get("source_kind", ""),
+            observation.get("producer_id", ""),
+            ("path", selected_path) if selected_path else ("name", check_name),
+        )
         current = latest.get(identity)
         if current is None or _observation_freshness(observation) > _observation_freshness(current):
             latest[identity] = observation
 
     names = {observation["check_name"] for observation in latest.values()}
-    missing = [name for name in check_allowlist if name not in names]
+    paths = {
+        observation.get("workflow_path")
+        for observation in latest.values()
+        if observation.get("source_kind") == "workflow_run"
+    }
+    missing = [name for name in check_allowlist if name not in names] if check_mode == "all" else []
+    missing_paths = [path for path in workflow_path_allowlist if path not in paths] if check_mode == "all" else []
     incomplete = {
         observation["check_name"] for observation in latest.values() if observation.get("status") != "completed"
     }
-    if missing or incomplete:
+    if not latest or missing or missing_paths or incomplete:
         return {
             "status": "waiting",
             "missing_checks": missing,
+            "missing_workflow_paths": missing_paths,
             "incomplete_checks": sorted(incomplete),
             "observations": list(latest.values()),
         }

@@ -3,7 +3,9 @@ import json
 import sqlite3
 import tempfile
 import unittest
+import yaml
 from pathlib import Path
+from tests.support.work_items import example_choices
 from tests.support import PACKAGE_ROOT
 
 
@@ -203,6 +205,12 @@ repos:
         self.assertEqual(event_row, ("trigger", "assigned:assign-issue-101"))
         self.assertIn("expected_output: comment_analysis", prompt)
         self.assertIn("assigned:assign-issue-101", prompt)
+        self.assertIn('"decision_mention": "@wklken"', prompt)
+        owner = json.loads(
+            self.fetchone("SELECT metadata_json FROM workstreams WHERE workstream_id='github:example/backend#101'")[0]
+        )["decision_owner"]
+        self.assertEqual(owner["login"], "wklken")
+        self.assertEqual(owner["event_fingerprint"], "assigned:assign-issue-101")
 
     def test_issue_assignment_bugfix_result_materializes_dd_pr_workflow(self):
         from robert_agent.delivery.application import submission as result
@@ -353,6 +361,10 @@ repos:
         audited = self.run_fixture([], name="empty-after-open-pr.json")
         self.assertTrue(audited["ok"], audited)
 
+        config = yaml.safe_load(self.config_path.read_text())
+        config["repos"][0]["trusted_actors"].append("another-maintainer")
+        self.config_path.write_text(yaml.safe_dump(config))
+
         followup = self.run_fixture(
             [
                 {
@@ -360,7 +372,7 @@ repos:
                     "number": 909,
                     "source_type": "pull_request",
                     "event_type": "review",
-                    "actor_login": "wklken",
+                    "actor_login": "another-maintainer",
                     "author_association": "MEMBER",
                     "body": "@robert-bot please fix the issue identified in this review",
                     "intent": "bug_fix",
@@ -401,6 +413,8 @@ repos:
         )
         self.assertIn("push_existing_pr", prompt)
         self.assertIn("review:dd-pr-review-909", prompt)
+        self.assertIn('"decision_mention": "@wklken"', prompt)
+        self.assertIn('"actor_login": "another-maintainer"', prompt)
 
     def test_third_party_pr_question_routes_to_review_comment_workflow(self):
         result = self.run_fixture(
@@ -457,7 +471,7 @@ repos:
         self.assertIn('allowed_github_actions: ["comment"]', prompt)
         self.assertIn("required_skills: []", prompt)
         self.assertIn('"pr_author_login": "feature-author"', prompt)
-        self.assertIn("Robert adds the trusted PR author mention", prompt)
+        self.assertIn("Robert adds the confirmed request owner's mention", prompt)
         self.assertIn("Review PR source workflow:", prompt)
         self.assertNotIn("Review-point evaluation:", prompt)
         self.assertNotIn("push_existing_pr", prompt)
@@ -730,7 +744,7 @@ repos:
                     "operator_question": {
                         "kind": "clarification",
                         "summary": "Please confirm the desired behavior.",
-                        "choices": [],
+                        "choices": example_choices(),
                     },
                     "used_skills": [],
                 },

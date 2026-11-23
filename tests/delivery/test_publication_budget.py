@@ -1,7 +1,7 @@
 """Regression contracts for bounded recovery and durable user outcomes."""
 
 from contextlib import closing
-
+from datetime import timedelta
 
 import json
 
@@ -19,15 +19,20 @@ from tests.support.publication_budget import PublicationBudgetFixture
 class PublicationBudgetTests(PublicationBudgetFixture):
     def test_permanent_rejection_stops_remote_calls_and_scheduler(self):
         self.cycle()
-        for _ in range(1000):
-            self.assertEqual(self.cycle(600)["failed_count"], 0)
-        self.assertEqual(self.calls.count(["git", "push"]), 1)
-        with closing(sqlite3.connect(self.db)) as c:
-            self.assertFalse(loop_engine.has_runnable_local_work(c))
-            self.assertEqual(
-                c.execute("SELECT status FROM publication_intents").fetchone()[0],
-                "attention",
-            )
+        rejected_at = self.now
+        # Cover repeated ticks and long-term inactivity through the original
+        # 1000 * 600 second horizon, without rerunning identical cycles 1000 times.
+        for elapsed in (0, 0, 600, 1200, 3600, 86400, 600000):
+            with self.subTest(elapsed=elapsed):
+                self.now = rejected_at + timedelta(seconds=elapsed)
+                self.assertEqual(self.cycle()["failed_count"], 0)
+                self.assertEqual(self.calls.count(["git", "push"]), 1)
+                with closing(sqlite3.connect(self.db)) as c:
+                    self.assertFalse(loop_engine.has_runnable_local_work(c, now=self.now.isoformat()))
+                    self.assertEqual(
+                        c.execute("SELECT status FROM publication_intents").fetchone()[0],
+                        "attention",
+                    )
 
     def test_transient_rejection_backs_off_and_exhausts_budget(self):
         self.error = "connection reset by peer"

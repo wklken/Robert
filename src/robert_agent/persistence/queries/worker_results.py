@@ -8,7 +8,7 @@ from functools import lru_cache
 
 from functools import cache
 
-from robert_agent.persistence.expressions import sql_constant
+from robert_agent.persistence.expressions import sql_constant, valid_json_or_empty
 
 from robert_agent.persistence.predicates import occupied_attempt, runnable_task
 
@@ -143,6 +143,7 @@ def find_for_trusted_action_scope(conn, result_id):
             table1.c["metadata_json"],
             table2.c["metadata_json"],
             table3.c["metadata_json"],
+            table1.c["output_type"],
         )
         .select_from(
             table1.join(table2, (table2.c["task_id"] == table1.c["task_id"]), isouter=True).join(
@@ -276,7 +277,7 @@ def find_for_summarize_database(conn):
         .select_from(tables["worker_results"])
         .where(
             func.json_extract(
-                tables["worker_results"].c["metadata_json"],
+                valid_json_or_empty(tables["worker_results"].c["metadata_json"]),
                 sql_constant("$.audit.status"),
             ).in_([sql_constant("failed"), sql_constant("policy_violation")])
         )
@@ -303,7 +304,7 @@ def find_for_result_counts(conn):
         .where(
             (
                 func.json_extract(
-                    tables["worker_results"].c["metadata_json"],
+                    valid_json_or_empty(tables["worker_results"].c["metadata_json"]),
                     sql_constant("$.audit.status"),
                 )
                 == sql_constant("accepted")

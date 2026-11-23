@@ -1,5 +1,6 @@
 """Shared fixtures for vote coordinator tests."""
 
+from tests.support.work_items import example_choices
 from tests.support import database as fixture_database
 import hashlib
 import json
@@ -28,6 +29,7 @@ class VoteCoordinatorFixture(unittest.TestCase):
         self.calls = []
         self.fail_worker = None
         self.clarify = False
+        self.question_choices = example_choices()
         self.need_code = False
         self.issue = True
         self.comment_body = "Choose B for lower latency"
@@ -73,7 +75,9 @@ class VoteCoordinatorFixture(unittest.TestCase):
                 unknowns=[],
             )
             if self.clarify:
-                value.update(status="needs_clarification", question="What is the latency target?")
+                value.update(
+                    status="needs_clarification", question="What is the latency target?", choices=self.question_choices
+                )
             if self.need_code and not manifest.get("source_worktree"):
                 value.update(status="needs_code", question="Need source to compare")
             name = "prepared-request.json"
@@ -107,7 +111,9 @@ class VoteCoordinatorFixture(unittest.TestCase):
 
     def driver(self):
         task, attempt = self.fixture.current()
-        return vote_coordinator.Coordinator(self.db, task, attempt, source_reader=self.source, launcher=self.launcher)
+        return vote_coordinator.Coordinator(
+            self.db, task, attempt, source_reader=self.source, launcher=self.launcher, poll_seconds=0.02
+        )
 
     def start(self):
         self.fixture.cycle([self.event()])

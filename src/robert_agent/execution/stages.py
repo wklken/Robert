@@ -6,6 +6,7 @@ from robert_agent.foundation.contracts.work import TaskLifecycle
 from robert_agent.persistence import database as db_database
 from robert_agent.persistence import errors as db_errors
 from robert_agent.persistence import transactions as db_transactions
+from robert_agent.persistence.dialects import sqlite as db_sqlite
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import sqlite_master as db_read_sqlite_master
@@ -31,6 +32,7 @@ from robert_agent.execution import retry as retry_policy
 from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import progress as snapshot
+from robert_agent.execution.usage import record_dispatch_usage
 
 
 class StageStore(Protocol):
@@ -152,6 +154,7 @@ def terminate_children(conn, task_id, *, store: StageStore):
         return "already_dead"
     outcomes = []
     updates: list[tuple[str, dict[str, Any]]] = []
+    finished = {}
     for run in store.runs(conn, review["round_id"]):
         if run["status"] in {ModelRunStatus.PREPARED, ModelRunStatus.WAITING} and not run["slot_reserved"]:
             updates.append(
@@ -173,6 +176,7 @@ def terminate_children(conn, task_id, *, store: StageStore):
                 outcomes.append("attention")
             continue
         if _group_finished(recorded):
+            finished[run["run_id"]] = recorded
             updates.append((run["run_id"], {"slot_reserved": 0}))
             outcomes.append("already_dead")
             continue
@@ -181,6 +185,7 @@ def terminate_children(conn, task_id, *, store: StageStore):
         ):
             exited = _wait_for_group_exit(recorded)
             if exited:
+                finished[run["run_id"]] = recorded
                 updates.append((run["run_id"], {"slot_reserved": 0}))
             outcomes.append("already_dead" if exited else "attention")
             continue
@@ -192,6 +197,7 @@ def terminate_children(conn, task_id, *, store: StageStore):
             result = {"status": "attention"}
         outcomes.append(result["status"])
         if result["status"] != "attention":
+            finished[run["run_id"]] = recorded
             updates.append(
                 (
                     run["run_id"],
@@ -200,6 +206,9 @@ def terminate_children(conn, task_id, *, store: StageStore):
             )
     # Observe/stop every child before opening our write transaction. In
     # particular, stopping the second child must not hold the first's update.
+    if finished and (database := db_sqlite.main_database_path(conn)):
+        for run_id, recorded in finished.items():
+            record_dispatch_usage(conn, database.parent, "stage", run_id, task_id, recorded)
     for run_id, fields in updates:
         store.update_run(conn, run_id, **fields)
     return "attention" if "attention" in outcomes else "terminated"
@@ -290,12 +299,15 @@ class StageCoordinator:
             store.update(conn, self.round_id, manifest_json=json.dumps(self.manifest, ensure_ascii=False))
             db_write_attempts.set_worktree_path_by_attempt_id(conn, self.manifest["worktree_path"], self.attempt_id)
 
+    def recovery_workers(self):
+        return {worker["name"]: worker for worker in self.request["workers"]}
+
     def reconcile_running(self):
         """Finish previous model processes before scheduling any new phase."""
         store = self.store
         with store.connect(self.db_path) as conn:
             previous = store.runs(conn, self.round_id)
-        workers = {worker["name"]: worker for worker in self.request["workers"]}
+        workers = self.recovery_workers()
         pending = []
         for run in previous:
             if run["status"] == ModelRunStatus.STARTING and not run["dispatch"]:
@@ -333,9 +345,10 @@ class StageCoordinator:
                 raise
         return results
 
-    def release_slot(self, run):
+    def release_slot(self, run, launched):
         store = self.store
         with store.connect(self.db_path) as conn:
+            record_dispatch_usage(conn, self.data_dir, "stage", run["run_id"], self.task_id, launched)
             store.release_slot(conn, run["run_id"])
 
     def reclaim_finished_slots(self):
@@ -353,6 +366,14 @@ class StageCoordinator:
                 with self.store.connect(self.db_path) as conn:
                     run_store.release_finished_slot(conn, run)
 
+    def stage_worktree(self, run):
+        return self.manifest["worktree_path"]
+
+    def stage_environment(self, run):
+        return model_environment.stage_environment(
+            self.manifest, run["output_dir"], self.data_dir, workflow_name=self.workflow_name
+        )
+
     def launch_with_slot(self, run, worker, prompt_path, environment):
         store = self.store
         while True:
@@ -364,6 +385,7 @@ class StageCoordinator:
             with task_publication_lock(self.db_path, self.task_id) as locked:
                 if locked:
                     self.check_active()
+                    worktree = self.stage_worktree(run)
                     with store.connect(self.db_path) as conn:
                         db_transactions.begin(conn, immediate=True)
                         if not attempt_is_active(conn, self.task_id, self.attempt_id):
@@ -374,7 +396,7 @@ class StageCoordinator:
                             task_id=self.task_id,
                             attempt_id=run["run_id"],
                             prompt_path=prompt_path,
-                            worktree_path=self.manifest["worktree_path"],
+                            worktree_path=worktree,
                             worker_agent_config=worker,
                             model=run["model"],
                             reasoning_effort=worker["default_effort"],
@@ -405,6 +427,9 @@ class StageCoordinator:
         store = self.store
         self.check_active()
         with store.connect(self.db_path) as conn:
+            db_transactions.begin(conn, immediate=True)
+            if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                raise StageStopped("review attempt is no longer current")
             store.update_run(
                 conn,
                 run["run_id"],
@@ -470,7 +495,7 @@ class StageCoordinator:
         if any(saved.get(key) != value for key, value in identity.items()) or set(saved.get("files", {})) != set(names):
             raise ValueError("review seal identity changed")
         for name, expected in saved["files"].items():
-            path = self.artifact_files.safe_path(sealed / name, sealed)
+            path = self.artifact_files.safe_path(sealed / name, self.manifest["artifact_root"])
             if store.digest(path) != expected:
                 raise ValueError("sealed review artifact changed")
         return sealed
@@ -503,7 +528,7 @@ class StageCoordinator:
                     raise StageStopped("review worker timeout termination requires attention")
                 if not _wait_for_group_exit(launched):
                     raise StageStopped("review worker timeout left a process group; inspect remaining processes")
-                self.release_slot(run)
+                self.release_slot(run, launched)
                 raise RuntimeError("review worker timed out")
             time.sleep(self.poll_seconds)
         with store.connect(self.db_path) as conn:
@@ -512,10 +537,16 @@ class StageCoordinator:
             raise StageStopped(
                 "review leader exited but process group remains; inspect and stop remaining processes before retry"
             )
-        self.release_slot(run)
+        self.release_slot(run, launched)
         _raise_rate_limit(launched)
         if launched.get("returncode", 0) != 0:
             raise RuntimeError(f"review worker exited with code {launched['returncode']}")
+
+    def phase_input_changed(self, stage):
+        return stage == "synthesis" or (stage == "prepare" and not self.manifest.get("frozen"))
+
+    def check_launch_budget(self, stage, prompt_hash, previous):
+        """Workflow hook for a durable limit on stage launches."""
 
     def run_phase(self, stage, worker, prompt_path, validate, *, input_hash=None):
         """Adopt a complete unregistered file, or run only this failed stage."""
@@ -536,7 +567,7 @@ class StageCoordinator:
                     )
                 continue
             if run["prompt_sha256"] != prompt_hash:
-                if stage == "synthesis" or (stage == "prepare" and not self.manifest.get("frozen")):
+                if self.phase_input_changed(stage):
                     if run["status"] in {ModelRunStatus.RUNNING, ModelRunStatus.SUCCEEDED}:
                         with store.connect(self.db_path) as conn:
                             store.update_run(
@@ -574,6 +605,7 @@ class StageCoordinator:
             previous = [
                 r for r in store.runs(conn, self.round_id) if r["stage"] == stage and r["worker_id"] == worker["name"]
             ]
+            self.check_launch_budget(stage, prompt_hash, previous)
             model = worker["default_model"]
             limited = [
                 r
@@ -608,14 +640,12 @@ class StageCoordinator:
             )
             store.update_run(conn, run["run_id"], status=ModelRunStatus.WAITING.value)
         try:
-            environment = model_environment.stage_environment(
-                self.manifest, run["output_dir"], self.data_dir, workflow_name=self.workflow_name
-            )
+            environment = self.stage_environment(run)
             launched = self.launch_with_slot(run, worker, prompt_path, environment)
             if not launched.get("ok"):
                 if launched.get("pid") and not _wait_for_group_exit(launched):
                     raise StageStopped("failed model launch left a process group; inspect remaining processes")
-                self.release_slot(run)
+                self.release_slot(run, launched)
                 _raise_rate_limit(launched)
                 raise RuntimeError(launched.get("safe_error", "review launch failed"))
             self._wait(run, launched, worker["timeout_seconds"])
@@ -639,11 +669,23 @@ class StageCoordinator:
                 return self.run_phase(stage, worker, prompt_path, validate, input_hash=input_hash)
             raise
 
-    def prompt(self, name, text):
+    def prompt(self, name, text, *, stage=None):
         path = Path(self.manifest["artifact_root"]) / name
-        if path.exists():
-            if path.read_bytes() != text.encode("utf-8"):
-                raise ValueError("registered phase prompt changed")
-        else:
+        if not path.exists():
             path.write_text(text, encoding="utf-8")
-        return path
+            return path
+        existing = path.read_bytes()
+        if existing == text.encode("utf-8"):
+            return path
+        if stage is not None:
+            # A deployment may change the renderer after a phase has run.
+            # Only the exact path and bytes recorded by that phase can be reused.
+            with self.store.connect(self.db_path) as conn:
+                registered = {
+                    run["prompt_sha256"]
+                    for run in self.store.runs(conn, self.round_id)
+                    if run["stage"] == stage and (run["dispatch"] or {}).get("prompt_path") == str(path)
+                }
+            if registered == {hashlib.sha256(existing).hexdigest()}:
+                return path
+        raise ValueError("registered phase prompt changed")

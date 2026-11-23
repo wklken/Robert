@@ -45,7 +45,8 @@ from robert_agent.work.inputs import (
     validate_routing,
     validate_text,
 )
-from robert_agent.work import control_queries, messaging
+from robert_agent.work import control_queries, messaging, dependency_merge
+from robert_agent.persistence.queries import dependency_merge as db_read_dependency_merge
 
 from robert_agent.work.errors import WorkItemValidationError, WorkItemConflictError, WorkItemNotFoundError
 from contextlib import closing, ExitStack
@@ -261,6 +262,8 @@ def ensure_github_work_item(
     actor_identity,
     route_confidence,
     now,
+    route_id=None,
+    origin_type="github",
 ):
     existing = resolve_work_item_for_workstream(conn, workstream_id)
     if existing:
@@ -286,7 +289,8 @@ def ensure_github_work_item(
     title = (root[2] if root else None) or f"Workstream {root_workstream_id}"
     created_by = actor_identity or (root[3] if root else None) or "system"
     created_at = (root[1] if root else None) or now
-    activated_at = now if route_confidence == "high" else None
+    decision_required = route_confidence != "high" and route_id != "classification-result"
+    activated_at = None if decision_required else now
     db_write_work_items.insert_for_ensure_github_work_item(
         conn,
         work_item_id,
@@ -294,11 +298,12 @@ def ensure_github_work_item(
         title,
         root_source_id,
         root_workstream_id,
-        f"github:{root_source_id}",
+        f"{origin_type}:{root_source_id}",
         created_by,
         activated_at,
         created_at,
         now,
+        origin_type,
     )
     item = db_records.first(
         db_read_work_items.find_for_ensure_github_work_item(conn, root_workstream_id, root_source_id)
@@ -306,14 +311,14 @@ def ensure_github_work_item(
     if not item:
         raise WorkItemConflictError("GitHub work item identity conflicts with existing data")
     item_payload = _item_from_row(item)
-    event_type = "github_intake" if route_confidence == "high" else "operator_decision_required"
+    event_type = "operator_decision_required" if decision_required else f"{origin_type}_intake"
     _insert_event(
         conn,
         item_payload["work_item_id"],
         event_type=event_type,
-        actor_kind="github",
+        actor_kind=origin_type,
         actor_identity=created_by,
-        idempotency_key=f"github-intake:{root_source_id}",
+        idempotency_key=f"{origin_type}-intake:{root_source_id}",
         metadata={
             "route_confidence": route_confidence,
             "source_id": source_id,
@@ -336,10 +341,11 @@ def _unresolved_event(conn, work_item_id, event_types):
     return db_records.first(db_read_work_item_events.unresolved_event_filtered(conn, event_types, work_item_id))
 
 
-def record_github_response(
+def record_source_response(
     conn,
     workstream_id,
     *,
+    actor_kind,
     actor_identity,
     body,
     event_fingerprint,
@@ -352,7 +358,8 @@ def record_github_response(
     question = _unresolved_event(conn, item["work_item_id"], QUESTION_EVENTS)
     if not question:
         return None
-    idempotency_key = "github-response:" + hashlib.sha256(event_fingerprint.encode("utf-8")).hexdigest()[:24]
+    digest = hashlib.sha256(event_fingerprint.encode("utf-8")).hexdigest()[:24]
+    idempotency_key = f"{actor_kind}-response:{digest}"
     existing = db_records.first(
         db_read_work_item_events.record_system_event(conn, item["work_item_id"], idempotency_key)
     )
@@ -363,7 +370,7 @@ def record_github_response(
         conn,
         item["work_item_id"],
         event_type="user_response",
-        actor_kind="github",
+        actor_kind=actor_kind,
         actor_identity=actor_identity,
         idempotency_key=idempotency_key,
         body=body,
@@ -401,6 +408,7 @@ def _create_task(
     now,
     workstream_id=None,
     lineage_key=None,
+    reviewed_retry=False,
 ):
     workstream_id = workstream_id or item["workstream_id"]
     task_id = f"task-{uuid4().hex}"
@@ -417,6 +425,8 @@ def _create_task(
     if repair and repair.get("automatic") is True:
         routing_mode, requested_worker = "manual", repair["worker"]
         metadata["supervision_repair"] = repair
+    if reviewed_retry:
+        metadata["pre_pr_review_retry"] = parent_task_id
     if trigger_event_id:
         metadata["trigger_work_item_event_id"] = trigger_event_id
     if lineage_key:
@@ -535,6 +545,12 @@ def retrigger_failed_github_task(
 
                     if dispatch_status(process_metadata)["status"] != "dead":
                         raise WorkItemConflictError("worker termination must be confirmed before retry")
+            from robert_agent.persistence.rounds import pre_pr_review
+
+            if pre_pr_review.session(conn, task_id=task_id) and (
+                not native_exit["all_stopped"] or not native_rounds.exit_observation_current(conn, task_id, native_exit)
+            ):
+                raise WorkItemConflictError("Pre-publication review processes must be reconciled before retry")
             if cutover_recovery:
                 if not native_exit["all_stopped"] or not native_rounds.exit_observation_current(
                     conn, task_id, native_exit
@@ -838,6 +854,22 @@ def create_work_item(
             raise
 
 
+def _check_reviewed_retry(conn, locks, db_path, task_id):
+    from robert_agent.delivery.lock import task_publication_lock
+    from robert_agent.persistence.rounds import pre_pr_review
+
+    entry = pre_pr_review.session(conn, task_id=task_id)
+    if not entry:
+        if pre_pr_review.required(conn, task_id):
+            raise WorkItemConflictError("The saved pre-publication review is unavailable.")
+        return False
+    if not locks.enter_context(task_publication_lock(db_path, task_id)) or any(
+        run["slot_reserved"] for run in pre_pr_review.runs(conn, entry["round_id"])
+    ):
+        raise WorkItemConflictError("Reconcile the pre-publication review processes before retrying.")
+    return True
+
+
 def _finish_parent_for_child(conn, parent_task, now):
     if not parent_task:
         return None
@@ -869,6 +901,7 @@ def execute_command(
     expected_event_id=None,
     idempotency_key,
     body="",
+    choice=None,
     routing_mode=None,
     requested_worker=None,
     title=None,
@@ -876,8 +909,16 @@ def execute_command(
     priority=None,
     notifier=None,
     abandon_review_run_ids=None,
+    dependency=None,
+    dependency_resume=None,
 ):
     validate_idempotency_key(idempotency_key)
+    if (dependency is not None or dependency_resume is not None) and (
+        command != "reply" or routing_mode is not None or requested_worker is not None
+    ):
+        raise WorkItemValidationError("Dependency replies cannot change routing.")
+    if dependency is not None and dependency_resume is not None:
+        raise WorkItemValidationError("Choose registration or resume.")
     if command not in COMMANDS:
         raise WorkItemValidationError("unknown work item command")
     if not isinstance(expected_version, int) or isinstance(expected_version, bool):
@@ -885,6 +926,16 @@ def execute_command(
     if expected_event_id is not None:
         expected_event_id = validate_text(expected_event_id, "expected_event_id", 128, required=True)
     body = validate_text(body, "body", MAX_REPLY)
+    if choice is not None and (
+        type(choice) is not int
+        or choice < 1
+        or command != WorkCommand.REPLY
+        or expected_event_id is None
+        or body.strip()
+        or dependency is not None
+        or dependency_resume is not None
+    ):
+        raise WorkItemValidationError("Choose one option for the current question or supply a written reply.")
     if abandon_review_run_ids is None:
         abandon_review_run_ids = []
     if not isinstance(abandon_review_run_ids, list):
@@ -910,6 +961,8 @@ def execute_command(
                 raise WorkItemNotFoundError("work item not found")
             replay = _stored_command_result(conn, work_item_id, idempotency_key)
             if replay:
+                if dependency_resume is not None:
+                    replay = {**replay, "dependency_replayed": True}
                 return _commit_result(conn, db_path, replay, notifier)
             if item["version"] != expected_version:
                 raise WorkItemConflictError("work item version is stale")
@@ -921,7 +974,7 @@ def execute_command(
 
             if item["canceled_at"] is not None:
                 raise WorkItemConflictError("a canceled work item cannot be changed")
-            if item["completed_at"] is not None and command != WorkCommand.REOPEN:
+            if item["completed_at"] is not None and command not in {WorkCommand.REOPEN, WorkCommand.CANCEL}:
                 raise WorkItemConflictError("a completed work item must be reopened first")
 
             facts = control_queries.lifecycle_facts(conn, item)
@@ -931,7 +984,7 @@ def execute_command(
                 )
             if facts["source_closed"] and command != WorkCommand.CANCEL:
                 raise WorkItemConflictError(
-                    "The GitHub source is closed. Cancel this item; reopen the source on GitHub before starting new work."
+                    "The source is closed. Reopen it before requesting new source work; review existing pull requests on GitHub."
                 )
             audit_task = control_queries.current_task(conn, facts["streams"])
             audit_result_id = (
@@ -1098,6 +1151,10 @@ def execute_command(
             elif command == WorkCommand.REOPEN:
                 if item["completed_at"] is None or item["canceled_at"] is not None:
                     raise WorkItemConflictError("only a completed work item can be reopened")
+                if audit_task and db_records.first(
+                    db_read_wakeups.find_for_retrigger_failed_github_task(conn, item["repo_id"], audit_task["task_id"])
+                ):
+                    raise WorkItemConflictError("a retrigger request is already pending")
                 db_write_work_items.update_for_execute_command_3(conn, now, work_item_id)
                 parent = _active_or_latest_task(conn, item["workstream_id"])
                 parent_task_id = _finish_parent_for_child(conn, parent, now)
@@ -1125,6 +1182,76 @@ def execute_command(
                         "The attention item changed. Review the latest question or failure before continuing."
                     )
                 question_metadata = _decode_json(unresolved["metadata_json"], {}) if unresolved else {}
+                if choice is not None:
+                    options = messaging.selectable_choices(question_metadata.get("choices", []))
+                    if unresolved["event_type"] != "operator_question" or choice > len(options):
+                        raise WorkItemValidationError("The selected option is unavailable.")
+                    body = options[choice - 1]["label"]
+                if dependency is not None or dependency_resume is not None:
+                    question_task_id = question_metadata.get("task_id")
+                    parent = db_records.first(db_read_tasks.find_record_by_task_id(conn, question_task_id))
+                    if parent and parent["workstream_id"] not in facts["streams"]:
+                        raise WorkItemConflictError("The waiting task scope changed.")
+                    repo_name = db_records.first(db_read_dependency_merge.repo_name(conn, item["repo_id"]))[0]
+                    if not body.strip() or facts["running"] or facts["cleanup_pending"] or facts["workflow_attention"]:
+                        raise WorkItemConflictError("The waiting task is not safely idle.")
+                    if dependency_resume is not None:
+                        registration = db_records.first(
+                            db_read_dependency_merge.registration(conn, work_item_id, dependency_resume)
+                        )
+                        if (
+                            not registration
+                            or registration["actor_kind"] != "operator"
+                            or registration["actor_identity"] != context.actor_identity
+                            or registration["body"] != body
+                        ):
+                            raise WorkItemConflictError("Dependency authority changed.")
+                        registered = _decode_json(registration["metadata_json"], {})
+                        dependency = registered.get("dependency")
+                        if (
+                            registered.get("expected_version") != expected_version
+                            or registered.get("question_id") != expected_event_id
+                        ):
+                            raise WorkItemConflictError("Dependency generation changed.")
+                    dependency = dependency_merge.validate(
+                        dependency,
+                        repo=repo_name,
+                        task=parent,
+                        question=unresolved,
+                        expected_event_id=expected_event_id,
+                        context=context,
+                    )
+                    if dependency_resume is None:
+                        if dependency_merge.pending(conn, item["repo_id"], work_item_id=work_item_id):
+                            raise WorkItemConflictError("A dependency reply is already registered for this question.")
+                        result = {
+                            "ok": True,
+                            "command": "reply",
+                            "status": "waiting_for_dependency",
+                            "item": _item_from_row(item),
+                            "task_id": None,
+                            "resolved_event_id": None,
+                        }
+                        _insert_event(
+                            conn,
+                            work_item_id,
+                            event_type="dependency_merge_requested",
+                            actor_kind=context.actor_kind,
+                            actor_identity=context.actor_identity,
+                            idempotency_key=idempotency_key,
+                            body=body,
+                            metadata={
+                                "dependency": dependency,
+                                "expected_version": expected_version,
+                                "question_id": expected_event_id,
+                                "command_result": result,
+                            },
+                            now=now,
+                        )
+                        return _commit_result(conn, db_path, result, notifier)
+                    if not dependency_merge.merged(conn, item["repo_id"], dependency["pr_url"]):
+                        raise WorkItemConflictError("Dependency merge is not verified.")
+
                 if command == WorkCommand.REPLY and question_metadata.get("kind") == "supervisor_question":
                     from robert_agent.supervision import decisions as supervisor_decisions
 
@@ -1224,6 +1351,9 @@ def execute_command(
                     db_write_work_items.update_for_execute_command_5(conn, now, now, work_item_id)
                     task_id = None
                 else:
+                    review_question = unresolved_metadata.get("pre_pr_review") if command == WorkCommand.REPLY else None
+                    if review_question and (routing_mode is not None or requested_worker is not None):
+                        raise WorkItemValidationError("A review reply cannot override routing or worker authority.")
                     selected_mode = item["routing_mode"]
                     selected_worker = item["requested_worker"]
                     if routing_mode is not None:
@@ -1248,6 +1378,26 @@ def execute_command(
                         ):
                             raise WorkItemConflictError("The question owner changed. Refresh before replying.")
                         parent = question_task
+                    if review_question:
+                        from robert_agent.persistence.rounds import pre_pr_review
+
+                        if parent is None or not _check_reviewed_retry(conn, locks, db_path, parent["task_id"]):
+                            raise WorkItemConflictError("The review question owner is unavailable.")
+                        try:
+                            pre_pr_review.accept_reply(
+                                conn,
+                                pre_pr_review.session(conn, task_id=parent["task_id"]),
+                                review_question,
+                                body,
+                            )
+                        except (OSError, ValueError) as exc:
+                            raise WorkItemConflictError(str(exc)) from exc
+                    reviewed_retry = bool(review_question) or (
+                        command == WorkCommand.RETRY
+                        and item["origin_type"] == "web"
+                        and parent is not None
+                        and _check_reviewed_retry(conn, locks, db_path, parent["task_id"])
+                    )
                     parent_task_id = _finish_parent_for_child(conn, parent, now)
                     db_write_work_items.update_for_execute_command_2(conn, now, work_item_id)
                     item = _load_item(conn, work_item_id)
@@ -1261,6 +1411,7 @@ def execute_command(
                         now=now,
                         workstream_id=parent["workstream_id"] if question_task_id else None,
                         lineage_key=supervision_lineage.get_task_lineage(conn, parent_task_id),
+                        reviewed_retry=reviewed_retry,
                     )
                 resolved_event_id = unresolved["event_id"] if unresolved else None
 

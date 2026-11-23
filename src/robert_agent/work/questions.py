@@ -6,7 +6,7 @@ from robert_agent.persistence.stores import work_item_events
 from robert_agent.work import messaging
 
 
-def record_supervisor_question(conn, *, work_item_id, root_id, decision_id, body, now):
+def record_supervisor_question(conn, *, work_item_id, root_id, decision_id, body, now, choices=()):
     event_id = decision_id + "-question"
     work_item_events.insert_event(
         conn,
@@ -19,7 +19,14 @@ def record_supervisor_question(conn, *, work_item_id, root_id, decision_id, body
         None,
         event_id,
         now,
-        json.dumps({"kind": "supervisor_question", "supervision_decision_id": decision_id, "workstream_id": root_id}),
+        json.dumps(
+            {
+                "kind": "supervisor_question",
+                "supervision_decision_id": decision_id,
+                "workstream_id": root_id,
+                "choices": list(choices),
+            }
+        ),
     )
     messaging.record_attention(
         conn,

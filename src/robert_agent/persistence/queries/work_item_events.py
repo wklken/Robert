@@ -2,11 +2,30 @@
 
 from robert_agent.persistence.expressions import sql_constant
 
-from sqlalchemy import select, bindparam, and_, not_, null, LABEL_STYLE_NONE
+from sqlalchemy import select, bindparam, and_, not_, null, func, LABEL_STYLE_NONE
 
 
 from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
+
+
+def find_chat_reply_receipt(conn, key, actor_identity, repo_ids):
+    event, item, notice = (tables[name] for name in ("work_item_events", "work_items", "notifications"))
+    return statements.read(
+        conn,
+        select(event.c.body, event.c.metadata_json, notice.c.notification_id)
+        .select_from(
+            event.join(item, item.c.work_item_id == event.c.work_item_id).join(
+                notice, func.json_extract(notice.c.metadata_json, "$.attention_event_id") == event.c.resolves_event_id
+            )
+        )
+        .where(
+            event.c.idempotency_key == key,
+            event.c.actor_identity == actor_identity,
+            event.c.event_type == "user_response",
+            item.c.repo_id.in_(sorted(repo_ids)),
+        ),
+    )
 
 
 def find_for_receipt_facts(conn, key):

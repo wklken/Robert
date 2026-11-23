@@ -16,7 +16,7 @@ class Element {
 function load(name, search = '') {
   const nodes = new Map();
   const get = key => { if (!nodes.has(key)) nodes.set(key, new Element(key)); return nodes.get(key); };
-  const context = vm.createContext({ URLSearchParams, location: { search }, localStorage: { getItem: () => null },
+  const context = vm.createContext({ URL, URLSearchParams, window: {location:{href:"http://localhost/work"}}, location: { search }, localStorage: { getItem: () => null },
     document: { body:new Element("body"), getElementById: key => get(`#${key}`), createElement: tag => new Element(tag), addEventListener() {}, querySelectorAll: () => [],
       querySelector: key => { if (!nodes.has(key)) nodes.set(key, new Element(key)); return nodes.get(key); } },
   });
@@ -25,6 +25,17 @@ function load(name, search = '') {
   return context;
 }
 function descendants(node) { return [node, ...node.children.flatMap(descendants)]; }
+
+test('board task supervision presents the exact failed decision diagnostics', () => {
+  const context = load('board.js');
+  context.detail = {supervision_decision:{status:'exited', last_failure:{decision_id:'decision-failed',
+    exit_code:7, safe_error:'gateway unavailable', failed_at:'2026-11-12T06:55:01Z'}},supervision_incidents:[]};
+  const nodes = descendants(vm.runInContext('renderSupervision(detail)', context));
+  const text = nodes.map(node => node.textContent || '').join('\n');
+  assert.match(text, /gateway unavailable/);
+  assert.match(text, /decision-failed/);
+  assert.match(text, /7/);
+});
 
 test('initial board shows a populated actionable stage and honors an explicit empty stage', () => {
   for (const [search, expected] of [['', 'waiting'], ['?column=doing', 'doing']]) {

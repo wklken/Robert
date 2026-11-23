@@ -5,8 +5,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 function dashboard() {
   const nodes = new Map();
-  const context = vm.createContext({document:{getElementById(id){
-    if (!nodes.has(id)) nodes.set(id,{innerHTML:'',textContent:'',addEventListener(){}});
+  const context = vm.createContext({window:{location:{hash:""},localStorage:{getItem(){return ""}}},document:{getElementById(id){
+    if (!nodes.has(id)) nodes.set(id,{innerHTML:'',textContent:'',addEventListener(){},insertAdjacentHTML(where,html){this.innerHTML+=html;},querySelector(){return {}}});
     return nodes.get(id);
   },querySelectorAll(){return [];}}});
   const source = fs.readFileSync(path.join(__dirname,'../../src/robert_agent/interfaces/web/templates.py'),'utf8');
@@ -21,6 +21,26 @@ test('operations describes recent workflows and total runs accurately', () => {
   assert.match(nodes.get('summary-metrics').innerHTML,/累计运行次数/);
   assert.match(nodes.get('summary-metrics').innerHTML,/59667/);
   assert.equal(vm.runInContext('stateLabel("completed")',context),'已完成');
+});
+test('operations alert count links to the same filtered notification records', () => {
+  const {context,nodes} = dashboard();
+  context.data = {notification_center:[
+    {id:'global',severity:'warning',summary:'Global service warning'},
+    {id:'task',severity:'critical',task_id:'failed',summary:'Task failed'},
+    {id:'aggregate',severity:'critical',summary:'1 task needs attention'},
+    {id:'routine',severity:'info',summary:'Routine'},
+  ]};
+  vm.runInContext('renderMetrics(data)',context);
+  const conclusion = nodes.get('ops-conclusion').innerHTML;
+  assert.match(conclusion,/3 条告警记录/);
+  assert.match(conclusion,/href="\/operations#notifications\/attention"/);
+  assert.doesNotMatch(conclusion,/去任务看板/);
+  context.window.location.hash = '#notifications/attention';
+  vm.runInContext('setView=(view)=>{state.currentView=view;};applyHash();renderNotifications(data)',context);
+  assert.equal(vm.runInContext('state.currentView',context),'notifications');
+  assert.equal(vm.runInContext('state.notificationSeverity',context),'attention');
+  assert.match(nodes.get('notification-count').textContent,/3 \/ 4/);
+  assert.doesNotMatch(nodes.get('notification-center').innerHTML,/Routine/);
 });
 test('notification severity filters preserve order and distinguish empty matches', () => {
   const {context,nodes} = dashboard();
@@ -50,4 +70,82 @@ test('English operations states remain human-readable', () => {
   for (const [value,label] of [['completed','Completed'],['needs_attention','Needs attention'],['worker_running','Worker running'],['waiting_publish','Waiting publish']]) {
     assert.equal(vm.runInContext(`stateLabel(${JSON.stringify(value)})`,context),label);
   }
+});
+
+test('failed control-session fetch can be retried',async()=>{
+  const {context}=dashboard(); let calls=0;
+  context.fetch=async()=>{if(++calls===1)throw new Error('offline');return {ok:true,json:async()=>({csrf_token:'token'})}};
+  await assert.rejects(vm.runInContext('controlSession()',context));
+  assert.equal((await vm.runInContext('controlSession()',context)).csrf_token,'token');
+  assert.equal(calls,2);
+});
+test('knowledge candidate identifiers are data rather than inline JavaScript',()=>{
+  const {context}=dashboard();
+  context.candidate={candidate_id:"x');alert(1);//",title:'Test'};
+  const html=vm.runInContext('candidateCard(candidate)',context);
+  assert.doesNotMatch(html,/on(?:click|submit)=/);
+  assert.match(html,/data-candidate-id=/);
+});
+test('malformed operations hash leaves navigation usable',()=>{
+  const {context}=dashboard();context.window.location.hash='#work/%ZZ';
+  vm.runInContext('setView=()=>{}; applyHash()',context);
+  assert.equal(vm.runInContext('state.selectedTaskId',context),null);
+});
+test('older dashboard and artifact responses cannot replace a newer selection',async()=>{
+  const {context}=dashboard(); const requests=[];
+  context.fetch=()=>new Promise(resolve=>requests.push(resolve));
+  vm.runInContext('chooseDefaultTask=()=>{}; renderAll=()=>{}; openArtifactDrawer=()=>{}; resetArtifactPreview=()=>{}; renderArtifactPreview=(text)=>{globalThis.preview=text;}',context);
+  const first=vm.runInContext('loadDashboard()',context), second=vm.runInContext('loadDashboard()',context);
+  requests[1]({ok:true,json:async()=>({id:'new'})}); await second;
+  requests[0]({ok:true,json:async()=>({id:'old'})}); await first;
+  assert.equal(vm.runInContext('state.data.id',context),'new');
+  const one=vm.runInContext('previewArtifact("one","stdout")',context),two=vm.runInContext('previewArtifact("two","stdout")',context);
+  requests[3]({ok:true,text:async()=> 'two'});await two;
+  requests[2]({ok:true,text:async()=> 'one'});await one;
+  assert.equal(context.preview,'two');
+});
+test('repeated dashboard errors share one visible status',async()=>{
+  const {context,nodes}=dashboard();context.fetch=async()=>{throw new Error('offline')};
+  await vm.runInContext('loadDashboard()',context);await vm.runInContext('loadDashboard()',context);
+  assert.equal((nodes.get('dashboard-app')?.innerHTML.match(/class="error"/g)||[]).length,0);
+  assert.match(nodes.get('dashboard-load-error').textContent,/offline/);
+});
+
+test('artifact previews preserve backticks and literal Markdown inside code spans',()=>{
+  const {context,nodes}=dashboard();
+  for (const [markdown, expected] of [
+    ['`` src/a`b.py:10 ``', 'src/a`b.py:10'],
+    ['``` src/a``b.py:10 ```', 'src/a``b.py:10'],
+    ['`` `leading.py:10 ``', '`leading.py:10'],
+    ['`` src/a`[label](https://example.com) **bold**.py:10 ``', 'src/a`[label](https://example.com) **bold**.py:10'],
+    ['`src/main.py:10`', 'src/main.py:10'],
+    ['`` <script>alert(1)</script>` ``', '&lt;script&gt;alert(1)&lt;/script&gt;`'],
+  ]) {
+    context.previewText='path=report.md\n\n- '+markdown;
+    vm.runInContext('renderArtifactPreview(previewText,"report")',context);
+    const html=nodes.get('artifact-preview').innerHTML;
+    assert.ok(html.includes('<code>'+expected+'</code>'),html);
+    assert.doesNotMatch(html, /<a |<strong>|<script>/);
+  }
+  context.markdown='**bold** [safe](https://example.com) `literal`';
+  assert.match(vm.runInContext('inlineMarkdown(markdown)',context), /<strong>bold<\/strong>.*<a .*<code>literal<\/code>/);
+});
+test('code spans retain surrounding emphasis and links without entering attributes',()=>{
+  const {context}=dashboard();
+  for (const [markdown, pattern] of [
+    ['**Run `robert status` now**', /<strong>Run <code>robert status<\/code> now<\/strong>/],
+    ['[Run `robert`](https://example.com)', /<a [^>]+>Run <code>robert<\/code><\/a>/],
+  ]) {
+    context.markdown=markdown;
+    assert.match(vm.runInContext('inlineMarkdown(markdown)',context),pattern);
+  }
+  context.markdown='[text](https://example.com/`"onmouseover="alert(1)`)';
+  const html=vm.runInContext('inlineMarkdown(markdown)',context);
+  assert.doesNotMatch(html, /<a |onmouseover=/);
+});
+test('artifact code spans handle a bounded preview containing NUL characters',()=>{
+  const {context}=dashboard();
+  context.markdown='\0'.repeat(32768)+' `safe`';
+  const html=vm.runInContext('inlineMarkdown(markdown)',context);
+  assert.equal(html,'\uFFFD'.repeat(32768)+' <code>safe</code>');
 });

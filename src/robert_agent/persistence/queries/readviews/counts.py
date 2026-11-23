@@ -1,11 +1,11 @@
 """Read-only totals for controller progress and database summaries."""
 
+from hashlib import sha256
+
 from robert_agent.foundation.contracts.delivery import AuditStatus, PublishStatus
 from robert_agent.foundation.contracts.work import TaskLifecycle, WorkstreamLifecycle
 
-from robert_agent.persistence.expressions import sql_constant
-
-from sqlalchemy import func, select
+from sqlalchemy import func, select, true
 
 from robert_agent.persistence import statements
 from robert_agent.persistence.catalog import tables
@@ -32,41 +32,87 @@ def database_totals(conn):
     return dict(statements.read(conn, query)[0])
 
 
-def controller_progress(conn):
+def _scoped_progress(rows, identity, repo_id, repo_ids, *states):
+    ordered = select(identity, *states).select_from(rows).order_by(identity)
+    if repo_ids:
+        ordered = ordered.where(repo_id.in_(repo_ids))
+    return ordered.subquery()
+
+
+def _progress_totals(name, rows, **counters):
+    # Reading the stable state vector from an ordered subquery preserves identity
+    # through same-sized swaps without materializing row records in the loop.
+    fingerprint_input = func.group_concat(func.json_array(*rows.c), "").label(name)
+    return select(
+        fingerprint_input, *(func.count().filter(test).label(key) for key, test in counters.items())
+    ).subquery()
+
+
+def controller_progress(conn, repo_ids=()):
     wakeups, attempts, actions, tasks, streams = (
         tables[name] for name in ("wakeups", "attempts", "github_actions", "tasks", "workstreams")
     )
-    fields = {
-        **{
-            f"{status}_wakeups": _count(wakeups, wakeups.c.status == status)
-            for status in ("pending", "consumed", "expired")
-        },
-        **{
-            f"{status}_attempts": _count(attempts, attempts.c.status == status)
-            for status in ("prepared", "running", "stale", "completed", "failed")
-        },
-        "pending_actions": _count(actions, actions.c.audit_status == sql_constant(AuditStatus.PENDING.value)),
-        "accepted_unpublished_actions": _count(
-            actions,
-            actions.c.audit_status == sql_constant(AuditStatus.ACCEPTED.value),
-            actions.c.publish_status == sql_constant(PublishStatus.NOT_PUBLISHED.value),
+    repo_id = streams.c.repo_id
+    task_scope = tasks.join(streams, tasks.c.workstream_id == streams.c.workstream_id)
+    wakeup_states = _scoped_progress(wakeups, wakeups.c.wakeup_id, wakeups.c.repo_id, repo_ids, wakeups.c.status)
+    stream_states = _scoped_progress(streams, streams.c.workstream_id, repo_id, repo_ids, streams.c.lifecycle)
+    task_states = _scoped_progress(task_scope, tasks.c.task_id, repo_id, repo_ids, tasks.c.lifecycle)
+    attempt_states = _scoped_progress(
+        task_scope.join(attempts, attempts.c.task_id == tasks.c.task_id),
+        attempts.c.attempt_id,
+        repo_id,
+        repo_ids,
+        attempts.c.status,
+    )
+    action_states = _scoped_progress(
+        task_scope.join(actions, actions.c.task_id == tasks.c.task_id),
+        actions.c.action_id,
+        repo_id,
+        repo_ids,
+        actions.c.audit_status,
+        actions.c.publish_status,
+    )
+    groups = {
+        "wakeups": _progress_totals(
+            "wakeups",
+            wakeup_states,
+            **{f"{status}_wakeups": wakeup_states.c.status == status for status in ("pending", "consumed", "expired")},
         ),
-        "published_actions": _count(actions, actions.c.publish_status == sql_constant(PublishStatus.PUBLISHED.value)),
-        "running_tasks": _count(
-            tasks,
-            tasks.c.lifecycle.in_(
-                (sql_constant(TaskLifecycle.QUEUED.value), sql_constant(TaskLifecycle.RUNNING.value))
-            ),
+        "workstreams": _progress_totals(
+            "workstreams",
+            stream_states,
+            active_workstreams=stream_states.c.lifecycle == WorkstreamLifecycle.ACTIVE.value,
+            waiting_workstreams=stream_states.c.lifecycle == WorkstreamLifecycle.WAITING_FOR_USER.value,
+            completed_workstreams=stream_states.c.lifecycle == WorkstreamLifecycle.COMPLETED.value,
         ),
-        "completed_tasks": _count(tasks, tasks.c.lifecycle == sql_constant(TaskLifecycle.COMPLETED.value)),
-        "failed_tasks": _count(tasks, tasks.c.lifecycle == sql_constant(TaskLifecycle.FAILED.value)),
-        "active_workstreams": _count(streams, streams.c.lifecycle == sql_constant(WorkstreamLifecycle.ACTIVE.value)),
-        "waiting_workstreams": _count(
-            streams, streams.c.lifecycle == sql_constant(WorkstreamLifecycle.WAITING_FOR_USER.value)
+        "tasks": _progress_totals(
+            "tasks",
+            task_states,
+            running_tasks=task_states.c.lifecycle.in_((TaskLifecycle.QUEUED.value, TaskLifecycle.RUNNING.value)),
+            completed_tasks=task_states.c.lifecycle == TaskLifecycle.COMPLETED.value,
+            failed_tasks=task_states.c.lifecycle == TaskLifecycle.FAILED.value,
         ),
-        "completed_workstreams": _count(
-            streams, streams.c.lifecycle == sql_constant(WorkstreamLifecycle.COMPLETED.value)
+        "attempts": _progress_totals(
+            "attempts",
+            attempt_states,
+            **{
+                f"{status}_attempts": attempt_states.c.status == status
+                for status in ("prepared", "running", "stale", "completed", "failed")
+            },
+        ),
+        "actions": _progress_totals(
+            "actions",
+            action_states,
+            pending_actions=action_states.c.audit_status == AuditStatus.PENDING.value,
+            accepted_unpublished_actions=(action_states.c.audit_status == AuditStatus.ACCEPTED.value)
+            & (action_states.c.publish_status == PublishStatus.NOT_PUBLISHED.value),
+            published_actions=action_states.c.publish_status == PublishStatus.PUBLISHED.value,
         ),
     }
-    query = select(*(count.label(name) for name, count in fields.items()))
-    return dict(statements.read(conn, query)[0])
+    source = groups["wakeups"]
+    for group in tuple(groups.values())[1:]:
+        source = source.join(group, true())
+    query = select(*(column for group in groups.values() for column in group.c)).select_from(source)
+    totals = dict(statements.read(conn, query)[0])
+    state = {name: sha256((totals.pop(name) or "").encode()).digest() for name in groups}
+    return totals, state

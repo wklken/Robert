@@ -1,6 +1,12 @@
 """Shared queries operations for github_actions."""
 
-from robert_agent.foundation.contracts.delivery import AuditStatus, GitHubActionType, PublicationStatus, PublishStatus
+from robert_agent.foundation.contracts.delivery import (
+    AuditStatus,
+    OutputType,
+    GitHubActionType,
+    PublicationStatus,
+    PublishStatus,
+)
 from robert_agent.foundation.contracts.execution import AttemptStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind, RecoveryStatus
 
@@ -169,6 +175,47 @@ def find_for_prepare_publication_intent_2(conn, action_id):
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query1, {"p0": action_id})
+
+
+def find_pull_request_url_for_action(conn, action_id, *, include_other_pr_results=False):
+    """The confirmed PR of the action's result, else the PR its task's workstream tracks."""
+    actions = tables["github_actions"]
+    sibling = actions.alias("sibling")
+    opened = (
+        select(sibling.c["target_url"])
+        .select_from(actions.join(sibling, sibling.c["result_id"] == actions.c["result_id"]))
+        .where(
+            actions.c["action_id"] == bindparam("p0"),
+            sibling.c["action_type"] == sql_constant(GitHubActionType.OPEN_PR.value),
+            sibling.c["publish_status"] == sql_constant(PublishStatus.PUBLISHED.value),
+        )
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    rows = statements.read(conn, opened, {"p0": action_id})
+    if rows:
+        return rows[0][0]
+    tasks, workstreams, sources, repos, results = (
+        tables[name] for name in ("tasks", "workstreams", "github_sources", "repos", "worker_results")
+    )
+    tracked = (
+        select(repos.c["full_name"], sources.c["number"])
+        .select_from(
+            actions.join(tasks, tasks.c["task_id"] == actions.c["task_id"])
+            .join(results, results.c.result_id == actions.c.result_id)
+            .join(workstreams, workstreams.c["workstream_id"] == tasks.c["workstream_id"])
+            .join(sources, sources.c["source_id"] == workstreams.c["primary_source_id"])
+            .join(repos, repos.c["repo_id"] == sources.c["repo_id"])
+        )
+        .where(
+            actions.c["action_id"] == bindparam("p0"),
+            sources.c["source_type"] == sql_constant("pull_request"),
+        )
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    if not include_other_pr_results:
+        tracked = tracked.where(results.c.output_type == OutputType.UPDATE_EXISTING_PR.value)
+    rows = statements.read(conn, tracked, {"p0": action_id})
+    return f"https://github.com/{rows[0][0]}/pull/{rows[0][1]}" if rows else None
 
 
 def find_for_skip_pending_result_actions(conn, result_id, excluding_action_id):
@@ -508,13 +555,13 @@ def find_for_delivery(conn, result_id):
         .where(
             and_(
                 table1.c["result_id"] == bindparam("p0"),
+                table1.c["action_type"].in_(("push_existing_pr", "open_pr")),
                 table1.c["audit_status"] == sql_constant(AuditStatus.ACCEPTED.value),
                 table1.c["publish_status"] == sql_constant(PublishStatus.PUBLISHED.value),
                 table2.c["status"] == sql_constant(PublicationStatus.PUBLISHED.value),
             )
         )
         .order_by(table1.c["created_at"].asc(), table1.c["action_id"].asc())
-        .limit(sql_constant(4))
         .correlate_except(table1, table2)
         .set_label_style(LABEL_STYLE_NONE)
     )
@@ -850,3 +897,21 @@ def _lifecycle_facts_filtered_statement():
 
 def lifecycle_facts_filtered(conn, items):
     return statements.read(conn, _lifecycle_facts_filtered_statement(), {"items": items})
+
+
+def find_tapd_comment_ids(conn, url_prefix):
+    """Remote IDs of comments Robert recorded on one TAPD project's tickets.
+
+    The prefix is built from a canonical host and numeric workspace, so it has no LIKE wildcards.
+    """
+    action = tables["github_actions"]
+    query = (
+        select(action.c["external_id"])
+        .where(
+            action.c["action_type"] == sql_constant(GitHubActionType.COMMENT.value),
+            action.c["target_url"].startswith(bindparam("p0")),
+            action.c["external_id"].is_not(None),
+        )
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    return statements.read(conn, query, {"p0": url_prefix})

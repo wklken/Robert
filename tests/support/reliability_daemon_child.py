@@ -40,6 +40,12 @@ def context(*args, **kwargs):
 
 
 def local_git(command, **kwargs):
+    if command[:3] == ["git", "remote", "get-url"]:
+        return subprocess.CompletedProcess(command, 0, "https://github.com/x/y.git\n", "")
+    if command[:3] == ["git", "ls-remote", "--get-url"]:
+        return subprocess.CompletedProcess(command, 0, command[-1] + "\n", "")
+    if command[:3] == ["git", "ls-remote", "--heads"]:
+        command = [*command[:3], "origin", *command[4:]]
     if command[0] != "git":
         raise AssertionError("Unexpected external command: " + command[0])
     with (root / "calls.jsonl").open("a") as output:

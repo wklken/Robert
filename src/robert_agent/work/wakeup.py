@@ -31,9 +31,31 @@ def _logical_reason(reason, metadata):
     if reason == "manual_operator_request" and kind in {
         "github_observation_ready",
         "github_context_refresh",
+        "tapd_observation_ready",
     }:
         return kind
     return reason
+
+
+def request_tapd_observation(conn, repo_id, now):
+    # One ID per scan lets the consumer acknowledge its own observation while a newer scan is in flight.
+    return request_wakeup(
+        conn,
+        repo_id=repo_id,
+        reason="manual_operator_request",
+        dedupe_key="tapd-scan:" + now,
+        metadata={"kind": "tapd_observation_ready"},
+        now=now,
+    )
+
+
+def tapd_observation_ids(conn, repo_id, now):
+    return [row[0] for row in db_read_wakeups.find_tapd_observation_ids(conn, repo_id, now)]
+
+
+def finish_tapd_observations(conn, wakeup_ids):
+    if wakeup_ids:
+        db_write_wakeups.delete_tapd_observations(conn, wakeup_ids)
 
 
 def _wakeup_from_row(row):

@@ -120,10 +120,16 @@ class PrRemediationIntegrationFixture(unittest.TestCase):
                     "html_url": "https://github.com/example/backend/pull/13",
                     "updated_at": "2026-07-26T00:00:00Z",
                 },
+                ("gh", "api", "repos/example/backend/git/ref/heads/main"): {
+                    "ref": "refs/heads/main",
+                    "object": {"sha": "base-1"},
+                },
                 (
                     "gh",
                     "api",
                     "repos/example/backend/actions/runs?head_sha=head-1&per_page=100",
+                    "--paginate",
+                    "--slurp",
                 ): {
                     "workflow_runs": [
                         {
@@ -152,13 +158,20 @@ class PrRemediationIntegrationFixture(unittest.TestCase):
                 },
                 (
                     "gh",
-                    "api",
-                    "repos/example/backend/actions/jobs/501/logs",
+                    "run",
+                    "view",
+                    "--repo",
+                    "example/backend",
+                    "--job",
+                    "501",
+                    "--log-failed",
                 ): "FAIL tests/test_api.py expected 1 got 2",
                 (
                     "gh",
                     "api",
                     "repos/example/backend/commits/head-1/check-runs?per_page=100",
+                    "--paginate",
+                    "--slurp",
                 ): {"check_runs": []},
             }
         )

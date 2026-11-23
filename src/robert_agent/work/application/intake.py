@@ -1,6 +1,8 @@
 """Admit ordered requests and prepare available work under existing task fences."""
 
-from robert_agent.foundation.contracts.work import FactClassification
+from collections import defaultdict
+
+from robert_agent.foundation.contracts.work import FactClassification, SourceProvider
 
 from robert_agent.persistence import transactions as db_transactions
 from robert_agent.execution.application import dispatch as dispatcher
@@ -9,7 +11,7 @@ from robert_agent.foundation import errors as run_errors
 from robert_agent.execution.application import facts
 from robert_agent.execution import workspace as assigned_workspace
 from robert_agent.work.application import admission as work_admission
-from robert_agent.work.application import dispatch_admission
+from robert_agent.work.application import dispatch_admission, proposal_admission
 from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import completion
 from robert_agent.work.application import github_requests
@@ -19,6 +21,7 @@ from robert_agent.work.application import remediation_requests
 from robert_agent.work.application import source_events
 from robert_agent.work.application import source_lifecycle
 from robert_agent.execution import ownership as execution_ownership
+from robert_agent.foundation import values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.supervision import store as supervision_store
@@ -61,6 +64,19 @@ def admit_requests(
         dispatch_budget=dispatch_budget,
         prompt_paths=prompt_paths,
     )
+    admitted.update(
+        proposal_admission.prepare(
+            conn,
+            config=config_result,
+            repo=repo,
+            repo_id=repo_id,
+            now=run_now,
+            dispatch_queue=dispatch_queue,
+            dispatch_budget=dispatch_budget,
+            prompt_paths=prompt_paths,
+            dry_run=dry_run,
+        )
+    )
     known_workstreams.update(admitted)
     active_workstreams.update(admitted)
     if not dry_run:
@@ -98,7 +114,7 @@ def admit_requests(
             )
         )
     if dispatch_budget["remaining"] > 0:
-        ready_work.prepare_github_operator_tasks(
+        ready_work.prepare_operator_tasks(
             conn,
             data_dir,
             db_path,
@@ -131,8 +147,15 @@ def admit_requests(
     invalidation_attempt_ids = []
     failed_workstreams = set()
 
+    tapd_pr_requests = defaultdict(list)
+    for event in decisions:
+        if event.get("provider") == SourceProvider.TAPD and event.get("has_open_dd_pr"):
+            tapd_pr_requests[event["workstream_id"]].append(event)
+    batched_fingerprints = set()
     track_admission = supervision_store.has_schema(conn)
     for event in decisions:
+        if event["event_fingerprint"] in batched_fingerprints:
+            continue
         source_id, event_id = source_events.insert_source_and_event(conn, repo_id, event, run_now)
         admission = None
         if track_admission and supervision_lineage.is_driving_github_input(event):
@@ -200,6 +223,13 @@ def admit_requests(
                     run_now,
                 )
                 continue
+        # A consumed trigger belongs to its original task, even when the
+        # workstream now points to a stopped task or a different execution.
+        if source_events.should_skip_terminal_trigger(conn, event):
+            supervision_lineage.record_disposition(
+                conn, admission, disposition="explicitly_ignored", now=run_now, reason_code="trigger_already_processed"
+            )
+            continue
         workflow_fact = facts.apply_workflow_event_fact(conn, event, run_now)
         if workflow_fact:
             attempt_id = workflow_fact.get("attempt_id")
@@ -226,22 +256,23 @@ def admit_requests(
         if related_workstreams & failed_workstreams:
             failed_workstreams.update(related_workstreams)
             continue
-        if source_events.should_skip_terminal_trigger(conn, event):
-            supervision_lineage.record_disposition(
-                conn, admission, disposition="explicitly_ignored", now=run_now, reason_code="trigger_already_processed"
-            )
-            continue
         if work_policies.is_driving_context_event(event):
             waiting_task = source_events.waiting_task_state(conn, event["workstream_id"])
+            is_tapd = work_queries.tapd_driven([event])
+            if waiting_task and is_tapd != work_queries.tapd_driven(
+                work_queries.task_events(conn, waiting_task["task_id"])
+            ):
+                continue
             if waiting_task:
                 if not execution_ownership.waiting_reply_allowed(conn, waiting_task["task_id"], run_now):
                     continue
                 if not work_policies.is_trusted_actor(event, repo):
                     work_admission.append_event_to_active_task(conn, event, "context", run_now)
                     continue
-                work_items.record_github_response(
+                work_items.record_source_response(
                     conn,
                     event["workstream_id"],
+                    actor_kind=SourceProvider.TAPD.value if is_tapd else SourceProvider.GITHUB.value,
                     actor_identity=event.get("actor_login") or "unknown",
                     body=event.get("body") or "",
                     event_fingerprint=event["event_fingerprint"],
@@ -257,14 +288,31 @@ def admit_requests(
                     "workstream_id": event["workstream_id"],
                     "source_relationship": workstream.source_relationship(event),
                 }
+                delivery = work_queries.waiting_delivery_context(conn, waiting_task["task_id"])
                 route_result = workflow_routing.effective_route(
                     config_result,
                     repo,
                     event,
+                    route_id=delivery["route_id"] if delivery else None,
+                )
+                related_events = (
+                    github_requests.dedupe_events_by_fingerprint(
+                        [
+                            event,
+                            *work_queries.task_related_events(conn, delivery["task_id"], include_consumed=True),
+                            *waiting_context_events,
+                        ]
+                    )
+                    if delivery
+                    else [event] + waiting_context_events
                 )
                 try:
                     conn.commit()  # External Git I/O must not retain the SQLite writer lock.
-                    worktree_result = assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
+                    worktree_result = (
+                        assigned_workspace.prepare_delivery_continuation(repo, delivery, dry_run)
+                        if delivery
+                        else assigned_workspace.prepare_worktree(repo, event, route_result, dry_run)
+                    )
                 except ControlDeadlineExceeded:
                     raise
                 except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
@@ -308,7 +356,7 @@ def admit_requests(
                     run_now,
                     worktree_result=worktree_result,
                     parent_task_id=waiting_task["task_id"],
-                    related_events=[event] + waiting_context_events,
+                    related_events=related_events,
                 )
                 if task_info is None:
                     continue
@@ -335,6 +383,15 @@ def admit_requests(
                 known_workstreams.add(task_info["workstream_id"])
                 continue
             if event["workstream_id"] in active_workstreams:
+                active_task = work_queries.active_task_id(conn, event["workstream_id"])
+                if (
+                    is_tapd
+                    and event.get("has_open_dd_pr")
+                    and not (active_task and work_queries.tapd_driven(work_queries.task_events(conn, active_task)))
+                ):
+                    # Select the queue again once it is ready, without adding
+                    # TAPD text or authority to a GitHub or remediation task.
+                    continue
                 appended = work_admission.append_event_to_active_task(conn, event, "context", run_now)
                 if appended:
                     if admission is not None:
@@ -395,7 +452,11 @@ def admit_requests(
                 conn, repo, event, retry_parent_id
             ):
                 continue
-            retry_context = work_queries.failed_parent_context_events(conn, retry_parent_id)
+            retry_context = [
+                prior
+                for prior in work_queries.failed_parent_context_events(conn, retry_parent_id)
+                if (prior.get("provider") == SourceProvider.TAPD) == is_tapd
+            ]
             # A completed request's issue title describes old work. Infer
             # this new instruction on its own; ambiguous questions go to
             # classification instead of inheriting an old "bug"/"报错".
@@ -404,9 +465,9 @@ def admit_requests(
                 if retry_context
                 else {
                     **event,
-                    "intent": discover.infer_intent(
-                        None, event.get("body"), event["event_type"], repo["github_account"]
-                    ),
+                    "intent": event.get("intent")
+                    if is_tapd
+                    else discover.infer_intent(None, event.get("body"), event["event_type"], repo["github_account"]),
                 }
             )
             retry_related = (
@@ -440,6 +501,19 @@ def admit_requests(
                 run_now,
             ):
                 continue
+            batch = []
+            if is_tapd and event.get("has_open_dd_pr"):
+                # All already-waiting TAPD requests belong in the first prompt for this round.
+                batch = [
+                    request
+                    for request in tapd_pr_requests[event["workstream_id"]]
+                    if request["event_fingerprint"] != event["event_fingerprint"]
+                    and not task_state.event_is_attached(conn, values.github_event_id(request["event_fingerprint"]))
+                ]
+                if batch:
+                    retry_related = github_requests.dedupe_events_by_fingerprint(
+                        [*(retry_related or [task_event]), *batch]
+                    )
             task_info = preparation.create_task_attempt_and_prompt(
                 conn,
                 data_dir,
@@ -458,6 +532,18 @@ def admit_requests(
             if task_info is None:
                 continue
             supervision_lineage.record_task_disposition(conn, admission, task_info["task_id"], run_now)
+            for request in batch:
+                related_source_id, related_event_id = source_events.insert_source_and_event(
+                    conn, repo_id, request, run_now
+                )
+                if track_admission:
+                    related_admission = supervision_lineage.record_github_received(
+                        conn, request, related_event_id, repo_id, related_source_id, run_now
+                    )
+                    supervision_lineage.record_task_disposition(
+                        conn, related_admission, task_info["task_id"], run_now, pending=True
+                    )
+                batched_fingerprints.add(request["event_fingerprint"])
             dispatcher.queue_dispatch(
                 dispatch_queue,
                 task_info,

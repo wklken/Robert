@@ -30,6 +30,17 @@ from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
 
 
+def find_tapd_observation_ids(conn, repo_id, now):
+    wakeup = tables["wakeups"]
+    query = select(wakeup.c.wakeup_id).where(
+        wakeup.c.repo_id == repo_id,
+        wakeup.c.status == WakeupStatus.PENDING.value,
+        wakeup.c.not_before_at <= now,
+        func.json_extract(wakeup.c.metadata_json, "$.kind") == "tapd_observation_ready",
+    )
+    return statements.read(conn, query)
+
+
 def find_for_parent_allows_child(conn, retrigger_wakeup_id, parent_task_id):
     table1 = tables["wakeups"].alias("wu")
     table2 = tables["tasks"].alias("t")

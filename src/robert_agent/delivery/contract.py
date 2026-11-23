@@ -1,7 +1,10 @@
 """The sole worker submission contract and deterministic result normalization."""
 
+from robert_agent.context.memory_policy import memory_delta_error, redact_memory_delta
+
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType, ReviewAction, VerificationStatus
-from robert_agent.foundation.contracts.work import TaskKind
+from robert_agent.foundation.contracts.work import SourceProvider, TaskKind
+from robert_agent.foundation.tapd_identity import KINDS as TAPD_KINDS, ticket_url as tapd_ticket_url
 
 from robert_agent.delivery import policies
 from copy import deepcopy
@@ -10,7 +13,7 @@ import json
 import re
 
 CONTRACT_ID = "compact-v1"
-NORMALIZER_VERSION = 2
+NORMALIZER_VERSION = 4
 OUTPUTS = frozenset(output.value for output in OutputType)
 FIELDS = {
     "planned_github_actions",
@@ -19,6 +22,7 @@ FIELDS = {
     "consumed_event_fingerprints",
     "consumed_work_item_event_ids",
     "handoff",
+    "receipt_summary",
     "memory_delta",
     "used_memory_ids",
     "recommended_route",
@@ -178,12 +182,6 @@ def validate_submission(submission, output_type, origin_type):
             "operator_question.kind",
             "Question kind must be a string.",
         )
-        for choice in question.get("choices", []) if isinstance(question.get("choices", []), list) else []:
-            _require(
-                isinstance(choice, dict) and not (set(choice) - {"id", "label"}),
-                "operator_question.choices",
-                "Choice contains unsupported fields.",
-            )
         question_error = policies.validate_operator_question(submission)
         _require(
             question_error is None,
@@ -236,6 +234,8 @@ def validate_submission(submission, output_type, origin_type):
             )
     if "memory_delta" in submission:
         memory = submission["memory_delta"]
+        memory_error = memory_delta_error(memory)
+        _require(memory_error is None, "memory_delta", memory_error or "")
         _require(isinstance(memory, dict), "memory_delta", "Memory delta must be an object.")
         for name in ("status", "reason"):
             _require(
@@ -378,13 +378,17 @@ def comment_marker(task_id, attempt_id, index):
 
 def target_urls(scope):
     """Canonical candidates shared by prompt rendering and submission errors."""
-    return sorted(
-        {
-            f"https://github.com/{scope['repo']}/{'issues' if item['source_type'] == 'issue' else 'pull'}/{item['number']}"
-            for item in scope.get("sources", [])
-            if item.get("source_type") in {"issue", "pull_request"}
-        }
-    )
+    urls = set()
+    sources = scope.get("sources", [])
+    tapd_only = any(item.get("provider") == SourceProvider.TAPD for item in sources)
+    for item in sources:
+        if item.get("provider") == SourceProvider.TAPD:
+            host, workspace_id = item["project_key"].split("/", 1)
+            urls.add(tapd_ticket_url(host, workspace_id, TAPD_KINDS[item["source_type"]], item["external_id"]))
+        elif not tapd_only and item.get("source_type") in {"issue", "pull_request"}:
+            kind = "issues" if item["source_type"] == "issue" else "pull"
+            urls.add(f"https://github.com/{scope['repo']}/{kind}/{item['number']}")
+    return sorted(urls)
 
 
 def _target(action, scope, index):
@@ -416,6 +420,8 @@ def normalize(envelope, settings):
     output_type = envelope["output_type"]
     scope = settings["action_scope"]
     result = deepcopy(submission)
+    if "memory_delta" in result:
+        result["memory_delta"] = redact_memory_delta(result["memory_delta"])
     result.update({key: envelope[key] for key in ("task_id", "attempt_id", "output_type")})
     result.setdefault("consumed_event_fingerprints", [])
     result.setdefault("consumed_work_item_event_ids", [])
@@ -482,7 +488,16 @@ def normalize(envelope, settings):
                         "Trusted PR author is unavailable.",
                     )
                     action["pr_author_login"] = login
-                    action["body"] = f"@{login}\n\n" + action["body"]
+                    owner = scope.get("decision_owner") or {}
+                    decision_login = owner.get("login") or "wklken"
+                    _require(
+                        isinstance(decision_login, str)
+                        and bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", decision_login)),
+                        field + ".body",
+                        "Confirmed decision owner is invalid.",
+                    )
+                    action["decision_owner_login"] = decision_login
+                    action["body"] = f"@{decision_login}\n\n" + action["body"]
                 action["body"] += "\n\n" + comment_marker(envelope["task_id"], envelope["attempt_id"], index)
         elif kind == GitHubActionType.OPEN_PR.value:
             for source in ("repo", "branch_name", "base_branch"):
@@ -526,8 +541,12 @@ def normalize(envelope, settings):
                     )
                 action["body"] += f"\n\n{'Fixes' if action['issue_resolution'] == 'complete' else 'Refs'} #{issue}"
                 action.pop("target_url", None)
+            tapd = any(item.get("provider") == SourceProvider.TAPD for item in scope.get("sources", []))
+            _require(not tapd or bool(scope.get("public_ref")), field, "Assigned PR target is unavailable.")
+            # GitHub must not learn the TAPD ticket; the public reference maps back locally.
+            origin = scope["public_ref"] if tapd else scope["workstream_id"]
             action["body"] += (
-                f"\n\n<!-- robert-workstream\norigin_workstream_id: {scope['workstream_id']}\nsource_issue: {issue or ''}\ntask_id: {envelope['task_id']}\ncreated_by: robert\n-->"
+                f"\n\n<!-- robert-workstream\norigin_workstream_id: {origin}\nsource_issue: {issue or ''}\ntask_id: {envelope['task_id']}\ncreated_by: robert\n-->"
             )
     if "remediation_evidence" in result:
         episode = settings.get("remediation_context") or {}

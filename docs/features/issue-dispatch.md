@@ -13,6 +13,7 @@
 ```yaml
 messaging:
   enabled: true
+  send_after: "2026-11-09T08:00:00+00:00" # 设置为实际开启时间，普通重启保留此值。
   dispatch_enabled: true
   provider: openclaw
   channel: telegram

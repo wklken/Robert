@@ -2,7 +2,13 @@
 
 from robert_agent.foundation.contracts.delivery import OutputType
 from robert_agent.foundation.contracts.execution import AttemptStatus, RoundStatus
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, TaskKind, TaskLifecycle, WorkstreamLifecycle
+from robert_agent.foundation.contracts.work import (
+    REMEDIATION_TASK_KINDS,
+    SourceProvider,
+    TaskKind,
+    TaskLifecycle,
+    WorkstreamLifecycle,
+)
 
 from robert_agent.persistence import transactions as db_transactions
 
@@ -30,6 +36,7 @@ from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import lifecycle as work_application_lifecycle
 from robert_agent.work.application import participants
 from robert_agent.work.application import source_events
+from robert_agent.work import decision_owner
 from robert_agent.context import attempt as attempt_context
 from robert_agent.context import prompts as render_prompt
 from robert_agent.context.worker_prompt import worker_prompt_input
@@ -38,14 +45,17 @@ from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.execution import rounds as native_rounds
-from robert_agent.foundation import values
+from robert_agent.foundation import tapd_identity, values
 from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.work import queries as work_queries
+from robert_agent.work import source_policy
 from robert_agent.work import streams as workstream
 from robert_agent.workflows import pr_remediation as remediation
 from robert_agent.workflows import routes as route
 from robert_agent.workflows import routing as workflow_routing
 from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds import pre_pr_review
+import hashlib
 from robert_agent.persistence.rounds import vote as vote_store
 import json
 
@@ -56,6 +66,36 @@ def insert_file_artifact(conn, task_id, attempt_id, artifact_type, path, run_now
     db_write_artifacts.record_dispatch_artifacts(
         conn, values.new_id("artifact"), task_id, attempt_id, artifact_type, str(path_obj), bytes_size, run_now
     )
+
+
+def _prompt_events(trigger, events):
+    if trigger.get("provider") == SourceProvider.TAPD:
+        return events
+    events = [event for event in events if event.get("provider") != SourceProvider.TAPD]
+    return [
+        {
+            **event,
+            "origin_workstream_id": ((event.get("metadata") or {}).get("dd_workstream") or {}).get(
+                "origin_workstream_id"
+            ),
+        }
+        if tapd_identity.is_source_key(event.get("origin_workstream_id"))
+        else event
+        for event in events
+    ]
+
+
+def attach_tapd_discussions(conn, runtime_context, workstream_id, events):
+    """Only a task driven by a TAPD request sees ticket content."""
+    if work_queries.tapd_driven(events):
+        runtime_context["origin_type"] = SourceProvider.TAPD.value
+        runtime_context["tapd_discussions"] = work_queries.tapd_discussions(conn, workstream_id)
+        runtime_context["tapd_pull_requests"] = work_queries.tapd_pull_requests(conn, events[0]["source_key"])
+        if backport := events[0].get("backport"):
+            runtime_context["backport"] = {
+                **backport,
+                "source_pr_url": f"https://github.com/{events[0]['repo']}/pull/{backport['source_pr']}",
+            }
 
 
 def upsert_route_decision(conn, task_id, route_result, run_now):
@@ -152,6 +192,8 @@ def _refresh_prepared_task_locked(
         return None
     if state["task_lifecycle"] != TaskLifecycle.QUEUED or state["attempt_status"] != AttemptStatus.PREPARED:
         return None
+    if work_queries.tapd_driven(work_queries.task_events(conn, state["task_id"])):
+        return None
     if event.get("source_type") != "pull_request" or not event.get("has_open_dd_pr"):
         return None
     if state["route_id"] not in {"new-pr", "update-existing-pr"}:
@@ -159,6 +201,10 @@ def _refresh_prepared_task_locked(
 
     route_result = workflow_routing.effective_route(config_result, repo, event)
     if route_result["route_id"] != "update-existing-pr":
+        return None
+    review = pre_pr_review.session(conn, task_id=state["task_id"])
+    if review and (review["deadline_at"] or review["snapshot_id"] or pre_pr_review.runs(conn, review["round_id"])):
+        # A retrigger can carry review evidence from an earlier attempt.
         return None
     input_policy = route.review_input_policy(route_result["expected_output"], event)
     if (
@@ -195,7 +241,7 @@ def _refresh_prepared_task_locked(
     ):
         return None
     conn.commit()
-    related_events = work_queries.task_related_events(conn, state["task_id"])
+    related_events = _prompt_events(event, work_queries.task_related_events(conn, state["task_id"]))
     repo_id = values.repository_id(repo["full_name"])
     runtime_knowledge_items = attempt_context.load_runtime_knowledge(
         conn,
@@ -212,10 +258,14 @@ def _refresh_prepared_task_locked(
     github_context["current_event_fingerprint"] = event["event_fingerprint"]
     runtime_context = attempt_context.runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
+    runtime_context["decision_owner"] = decision_owner.for_workstream(
+        conn, event["workstream_id"], repo["github_account"]
+    )
+    attach_tapd_discussions(conn, runtime_context, event["workstream_id"], related_events)
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo["full_name"],
-            "sources": work_queries.sources_for_workstream(conn, event["workstream_id"]),
+            "sources": work_queries.sources_for_task(conn, event["workstream_id"], related_events),
         }
     )
     prompt_input = worker_prompt_input(
@@ -256,6 +306,8 @@ def _refresh_prepared_task_locked(
     db_write_tasks.update_for_refresh_prepared_task_locked_2(
         conn, input_policy, state["task_id"], event["event_fingerprint"]
     )
+    if review:
+        pre_pr_review.delete_unstarted(conn, review["round_id"])
     upsert_route_decision(conn, state["task_id"], route_result, run_now)
     attempt_metadata_row = db_records.first(
         db_read_attempts.find_metadata_json_by_attempt_id(conn, state["attempt_id"])
@@ -290,6 +342,46 @@ def _refresh_prepared_task_locked(
     return prompt_path
 
 
+def bind_pre_pr_review(
+    conn, repo, event, related_events, plan, task_id, attempt_id, prompt_path, worktree_result, *, previous_review=None
+):
+    review_plan = plan
+    if previous_review:
+        review_plan = previous_review["request"]["plan"]
+    if review_plan and not pre_pr_review.session(conn, task_id=task_id):
+        request = {
+            "plan": review_plan,
+            "repo": {
+                key: repo[key]
+                for key in ("full_name", "repo_root", "worktree_root", "default_base_branch", "github_account")
+            },
+            "event": event,
+            "input_sha256": hashlib.sha256(json.dumps(related_events, sort_keys=True).encode()).hexdigest(),
+            "prompt_path": str(prompt_path),
+            "prompt_sha256": pre_pr_review.digest(prompt_path),
+            "branch": (worktree_result or {}).get("branch_name"),
+        }
+        previous = previous_review["request"] if previous_review else {}
+        reply_continuation = bool(
+            previous_review
+            and previous_review["status"] == "waiting_for_user"
+            and previous.get("operator_reply", {}).get("decision") == previous_review["proof"].get("decision")
+            and previous_review["proof"].get("decision")
+        )
+        if reply_continuation and any(request[key] != previous.get(key) for key in ("repo", "branch")):
+            raise ValueError("operator reply cannot change the original review scope")
+        if (
+            previous_review
+            and (not previous_review["final_result_id"] or reply_continuation)
+            and previous_review["manifest"].get("candidate")
+            and all(request[key] == previous.get(key) for key in ("repo", "branch"))
+            and (request["input_sha256"] == previous.get("input_sha256") or reply_continuation)
+        ):
+            pre_pr_review.rebind_for_retry(conn, previous_review, task_id, attempt_id)
+        else:
+            pre_pr_review.create(conn, task_id, request)
+
+
 def create_task_attempt_and_prompt(
     conn,
     data_dir,
@@ -307,6 +399,7 @@ def create_task_attempt_and_prompt(
     existing_task_id=None,
     new_request_event=None,
     native_round_id=None,
+    recovery_key=None,
 ):
     if not conn.in_transaction:
         db_transactions.begin(conn, immediate=True)
@@ -390,6 +483,7 @@ def create_task_attempt_and_prompt(
     is_native = bool(route_result.get("native_review_workers") or route_result.get("native_vote_workers"))
     if is_native:
         related_events = [event]
+    related_events = _prompt_events(event, related_events)
     refreshed_context = None
     if retrigger_wakeup_id:
         saved = db_records.first(db_read_wakeups.find_metadata_json_by_wakeup_id(conn, retrigger_wakeup_id))
@@ -429,22 +523,40 @@ def create_task_attempt_and_prompt(
     github_context = attempt_context.write_github_context_artifacts(prompt_dir, attempt_id, related_events)
     runtime_context = attempt_context.runtime_context(db_path, repo, worktree_result)
     runtime_context["github_context"] = github_context
+    continuation = (worktree_result or {}).get("continuation")
+    if continuation:
+        runtime_context["recovery_context"] = continuation
 
     db_write_workstreams.insert_for_create_task_attempt_and_prompt(
-        conn, workstream_id, repo_id, source_id, lifecycle, task_id, run_now, run_now
+        conn,
+        workstream_id,
+        repo_id,
+        source_id,
+        lifecycle,
+        task_id,
+        run_now,
+        run_now,
+        event.get("public_ref") if workstream_id == event["source_key"] else None,
+    )
+    origin_type = event.get("provider") or SourceProvider.GITHUB.value
+    runtime_context["decision_owner"] = decision_owner.record(
+        conn, workstream_id, event, repo["github_account"], run_now
     )
     item = work_items.ensure_github_work_item(
         conn,
         repo_id=repo_id,
         source_id=source_id,
         workstream_id=workstream_id,
-        actor_identity=event.get("actor_login") or "github",
+        actor_identity=event.get("actor_login") or origin_type,
         route_confidence=route_result.get("confidence", "low"),
+        route_id=route_result["route_id"],
         now=run_now,
+        origin_type=origin_type,
     )
-    if item["origin_type"] == "github" and item["canceled_at"] and new_request_event is not None:
+    source_origin = item["origin_type"] in set(SourceProvider)
+    if source_origin and item["canceled_at"] and new_request_event is not None:
         db_write_work_items.update_for_create_task_attempt_and_prompt(conn, run_now, item["work_item_id"])
-    if item["origin_type"] == "github" and item["completed_at"] and not item["canceled_at"]:
+    if source_origin and item["completed_at"] and not item["canceled_at"]:
         db_write_work_items.update_for_create_task_attempt_and_prompt_2(conn, run_now, item["work_item_id"])
     participants.record_review_participant(conn, workstream_id, event, route_result, run_now)
     for related_event in related_events:
@@ -452,10 +564,11 @@ def create_task_attempt_and_prompt(
         db_write_workstream_sources.insert_for_create_task_attempt_and_prompt(
             conn, workstream_id, related_source_id, workstream.source_relationship(related_event), run_now
         )
+    attach_tapd_discussions(conn, runtime_context, workstream_id, related_events)
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo["full_name"],
-            "sources": work_queries.sources_for_workstream(conn, workstream_id),
+            "sources": work_queries.sources_for_task(conn, workstream_id, related_events),
         }
     )
     rendered = None
@@ -477,6 +590,14 @@ def create_task_attempt_and_prompt(
         **({supervision_lineage.LINEAGE_FIELD: lineage_key} if lineage_key else {}),
         "review_input_policy": task["review_input_policy"],
         "request_event_fingerprint": event["event_fingerprint"],
+        **({"target_base_branch": event["base_branch"]} if event.get("base_branch") else {}),
+        **({"target_base_branch": runtime_context["target_base_branch"]} if continuation else {}),
+        **(
+            {"pre_pr_review_required": True}
+            if route_result.get("pre_pr_review_plan")
+            or (retrigger_wakeup_id and pre_pr_review.session(conn, task_id=parent_task_id))
+            else {}
+        ),
         **(
             {"refreshed_context": related_events}
             if existing
@@ -528,7 +649,7 @@ def create_task_attempt_and_prompt(
     if route_result.get("native_review_workers") or route_result.get("native_vote_workers"):
         round_store = vote_store if route_result.get("native_vote_workers") else review_store
         workers = route_result.get("native_vote_workers") or route_result["native_review_workers"]
-        recovery_key = None
+        reusable_round = None
         if retrigger_wakeup_id and parent_task_id:
             parent = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, parent_task_id))
             previous_round = round_store.session(conn, task_id=parent_task_id)
@@ -538,10 +659,13 @@ def create_task_attempt_and_prompt(
                 == "result_contract_cutover"
             ):
                 recovery_key = retrigger_wakeup_id
+            else:
+                reusable_round = previous_round
         entry = (
             round_store.session(conn, round_id=native_round_id)
             if native_round_id
-            else round_store.enqueue(
+            else reusable_round
+            or round_store.enqueue(
                 conn,
                 repo,
                 {**event, supervision_lineage.LINEAGE_FIELD: lineage_key},
@@ -574,6 +698,10 @@ def create_task_attempt_and_prompt(
     existing_pr_head_sha = source_events.event_existing_pr_head_sha(event)
     attempt_metadata = {"existing_pr_head_sha": existing_pr_head_sha} if existing_pr_head_sha else {}
     attempt_metadata["result_contract"] = result_contract.CONTRACT_ID
+    if continuation:
+        attempt_metadata["continuation"] = {
+            key: continuation[key] for key in ("previous_task_id", "previous_attempt_id", "strategy")
+        }
     if rendered:
         attempt_metadata["prompt_contract"] = rendered.metadata
     db_write_attempts.insert_for_create_task_attempt_and_prompt(
@@ -586,6 +714,20 @@ def create_task_attempt_and_prompt(
         run_now,
         run_now,
         json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
+    )
+    bind_pre_pr_review(
+        conn,
+        repo,
+        event,
+        related_events,
+        route_result.get("pre_pr_review_plan"),
+        task_id,
+        attempt_id,
+        prompt_path,
+        worktree_result,
+        previous_review=pre_pr_review.session(conn, task_id=parent_task_id)
+        if retrigger_wakeup_id or task_metadata.get("pre_pr_review_retry")
+        else None,
     )
     for artifact_type, path in [
         ("prompt", prompt_path),
@@ -672,7 +814,23 @@ def create_resume_attempt_and_prompt(
     previous_attempt_id,
     run_now,
     recovery_context,
+    *,
+    config_result=None,
 ):
+    if recovery_context.get("reason_code") == "review_revision_changed":
+        return _restart_changed_review(
+            conn,
+            data_dir,
+            db_path,
+            repo,
+            repo_id,
+            task_id,
+            workstream_id,
+            previous_attempt_id,
+            run_now,
+            recovery_context,
+            config_result,
+        )
     previous = db_records.first(
         db_read_attempts.find_attempt_no_and_worktree_path_and_branch_name_and_metadata_json_by_attempt_id(
             conn, previous_attempt_id
@@ -688,6 +846,8 @@ def create_resume_attempt_and_prompt(
     events = _events_for_task(conn, task_id)
     if not route_result or not events:
         return None
+    trigger = work_queries.task_events(conn, task_id)
+    events = _prompt_events(trigger[0] if trigger else events[0], events)
 
     prompt_dir = data_dir / "artifacts" / task_id
     prompt_dir.mkdir(parents=True, exist_ok=True)
@@ -735,11 +895,12 @@ def create_resume_attempt_and_prompt(
     prompt_path = prompt_dir / f"{attempt_id}.prompt.md"
     github_context = attempt_context.write_github_context_artifacts(prompt_dir, attempt_id, events)
     runtime_context["github_context"] = github_context
+    attach_tapd_discussions(conn, runtime_context, workstream_id, events)
     repo_full_name = db_records.first(db_read_repos.find_full_name_by_repo_id(conn, repo_id))[0]
     runtime_context["publication_targets"] = result_contract.target_urls(
         {
             "repo": repo_full_name,
-            "sources": work_queries.sources_for_workstream(conn, workstream_id),
+            "sources": work_queries.sources_for_task(conn, workstream_id, events),
         }
     )
     rendered = None
@@ -803,5 +964,81 @@ def create_resume_attempt_and_prompt(
         "attempt_id": attempt_id,
         "attempt_no": attempt_no,
         "prompt_path": str(prompt_path),
+        "recovery_artifact_path": str(recovery_path),
+    }
+
+
+def _restart_changed_review(
+    conn,
+    data_dir,
+    db_path,
+    repo,
+    repo_id,
+    task_id,
+    workstream_id,
+    previous_attempt_id,
+    run_now,
+    recovery_context,
+    config_result,
+):
+    previous_round = review_store.session(conn, task_id=task_id)
+    if (
+        not previous_round
+        or previous_round["round_id"] != recovery_context.get("round_id")
+        or previous_round["status"] != RoundStatus.SUPERSEDED
+        or previous_round.get("error") != "PR head/base changed after context preparation"
+        or not execution_ownership.claim_task(conn, task_id, run_now)
+        or config_result is None
+    ):
+        return None
+    event = source_policy.reauthorize_saved_request(previous_round["request"]["event"], repo)
+    route_result = workflow_routing.effective_route(config_result, repo, event, route_id="review-pr")
+    if not event.get("drives_execution") or not route_result.get("native_review_workers"):
+        return None
+    # A fresh round preserves the old snapshot and accepted request. The unique
+    # recovery key prevents enqueue from rebinding the superseded round.
+    db_transactions.savepoint(conn, "restart_changed_review")
+    try:
+        # The workstream permits one live task. Release the parent's lifecycle
+        # inside this transaction while retaining its binding for child admission.
+        db_write_tasks.update_for_supervise_running_attempts(conn, run_now, task_id)
+        result = create_task_attempt_and_prompt(
+            conn,
+            data_dir,
+            db_path,
+            repo,
+            repo_id,
+            event,
+            route_result,
+            {"workstream_id": workstream_id},
+            run_now,
+            parent_task_id=task_id,
+            recovery_key=previous_attempt_id,
+        )
+        if not result or result.get("blocked"):
+            db_transactions.rollback_to(conn, "restart_changed_review")
+            return None
+        execution_ownership.inherit_recovery_budget(conn, task_id, result["task_id"], run_now)
+        execution_ownership.close_terminal_task(conn, task_id, run_now)
+    except BaseException:
+        db_transactions.rollback_to(conn, "restart_changed_review")
+        raise
+    finally:
+        db_transactions.release(conn, "restart_changed_review")
+    recovery_path = data_dir / "artifacts" / result["task_id"] / f"{result['attempt_id']}.recovery.json"
+    recovery_path.write_text(
+        json.dumps(
+            {**recovery_context, "strategy": "restart_changed_review", "new_task_id": result["task_id"]},
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    insert_file_artifact(conn, result["task_id"], result["attempt_id"], "recovery_context", recovery_path, run_now)
+    return {
+        **result,
+        "prompt_path": str(result["prompt_path"]),
+        "attempt_no": 1,
         "recovery_artifact_path": str(recovery_path),
     }

@@ -1,6 +1,7 @@
 """application delivery guards responsibilities."""
 
 from robert_agent.delivery.application import scope as publication_scope
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.delivery.application import audit as audit_result
 from robert_agent.execution import operations as execution_operations
 from robert_agent.supervision import git as supervision_git
@@ -8,6 +9,8 @@ from robert_agent.supervision import git as supervision_git
 from robert_agent.delivery.application import outcomes as publication_outcomes
 from robert_agent.delivery import intents as intent_facts
 from robert_agent.delivery import values as publication_values
+from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
+import hashlib
 
 
 def publish_scope_violation(conn, action):
@@ -34,6 +37,31 @@ def publication_scope_guard(conn, action, recovery_guard=None):
     if conn is None:
         return None
     scope = publication_scope.trusted_action_scope(conn, action)
+    reviewed = pre_pr_review.session(conn, task_id=action.get("task_id"))
+    if (reviewed or pre_pr_review.required(conn, action.get("task_id"))) and (
+        not reviewed
+        or not scope
+        or not reviewed["proof"]
+        or scope.get("pre_pr_review") != reviewed["proof"]
+        or reviewed["final_result_id"] != action.get("result_id")
+    ):
+        return {
+            "ok": False,
+            "status": "publish_failed",
+            "retryable": False,
+            "safe_error": "The published result is missing a current pre-publication review proof.",
+        }
+    if reviewed and action["action_type"] == GitHubActionType.OPEN_PR:
+        body = publication_values.decode_json(action["metadata_json"]).get("body")
+        if not isinstance(body, str) or hashlib.sha256(body.encode()).hexdigest() != reviewed["proof"].get(
+            "body_sha256"
+        ):
+            return {
+                "ok": False,
+                "status": "publish_failed",
+                "retryable": False,
+                "safe_error": "The PR description differs from the reviewed submission.",
+            }
     if isinstance(scope, dict) and scope.get("supervision_repair"):
         try:
             supervision_git.binding(scope)
@@ -63,15 +91,16 @@ def publication_scope_guard(conn, action, recovery_guard=None):
     }
 
 
-def existing_pr_push_target(scope, run_command, *, reconcile=False):
-    """Validate and pin the PR push destination for both reads and the write."""
+def push_target(scope, run_command, *, reconcile=False):
+    """Validate the output's push destination for both reads and the write."""
     from robert_agent.adapters.github import client
     from robert_agent.adapters.git.remotes import github_repository
     from robert_agent.foundation.commands import ControlDeadlineExceeded
     import subprocess
 
     sources = [source for source in scope.get("sources", ()) if source.get("source_type") == "pull_request"]
-    if not sources or scope.get("supervision_repair"):
+    new_pr = scope.get("output_type") == OutputType.NEW_PR
+    if scope.get("supervision_repair") or (not new_pr and not sources):
         return None
     error = {
         "ok": False,
@@ -79,21 +108,34 @@ def existing_pr_push_target(scope, run_command, *, reconcile=False):
         "retryable": False,
         "safe_error": "PR head repository, publisher or push destination does not match the audited task.",
     }
-    if len(sources) != 1 or not scope.get("repo") or not scope.get("github_account"):
+    if not scope.get("repo") or (not new_pr and (len(sources) != 1 or not scope.get("github_account"))):
         return error
+    read_failure = {**error, "reason_code": "push_target_query_failed"} if reconcile else error
     try:
-        details = client.try_read_json(
-            ["gh", "api", f"repos/{scope['repo']}/pulls/{sources[0]['number']}"], runner=run_command
-        )
-        head = (details or {}).get("head") or {}
-        head_repo = (head.get("repo") or {}).get("full_name")
-        if (
-            not head_repo
-            or (not reconcile and (details.get("state") != "open" or details.get("merged") or details.get("merged_at")))
-            or ((details.get("user") or {}).get("login") or "").casefold() != scope["github_account"].casefold()
-            or head.get("ref") != scope.get("branch_name")
-        ):
-            return error
+        if new_pr:
+            owner, repository = scope["repo"].split("/", 1)
+            head_repo = f"{scope.get('head_owner') or owner}/{repository}"
+        else:
+            try:
+                details = client.read_json(
+                    ["gh", "api", f"repos/{scope['repo']}/pulls/{sources[0]['number']}"], runner=run_command
+                )
+            except ControlDeadlineExceeded:
+                raise
+            except (OSError, subprocess.SubprocessError):
+                return read_failure
+            head = (details or {}).get("head") or {}
+            head_repo = (head.get("repo") or {}).get("full_name")
+            if (
+                not head_repo
+                or (
+                    not reconcile
+                    and (details.get("state") != "open" or details.get("merged") or details.get("merged_at"))
+                )
+                or ((details.get("user") or {}).get("login") or "").casefold() != scope["github_account"].casefold()
+                or head.get("ref") != scope.get("branch_name")
+            ):
+                return error
         remote = run_command(
             ["git", "remote", "get-url", "--push", "--all", scope.get("remote") or "origin"],
             cwd=scope.get("worktree_path"),

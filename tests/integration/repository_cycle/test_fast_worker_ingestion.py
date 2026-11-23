@@ -330,7 +330,7 @@ raise SystemExit(0 if record["ok"] else 1)
             path = dispatch_metadata.get(key)
             if path:
                 worker_logs[key] = Path(path).read_text(encoding="utf-8", errors="replace")
-        self.assertEqual(task_lifecycle, "queued")
+        self.assertEqual(task_lifecycle, "running")
         self.assertEqual(
             attempt_status,
             "completed",

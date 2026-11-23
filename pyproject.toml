@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "robert-github-agent"
-version = "0.1.0b2"
+version = "0.1.0b3"
 description = "An AI teammate that takes care of your GitHub work."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,7 +13,7 @@ authors = [{name = "Robert contributors"}]
 dependencies = [
   "PyYAML>=6.0,<7",
   # Shared model mappings and parameterized persistence expressions replace handwritten SQL.
-  "SQLAlchemy>=2.0.47,<2.1",
+  "SQLAlchemy>=2.1.0,<2.2",
   # Supervisor provides restart/status control when Linux user systemd is unavailable.
   "supervisor>=4.2,<5",
 ]
@@ -44,11 +44,11 @@ Issues = "https://github.com/wklken/robert/issues"
 dev = [
   "build",
   # Keep the same contract engine across the CI matrix.
-  "import-linter>=2.15,<2.16",
+  "import-linter>=2.15,<2.17",
   "mypy",
   "pip-audit",
   # Pin the formatter so local runs and CI produce the same style.
-  "ruff==0.17.4",
+  "ruff==0.17.5",
   "twine",
   "types-PyYAML",
 ]

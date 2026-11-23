@@ -190,6 +190,70 @@ repos:
         self.assertEqual(result["stop_reason"], "no_progress")
         self.assertFalse(result["cycle_results"][0]["progress"]["changed"])
 
+    def test_loop_recognizes_scoped_task_lifecycle_changes_without_count_changes(self):
+        from robert_agent.runtime import loop as loop_engine
+
+        db_path = self._init_runnable_db()
+        self._progress_tasks(db_path, "repo-1", "example/repo")
+        calls = []
+
+        def runner(*_args, **_kwargs):
+            calls.append(True)
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                if len(calls) == 1:
+                    conn.execute("UPDATE tasks SET lifecycle = 'running' WHERE task_id = 'repo-1-a'")
+                else:
+                    conn.execute(
+                        "UPDATE tasks SET lifecycle = CASE task_id "
+                        "WHEN 'repo-1-a' THEN 'queued' WHEN 'repo-1-b' THEN 'running' END"
+                    )
+            return {"ok": True, "status": "completed"}
+
+        result = loop_engine.run_loop(self.config_path, skip_external=True, max_cycles=2, runner=runner)
+
+        self.assertEqual(result["cycles"], 2)
+        self.assertEqual(result["stop_reason"], "max_cycles")
+        for cycle in result["cycle_results"]:
+            self.assertTrue(cycle["progress"]["changed"])
+
+    def test_loop_ignores_lifecycle_progress_from_another_repository(self):
+        from robert_agent.runtime import loop as loop_engine
+
+        db_path = self._init_runnable_db()
+        self._progress_tasks(db_path, "repo-2", "example/other")
+
+        def runner(*_args, **_kwargs):
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.execute("UPDATE tasks SET lifecycle = 'completed' WHERE task_id = 'repo-2-a'")
+            return {"ok": True, "status": "completed"}
+
+        result = loop_engine.run_loop(self.config_path, skip_external=True, runner=runner)
+
+        self.assertEqual(result["cycles"], 1)
+        self.assertEqual(result["stop_reason"], "no_progress")
+        self.assertFalse(result["cycle_results"][0]["progress"]["changed"])
+
+    def _progress_tasks(self, db_path, repo_id, full_name):
+        now = datetime.now(timezone.utc).isoformat()
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO repos(repo_id, full_name, github_account, default_base_branch, "
+                "repo_root, worktree_root) VALUES (?, ?, 'robot', 'master', '/repo', '/repo/.worktrees')",
+                (repo_id, full_name),
+            )
+            for suffix in ("a", "b"):
+                task_id = f"{repo_id}-{suffix}"
+                conn.execute(
+                    "INSERT INTO workstreams(workstream_id, repo_id, lifecycle, active_task_id, created_at, updated_at)"
+                    " VALUES (?, ?, 'active', ?, ?, ?)",
+                    (task_id, repo_id, task_id, now, now),
+                )
+                conn.execute(
+                    "INSERT INTO tasks(task_id, workstream_id, lifecycle, created_at, updated_at)"
+                    " VALUES (?, ?, 'queued', ?, ?)",
+                    (task_id, task_id, now, now),
+                )
+
     def test_loop_stops_at_max_cycles_while_progress_continues(self):
         from robert_agent.runtime import loop as loop_engine
 

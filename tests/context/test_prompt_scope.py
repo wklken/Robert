@@ -44,6 +44,13 @@ class PromptScopeTests(unittest.TestCase):
                 self.assertIn("Otherwise omit mutation testing without a skip explanation", prompt)
                 self.assertNotIn("When feasible, use scoped mutation testing", prompt)
 
+    def test_delivery_prompt_requests_a_separately_written_receipt_summary(self):
+        prompt = self.render("new-pr")
+        self.assertIn('"receipt_summary":', prompt)
+        self.assertIn("one or two short sentences", prompt)
+        self.assertIn("what changed or what you concluded", prompt)
+        self.assertNotIn('"receipt_summary":', self.render("classification-result"))
+
     def test_task_prompt_exposes_ordered_sections_and_stage_identity(self):
         prompt = self.render("new-pr")
         headings = [line for line in prompt.splitlines() if line.startswith("## ")]
@@ -280,9 +287,9 @@ class PromptScopeTests(unittest.TestCase):
             )
         ).text
         self.assertIn('Configured Robert GitHub account: "robert-bot"', prompt)
-        self.assertIn("case-insensitively", prompt)
+        self.assertIn('"decision_mention": "@wklken"', prompt)
         self.assertIn("planned comment body", prompt)
-        self.assertIn("Robert adds the trusted PR author mention", prompt)
+        self.assertIn("Robert adds the confirmed request owner's mention", prompt)
 
     def test_review_policy_preserves_recovery_evidence_and_feedback_scope(self):
         prompt = self.render("review-comment")
@@ -294,6 +301,14 @@ class PromptScopeTests(unittest.TestCase):
             prompt,
         )
         self.assertIn("Do not modify source or plan a push", prompt)
+
+    def test_questions_and_pr_followups_keep_the_original_request_owner(self):
+        owner = {"login": "Alice", "source_key": "github:x/y#1", "event_fingerprint": "comment:1"}
+        for route_id in ("new-pr", "waiting-for-user", "review-pr", "update-existing-pr"):
+            with self.subTest(route_id=route_id):
+                prompt = self.render(route_id, runtime_context={"decision_owner": owner})
+                self.assertIn('"login": "Alice"', prompt)
+                self.assertIn("confirmed decision owner", prompt)
 
     def test_issue_dispatch_guidance_follows_current_request_not_older_context(self):
         task = {"task_id": "task-1", "attempt_id": "attempt-1", "workstream_id": "github:x/y#1"}

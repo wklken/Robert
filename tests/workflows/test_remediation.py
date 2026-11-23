@@ -70,6 +70,187 @@ class RemediationTests(unittest.TestCase):
     def connect(self):
         return sqlite3.connect(self.db_path)
 
+    def manual_ci(self, *, run_id="501", attempt_no=1, reason="failure_evidence_unavailable"):
+        return {
+            "status": "manual",
+            "reason": reason,
+            "failures": [
+                {
+                    "source_kind": "workflow_run",
+                    "external_id": run_id,
+                    "attempt_no": attempt_no,
+                    "check_name": "unit",
+                    "conclusion": "failure",
+                    "evidence_status": "unavailable",
+                }
+            ],
+        }
+
+    def observe_ci(self, conn, base, summary=None, head="head-1"):
+        from robert_agent.workflows import pr_remediation
+
+        return pr_remediation.upsert_health_episodes(
+            conn,
+            repo=self.repo,
+            workstream=self.workstream,
+            snapshot={**self.snapshot, "mergeable": True, "base_sha": base, "head_sha": head},
+            ci_summary=summary or self.manual_ci(),
+            now="2026-11-20T03:16:48Z",
+        )
+
+    def test_ten_base_changes_group_ci_notice_and_preserve_delivery_and_ack(self):
+        with closing(self.connect()) as conn, conn:
+            self.observe_ci(conn, "base-0")
+            identifier, raw = conn.execute("SELECT notification_id, metadata_json FROM notifications").fetchone()
+            original = json.loads(raw)
+            original.update(
+                delivery={"status": "sent", "delivery_id": "receipt"},
+                operator_response={"action": "ack", "request_key": "ack-1"},
+            )
+            conn.execute("UPDATE notifications SET metadata_json=?", (json.dumps(original),))
+            for index in range(1, 10):
+                self.observe_ci(conn, f"base-{index}")
+            rows = conn.execute("SELECT notification_id, metadata_json FROM notifications").fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][0], identifier)
+            grouped = json.loads(rows[0][1])
+            self.assertEqual(grouped["observed_base_sha"], "base-9")
+            self.assertEqual(grouped["delivery"], original["delivery"])
+            self.assertEqual(grouped["operator_response"], original["operator_response"])
+            self.assertEqual(conn.execute("SELECT count(*) FROM pr_remediation_episodes").fetchone()[0], 10)
+
+    def test_changed_run_rerun_or_reason_notifies_again(self):
+        with closing(self.connect()) as conn, conn:
+            for index, summary in enumerate(
+                [
+                    self.manual_ci(),
+                    self.manual_ci(run_id="502"),
+                    self.manual_ci(run_id="502", attempt_no=2),
+                    self.manual_ci(run_id="502", attempt_no=2, reason="manual_conclusion"),
+                ]
+            ):
+                self.observe_ci(conn, f"base-{index}", summary)
+            self.assertEqual(conn.execute("SELECT count(*) FROM notifications").fetchone()[0], 4)
+
+    def test_recovered_ci_failure_can_notify_again_on_same_snapshot(self):
+        with closing(self.connect()) as conn, conn:
+            self.observe_ci(conn, "base-1")
+            self.observe_ci(conn, "base-1", {"status": "green"})
+            self.assertEqual(conn.execute("SELECT status FROM notifications").fetchone()[0], "resolved")
+            self.observe_ci(conn, "base-1")
+            self.assertEqual(conn.execute("SELECT count(*) FROM notifications").fetchone()[0], 2)
+
+    def test_canceled_workstream_cannot_create_health_episode_or_notice(self):
+        with closing(self.connect()) as conn, conn:
+            conn.execute("UPDATE workstreams SET lifecycle='canceled'")
+            self.observe_ci(conn, "base-1")
+            self.assertEqual(conn.execute("SELECT count(*) FROM notifications").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT count(*) FROM pr_remediation_episodes").fetchone()[0], 0)
+
+    def test_new_head_resolves_old_ci_alert(self):
+        with closing(self.connect()) as conn, conn:
+            self.observe_ci(conn, "base-1")
+            self.observe_ci(conn, "base-1", head="head-2")
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM notifications WHERE status='resolved'").fetchone()[0], 1
+            )
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM notifications WHERE status='recorded'").fetchone()[0], 1
+            )
+
+    def test_cancelled_derived_pr_is_not_selected_for_scan(self):
+        from robert_agent.persistence.queries import workstreams
+
+        with closing(self.connect()) as conn, conn:
+            conn.execute(
+                "INSERT INTO workstreams(workstream_id,repo_id,created_at,updated_at) VALUES ('origin','repo-1','now','now')"
+            )
+            conn.execute(
+                "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,state) VALUES ('pr-source','repo-1','pr-key','pull_request',13,'open')"
+            )
+            conn.execute(
+                "UPDATE workstreams SET origin_workstream_id='origin', primary_source_id='pr-source' WHERE workstream_id='pr-ws'"
+            )
+            self.assertEqual(
+                [r[0] for r in workstreams.find_for_collect_pr_remediation_decisions(conn, "repo-1")], ["pr-ws"]
+            )
+            conn.execute("UPDATE workstreams SET lifecycle='canceled' WHERE workstream_id='pr-ws'")
+            self.assertEqual(workstreams.find_for_collect_pr_remediation_decisions(conn, "repo-1"), [])
+
+    def test_same_snapshot_new_ci_run_notifies_again(self):
+        with closing(self.connect()) as conn, conn:
+            self.observe_ci(conn, "base-1")
+            self.observe_ci(conn, "base-1", self.manual_ci(run_id="502"))
+            self.assertEqual(conn.execute("SELECT count(*) FROM notifications").fetchone()[0], 2)
+
+    def test_manual_conclusion_groups_by_run_without_failure_details(self):
+        with closing(self.connect()) as conn, conn:
+            for index, run_id in enumerate(["501", "501", "502"]):
+                summary = self.manual_ci(run_id=run_id, reason="manual_conclusion")
+                summary["observations"] = summary.pop("failures")
+                summary["observations"][0]["conclusion"] = "action_required"
+                summary["manual_conclusions"] = ["action_required"]
+                self.observe_ci(conn, f"base-{index}", summary)
+            self.assertEqual(conn.execute("SELECT count(*) FROM notifications").fetchone()[0], 2)
+
+    def test_base_changes_send_ci_notice_only_once_after_restart(self):
+        from robert_agent.delivery.application import notifications
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        runner = Mock(return_value=SimpleNamespace(returncode=0))
+        with closing(self.connect()) as conn, conn:
+            self.observe_ci(conn, "base-0")
+        self.assertEqual(notifications.deliver_pending(self.db_path, command=["notify"], runner=runner)["sent"], 1)
+        for index in range(1, 10):
+            with closing(self.connect()) as conn, conn:
+                self.observe_ci(conn, f"base-{index}")
+            self.assertEqual(notifications.deliver_pending(self.db_path, command=["notify"], runner=runner)["sent"], 0)
+        self.assertEqual(runner.call_count, 1)
+
+    def test_legacy_notice_is_reused_without_resetting_failed_delivery(self):
+        with closing(self.connect()) as conn, conn:
+            self.observe_ci(conn, "base-1")
+            identifier, raw = conn.execute("SELECT notification_id,metadata_json FROM notifications").fetchone()
+            metadata = json.loads(raw)
+            metadata.pop("notification_key")
+            metadata["delivery"] = {"status": "failed", "attempt_count": 2, "next_retry_at": "2026-11-20T03:17:00Z"}
+            conn.execute("UPDATE notifications SET metadata_json=?", (json.dumps(metadata),))
+            self.observe_ci(conn, "base-2")
+            rows = conn.execute("SELECT notification_id,metadata_json FROM notifications").fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][0], identifier)
+            self.assertEqual(json.loads(rows[0][1])["delivery"], metadata["delivery"])
+
+    def test_existing_duplicate_ci_notices_converge_before_delivery(self):
+        with closing(self.connect()) as conn, conn:
+            self.observe_ci(conn, "base-1")
+            raw = conn.execute("SELECT metadata_json FROM notifications").fetchone()[0]
+            conn.execute(
+                "INSERT INTO notifications(notification_id,notification_type,channel,status,created_at,metadata_json) VALUES ('duplicate','pr_remediation_needs_evidence','local','recorded','2026-11-20T03:17:00Z',?)",
+                (raw,),
+            )
+            self.observe_ci(conn, "base-2")
+            self.assertEqual(
+                conn.execute("SELECT count(*) FROM notifications WHERE status!='resolved'").fetchone()[0], 1
+            )
+
+    def test_cancel_blocks_existing_open_episode_decisions(self):
+        from robert_agent.workflows import pr_remediation
+
+        with closing(self.connect()) as conn, conn:
+            pr_remediation.upsert_health_episodes(
+                conn,
+                repo=self.repo,
+                workstream=self.workstream,
+                snapshot=self.snapshot,
+                ci_summary={"status": "green"},
+                now="2026-11-20T03:12:22Z",
+            )
+            conn.execute("UPDATE workstreams SET lifecycle='canceled'")
+            self.assertEqual(pr_remediation.next_system_decisions(conn, repo=self.repo, now="2026-11-20T03:16:48Z"), [])
+            self.assertEqual(conn.execute("SELECT count(*) FROM notifications").fetchone()[0], 0)
+
     def episodes(self):
         with closing(self.connect()) as conn:
             return conn.execute(
@@ -530,6 +711,79 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(usage_limited["reason"], "max_total_tokens")
         self.assertEqual(usage_limited["total_tokens"], 110)
         self.assertEqual(usage_limited["total_cost_usd"], 2.5)
+
+    def test_ci_budget_starts_with_available_evidence_and_survives_evidence_changes(self):
+        from robert_agent.workflows import pr_remediation as remediation
+
+        self.repo["pr_automation"]["dispatch_mode"] = "direct"
+        snapshot = {**self.snapshot, "mergeable": True}
+        available = {"status": "failing", "failure_signature": "failure-1", "failures": []}
+        with closing(self.connect()) as conn, conn:
+
+            def observe(summary, now):
+                remediation.upsert_health_episodes(
+                    conn,
+                    repo=self.repo,
+                    workstream=self.workstream,
+                    snapshot=snapshot,
+                    ci_summary=summary,
+                    now=now,
+                )
+
+            observe(self.manual_ci(), "2026-07-26T00:00:00Z")
+            observe(available, "2026-07-26T03:00:00Z")
+            first = remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T03:00:00Z")
+            self.assertEqual(len(first), 1)
+            self.assertEqual(first[0]["first_seen_at"], "2026-07-26T00:00:00Z")
+            self.assertEqual(first[0]["budget"]["elapsed_minutes"], 0)
+            observe(available, "2026-07-26T03:10:00Z")
+            observe(self.manual_ci(), "2026-07-26T03:30:00Z")
+            observe(available, "2026-07-26T04:00:00Z")
+            repeated = remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T04:00:00Z")
+            self.assertEqual(repeated[0]["episode_id"], first[0]["episode_id"])
+            self.assertEqual(repeated[0]["budget"]["elapsed_minutes"], 60)
+            self.assertEqual(repeated[0]["attempt_count"], 0)
+            self.assertEqual(remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T05:01:00Z"), [])
+            final = remediation.load_episode(conn, first[0]["episode_id"])
+            self.assertEqual(final["metadata"]["last_transition_reason"], "max_wall_minutes")
+            snapshot = {**snapshot, "head_sha": "head-2"}
+            observe(available, "2026-07-26T06:00:00Z")
+            fresh = remediation.next_system_decisions(conn, repo=self.repo, now="2026-07-26T06:00:00Z")
+            self.assertEqual(len(fresh), 1)
+            self.assertNotEqual(fresh[0]["episode_id"], first[0]["episode_id"])
+            self.assertEqual(fresh[0]["budget"]["elapsed_minutes"], 0)
+
+    def test_legacy_ci_budget_preserves_existing_eligibility_and_attempts(self):
+        from robert_agent.workflows import pr_remediation as remediation
+
+        with closing(self.connect()) as conn, conn:
+            self.observe_ci(conn, "base-1", {"status": "failing", "failure_signature": "failure-1"})
+            episode_id = conn.execute("SELECT episode_id FROM pr_remediation_episodes").fetchone()[0]
+            for attempts, old_status in ((0, "failing"), (1, "manual")):
+                with self.subTest(attempts=attempts, old_status=old_status):
+                    conn.execute(
+                        "UPDATE pr_remediation_episodes SET attempt_count=?, metadata_json=?",
+                        (attempts, json.dumps({"ci_status": old_status})),
+                    )
+                    remediation.upsert_health_episodes(
+                        conn,
+                        repo=self.repo,
+                        workstream=self.workstream,
+                        snapshot={**self.snapshot, "mergeable": True},
+                        ci_summary={"status": "failing", "failure_signature": "failure-1"},
+                        now="2026-11-20T06:16:48Z",
+                    )
+                    episode = remediation.load_episode(conn, episode_id)
+                    self.assertEqual(episode["attempt_count"], attempts)
+                    self.assertEqual(
+                        remediation.budget_status(
+                            conn,
+                            episode=episode,
+                            policy=self.repo["pr_automation"]["ci"],
+                            now="2026-11-20T06:16:48Z",
+                        )["reason"],
+                        "max_wall_minutes",
+                    )
 
     def test_budget_status_stops_when_configured_usage_cannot_be_measured(self):
         from robert_agent.workflows import pr_remediation as remediation

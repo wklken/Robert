@@ -6,6 +6,68 @@ from tests.support.acceptance import AcceptanceFixture
 
 
 class WorkItemControlHTTPTests(SummaryFixture, AcceptanceFixture):
+    def test_cancel_completed_item_api_preserves_access_and_version_checks(self):
+        from robert_agent.foundation.values import utc_now
+        from robert_agent.interfaces.web import server as web
+        from robert_agent.readmodels import board
+        from robert_agent.work.application import commands as work_items
+
+        db_path = self.root / "dd.sqlite3"
+        self._init_summary_db(db_path)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            item = work_items.ensure_github_work_item(
+                conn,
+                repo_id="repo-1",
+                source_id="source-1",
+                workstream_id="ws-1",
+                actor_identity="owner",
+                route_confidence="high",
+                now=utc_now(),
+            )
+            conn.execute("UPDATE work_items SET completed_at=updated_at")
+            conn.execute("UPDATE tasks SET lifecycle='failed' WHERE task_id='task-2'")
+        detail = board.get_work_item_detail(db_path, item["work_item_id"])
+        context = web.ControlContext(
+            db_path=str(db_path),
+            operator_identity="owner",
+            allowed_repo_ids=frozenset({"repo-1"}),
+            allowed_workers=frozenset({"default"}),
+            allowed_origins=frozenset({"http://127.0.0.1:8765"}),
+            csrf_token="csrf-test",
+            writes_enabled=True,
+            write_error=None,
+        )
+        headers = {
+            "host": "127.0.0.1:8765",
+            "origin": "http://127.0.0.1:8765",
+            "content-type": "application/json",
+            "x-robert-csrf-token": "csrf-test",
+            "x-idempotency-key": "cancel-completed",
+        }
+        route = f"/api/work-items/{item['work_item_id']}/commands"
+        payload = {"command": "cancel", "expected_version": detail["version"]}
+        denied = dict(headers)
+        denied.pop("x-robert-csrf-token")
+        status, _, _ = web.handle_dashboard_post(
+            route, json.dumps(payload).encode(), db_path, control_context=context, request_headers=denied
+        )
+        self.assertEqual(status, 403)
+        stale = {**payload, "expected_version": detail["version"] + 1}
+        status, _, _ = web.handle_dashboard_post(
+            route, json.dumps(stale).encode(), db_path, control_context=context, request_headers=headers
+        )
+        self.assertEqual(status, 409)
+        self.assertIsNone(board.get_work_item_detail(db_path, item["work_item_id"])["canceled_at"])
+        status, _, body = web.handle_dashboard_post(
+            route, json.dumps(payload).encode(), db_path, control_context=context, request_headers=headers
+        )
+        self.assertEqual(status, 200, body)
+        canceled = json.loads(body)
+        self.assertEqual(canceled["column"], "history")
+        self.assertEqual(canceled["valid_commands"], [])
+        self.assertIsNotNone(canceled["canceled_at"])
+
     def test_web_retrigger_api_requires_control_auth_and_returns_child_task(self):
         from robert_agent.interfaces.web import server as web
 

@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.workflows.review import workspace as review_workspace
@@ -7,6 +8,59 @@ from tests.support.review_workspace import ReviewWorkspaceFixture
 
 
 class ReviewWorkspaceTests(ReviewWorkspaceFixture):
+    def test_candidate_snapshot_through_root_alias_can_freeze_and_resume(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        arguments = (
+            alias / "repo",
+            alias / "worktrees",
+            alias / "artifacts",
+            "candidate-alias",
+            "example/backend",
+            "main",
+            self.base,
+            self.head,
+            {"event_fingerprint": "candidate-alias"},
+        )
+        manifest = review_workspace.prepare_candidate_snapshot(*arguments)
+        for field in ("worktree_path", "artifact_root", "context_dir"):
+            self.assertEqual(Path(manifest[field]), Path(manifest[field]).resolve())
+        frozen = self.freeze(manifest)
+        self.assertTrue(review_workspace.verify_snapshot(frozen))
+        self.assertEqual(review_workspace.prepare_candidate_snapshot(*arguments), frozen)
+
+    def test_existing_candidate_snapshot_with_root_alias_can_freeze(self):
+        manifest = self.prepare("existing-alias")
+        alias = self.root / "alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        manifest["worktree_path"] = str(alias / Path(manifest["worktree_path"]).relative_to(self.root))
+        frozen = self.freeze(manifest)
+        self.assertEqual(frozen["worktree_path"], manifest["worktree_path"])
+        self.assertTrue(review_workspace.verify_snapshot(frozen))
+
+    def test_nested_runtime_scan_does_not_follow_a_link_replacing_deleted_source(self):
+        external = self.root / "external-runtime"
+        external.mkdir()
+        (external / ".python-version").write_text("3.11.6\n")
+        (self.repo / "component").symlink_to(external, target_is_directory=True)
+        runtime = review_workspace._runtime_info(self.repo, ["component/deleted.py"])
+        self.assertNotIn("component/.python-version", runtime["python"]["declarations"])
+
+    def test_runtime_preserves_nested_declarations_for_changed_components(self):
+        dashboard = self.upstream / "src" / "dashboard"
+        dashboard.mkdir(parents=True)
+        (dashboard / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.11,<3.12"\n')
+        (dashboard / ".python-version").write_text("3.11.6\n")
+        (dashboard / "app.py").write_text("value = 1\n")
+        self.git(self.upstream, "add", ".")
+        self.commit("value = 3\n")
+        with patch.object(review_workspace.shutil, "which", return_value=None):
+            manifest = self.prepare("nested-runtime")
+        runtime = json.loads(Path(manifest["context_dir"], "runtime-info.json").read_text())["python"]
+        self.assertEqual(runtime["declarations"]["src/dashboard/.python-version"], "3.11.6")
+        self.assertEqual(runtime["declarations"]["src/dashboard/pyproject.toml"], ['">=3.11,<3.12"'])
+        self.assertEqual(runtime["status"], "UNRESOLVED")
+
     def test_two_rounds_use_detached_independent_sources_and_frozen_context(self):
         first = self.freeze(self.prepare("round-1"))
         self.commit("value = 3\n")
@@ -115,3 +169,28 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
         Path(manifest["worktree_path"], "untracked").write_text("unexpected")
         with self.assertRaises(ValueError):
             review_workspace.verify_snapshot(manifest)
+
+    def test_prompt_written_before_manifest_can_be_recovered(self):
+        from unittest.mock import patch
+
+        manifest = self.prepare("interrupted-freeze")
+        with patch.object(review_workspace.review_files, "atomic_json", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                self.freeze(manifest)
+        prompt = Path(manifest["artifact_root"]) / "reviewer-prompt.md"
+        before = prompt.read_bytes()
+        frozen = review_workspace.freeze_context(manifest)
+        self.assertTrue(frozen["frozen"])
+        self.assertEqual(prompt.read_bytes(), before)
+
+    def test_unregistered_different_prompt_is_not_adopted(self):
+        from unittest.mock import patch
+
+        manifest = self.prepare("changed-prompt")
+        with patch.object(review_workspace.review_files, "atomic_json", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                self.freeze(manifest)
+        prompt = Path(manifest["artifact_root"]) / "reviewer-prompt.md"
+        prompt.write_text("changed")
+        with self.assertRaises(ValueError):
+            review_workspace.freeze_context(manifest)

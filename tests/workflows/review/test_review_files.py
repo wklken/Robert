@@ -134,6 +134,53 @@ class ReviewFilesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             review_files.read_result(outside, self.manifest)
 
+    def test_trusted_root_alias_accepts_alias_and_real_paths(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.path.parent, target_is_directory=True)
+        self.assertEqual(review_files.safe_path(alias / "result.json", alias), self.path)
+        self.assertEqual(review_files.safe_path(self.path, alias), self.path)
+
+    def test_trusted_root_ancestor_alias_accepts_regular_descendants(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.root / "runs", target_is_directory=True)
+        root = alias / "codex" / "attempt-1"
+        self.assertEqual(review_files.safe_path(root / "result.json", root), self.path)
+
+    def test_trusted_root_alias_still_rejects_internal_links_and_outside_paths(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.path.parent, target_is_directory=True)
+        (self.path.parent / "linked.json").symlink_to(self.path)
+        (self.path.parent / "linked-dir").symlink_to(self.path.parent, target_is_directory=True)
+        outside = self.root / "outside.json"
+        outside.write_text("{}")
+        (self.path.parent / "external.json").symlink_to(outside)
+        for path in (
+            alias / "linked.json",
+            alias / "linked-dir" / "result.json",
+            alias / "external.json",
+            outside,
+            alias / ".." / "outside.json",
+        ):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                review_files.safe_path(path, alias)
+
+    def test_review_rejects_a_link_in_place_of_the_runs_directory(self):
+        runs = self.root / "runs"
+        relocated = runs.rename(self.root / "relocated-runs")
+        runs.symlink_to(relocated, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "contains a symlink"):
+            review_files.read_result(self.path, self.manifest)
+
+    def test_evaluation_rejects_a_link_in_place_of_the_synthesis_directory(self):
+        record = self.record()
+        synthesis = self.root / "synthesis"
+        evaluation = synthesis / "evaluation.json"
+        review_files.atomic_json(evaluation, self.evaluation())
+        relocated = synthesis.rename(self.root / "relocated-synthesis")
+        synthesis.symlink_to(relocated, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "contains a symlink"):
+            review_files.read_evaluation(evaluation, self.manifest, [record])
+
     def test_synthesis_hashes_and_every_finding_source_are_checked(self):
         record = self.record()
         inputs = review_files.write_synthesis_inputs(self.manifest, [record])
@@ -170,9 +217,11 @@ class ReviewFilesTests(unittest.TestCase):
         ):
             self.assertIn(heading, report)
         self.assertIn(
-            "| Issue | codex (codex) | claude (claude) | third (third) | Verdict |",
+            "| Issue | codex | claude | third | Verdict |",
             report,
         )
+        self.assertIn("| Missing guard | 发现 | 发现 | 发现 | high |", report)
+        self.assertIn("codex (codex) + claude (claude) + third (third)", report)
         self.assertIn("[from Robert]", report)
         prompt = self.reviewer_prompt()
         self.assertIn("ROBERT_REVIEW_OUTPUT_DIR", prompt)
@@ -195,9 +244,7 @@ class ReviewFilesTests(unittest.TestCase):
             self.assertIn("<redacted>", prompt)
             self.assertIn("local absolute paths", prompt)
 
-    def test_merged_report_preserves_each_reviewers_coverage_even_without_findings(
-        self,
-    ):
+    def test_merged_report_omits_reviewer_coverage_even_without_findings(self):
         self.result["findings"] = []
         self.result["merge_recommendation"] = "ready to merge"
         self.result["coverage"] = {
@@ -221,18 +268,17 @@ class ReviewFilesTests(unittest.TestCase):
                 "merge_reason": "已检查范围未发现缺陷",
             },
         )
-        coverage = report.split("### Review Coverage and Limitations\n", 1)[1].split("### Agent Agreement Summary", 1)[
-            0
-        ]
-        first_section, second_section = coverage.split("#### claude (claude)", 1)
-        self.assertIn("#### codex (codex)", first_section)
-        self.assertIn("已审查：`src/main.py`", first_section)
-        self.assertIn("未审查：`src/retry.py`", first_section)
-        self.assertIn("默认重试次数需产品确认", first_section)
-        self.assertIn("已审查：`src/retry.py`", second_section)
-        self.assertIn("未审查：`src/main.py`", second_section)
-        self.assertIn("未验证真实 GitHub 发布", second_section)
-        self.assertIn("不代表验证全部行为", coverage)
+        self.assertNotIn("Review Coverage and Limitations", report)
+        for record in (first, second):
+            result = json.loads(Path(record["result_path"]).read_text(encoding="utf-8"))
+            self.assertNotIn(result["coverage"]["notes"], report)
+            individual = Path(record["report_path"]).read_text(encoding="utf-8")
+            self.assertIn("## Coverage", individual)
+            self.assertIn(result["coverage"]["notes"], individual)
+        self.assertNotIn("src/main.py", report)
+        self.assertNotIn("src/retry.py", report)
+        self.assertIn("| Issue | codex | claude | Verdict |", report)
+        self.assertIn("**合并建议**：ready to merge。已检查范围未发现缺陷", report)
 
     def test_empty_coverage_does_not_imply_complete_review(self):
         self.result["coverage"] = {
@@ -240,10 +286,47 @@ class ReviewFilesTests(unittest.TestCase):
             "unreviewed_paths": [],
             "notes": "未检查源码",
         }
-        report = review_files.render_merged(self.manifest, [self.record()], self.evaluation())
-        self.assertIn("已审查：未列出", report)
-        self.assertIn("未审查：未列出（不表示完整覆盖）", report)
-        self.assertIn("未检查源码", report)
+        evaluation = self.evaluation() | {"merge_reason": "源码尚未检查，需验证崩溃路径后再合并。"}
+        report = review_files.render_merged(self.manifest, [self.record()], evaluation)
+        self.assertNotIn("Review Coverage and Limitations", report)
+        self.assertNotIn("已审查：", report)
+        self.assertNotIn("未审查：", report)
+        self.assertIn(evaluation["merge_reason"], report)
+
+    def test_agreement_table_distinguishes_unreported_and_refuted_findings(self):
+        first = self.record("codex")
+        dismissed = self.result["findings"][0] | {"reason": "guard exists"}
+        self.result["findings"] = []
+        self.result["dismissed_findings"] = [dismissed]
+        second = self.record("claude")
+        self.result["dismissed_findings"] = []
+        third = self.record("third")
+        evaluation = {
+            "items": [
+                dismissed
+                | {
+                    "disposition": "dismissed",
+                    "sources": [
+                        {"worker_id": "codex", "finding_id": "F1"},
+                        {"worker_id": "claude", "finding_id": "F1"},
+                    ],
+                }
+            ],
+            "merge_recommendation": "ready to merge",
+            "merge_reason": "现有检查已排除崩溃路径。",
+        }
+        report = review_files.render_merged(self.manifest, [first, second, third], evaluation)
+        self.assertIn("| Missing guard | 发现 | 反驳 | 未报告 | 误报 |", report)
+
+    def test_synthesis_prompt_requires_concise_public_explanation(self):
+        prompt = self.synthesis_prompt()
+        self.assertIn("at most three short Chinese sentences", prompt)
+        self.assertIn("one short bullet per unresolved decision", prompt)
+        self.assertIn("Do not repeat", prompt)
+        self.assertIn("reviewed-file lists", prompt)
+        self.assertIn("command logs", prompt)
+        self.assertIn("report's pinned revision", prompt)
+        self.assertIn("material verification gaps", prompt)
 
     def test_native_review_keeps_human_decisions_and_evidence_limits_visible(self):
         prepare = render_prompt(native_prompts.review_prepare_input(self.manifest)).text
@@ -279,7 +362,7 @@ class ReviewFilesTests(unittest.TestCase):
             self.assertIn("Security review is required and proportional", prompt)
             self.assertIn("A blocking finding needs", prompt)
             self.assertIn("stop repeating the review", prompt)
-            self.assertIn("case-insensitively", prompt)
+            self.assertIn('"decision_mention": "@wklken"', prompt)
             self.assertIn("@wklken", prompt)
             self.assertIn('Configured Robert GitHub account: "robert-bot"', prompt)
         self.assertNotIn("Review judgment policy:", render_prompt(native_prompts.review_prepare_input(manifest)).text)
@@ -294,7 +377,22 @@ class ReviewFilesTests(unittest.TestCase):
     def test_missing_native_account_does_not_guess_robot_identity(self):
         prompt = self.reviewer_prompt()
         self.assertIn('Configured Robert GitHub account: ""', prompt)
-        self.assertIn("If identity cannot be established, ask @wklken", prompt)
+        self.assertIn("If no owner is confirmed, ask @wklken", prompt)
+
+    def test_candidate_review_and_synthesis_address_the_confirmed_request_owner(self):
+        manifest = self.manifest | {
+            "pr_number": None,
+            "github_account": "robert-bot",
+            "decision_owner": {
+                "login": "Carlmac",
+                "source_key": "github:x/y#1",
+                "event_fingerprint": "assigned:1",
+            },
+        }
+        for prompt in (self.reviewer_prompt(manifest), self.synthesis_prompt(manifest)):
+            self.assertIn('"login": "Carlmac"', prompt)
+            self.assertIn("confirmed decision owner", prompt)
+            self.assertNotIn("Use `pr-info.json` `user.login` for the PR author identity", prompt)
 
     def test_decision_request_without_findings_can_reach_public_merge_reason(self):
         evaluation = self.evaluation() | {
@@ -325,3 +423,47 @@ class ReviewFilesTests(unittest.TestCase):
         review_files.atomic_json(self.path, invalid_result)
         with self.assertRaises(ValueError):
             review_files.read_result(self.path, self.manifest)
+
+    def test_source_locations_cannot_inject_control_lines(self):
+        for path in ("src/a\nb.py", "src/a\x00b.py", "src/a\rb.py"):
+            with self.subTest(path=path):
+                result = copy.deepcopy(self.result)
+                result["findings"][0]["location"]["path"] = path
+                review_files.atomic_json(self.path, result)
+                with self.assertRaises(ValueError):
+                    review_files.read_result(self.path, self.manifest)
+
+    def test_existing_individual_reports_remain_byte_compatible_for_resume(self):
+        # Digests captured from the pre-correction renderer; resumes verify bytes.
+        for notes, digest in (
+            ("read callers", "6b23de4b668f900f24d555a30edb47c3dccc21388fd695e1dad0aadc4642f465"),
+            ("read `callers`", "4261dda92fc6f6739dc41f359d4bcb27c8eeabe1de6ec0e4786ddb864348c875"),
+        ):
+            with self.subTest(notes=notes):
+                self.result["coverage"]["notes"] = notes
+                report = review_files.render_individual(self.result, "codex", "default")
+                self.assertEqual(hashlib.sha256(report.encode()).hexdigest(), digest)
+
+    def test_backtick_file_names_remain_valid_and_render_as_one_code_span(self):
+        for path, displayed in (
+            ("src/a`b.py", "`` src/a`b.py:10 ``"),
+            ("`leading.py", "`` `leading.py:10 ``"),
+            ("src/a``b.py", "``` src/a``b.py:10 ```"),
+        ):
+            with self.subTest(path=path):
+                source = Path(self.manifest["worktree_path"]) / path
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("value = 1")
+                self.result["findings"][0]["location"]["path"] = path
+                self.result["coverage"]["reviewed_paths"] = [path]
+                review_files.atomic_json(self.path, self.result)
+                accepted = review_files.read_result(self.path, self.manifest)
+                self.assertEqual(accepted["findings"][0]["location"]["path"], path)
+                self.assertIn(displayed, review_files.render_individual(accepted, "codex", "default"))
+                record = self.record()
+                evaluation = self.evaluation()
+                merged = review_files.render_merged(self.manifest, [record], evaluation)
+                self.assertIn(displayed, merged)
+                self.assertNotIn("已审查：", merged)
+                evaluation["items"][0]["disposition"] = "dismissed"
+                self.assertIn(displayed, review_files.render_merged(self.manifest, [record], evaluation))

@@ -4,6 +4,7 @@ Candidates and decisions use named supervision checkpoints. Every mutation uses
 the caller's writer transaction; model output never acts as a user credential.
 """
 
+from robert_agent.foundation import question_choices
 from robert_agent.foundation.contracts.supervision import (
     AUTOMATIC_DECISION_ACTIONS,
     NONEXECUTING_DECISION_ACTIONS,
@@ -211,6 +212,7 @@ def packet(snapshot_value, previous):
     evidence.append({"id": "user_reply", "data": snapshot_value.get("reply")})
     value = {
         "bundle_id": "decision-" + uuid4().hex,
+        question_choices.REQUIRED_FLAG: True,
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "root_id": snapshot_value["root_id"],
         "input_generation": digest(snapshot_value),
@@ -294,6 +296,8 @@ def validate(raw, request):
         "recheck_seconds",
         "message",
     }
+    if isinstance(result, dict) and result.get("action") == DecisionAction.ASK_USER and "choices" in result:
+        fields.add("choices")
     if not isinstance(result, dict) or set(result) != fields:
         raise ValueError("invalid decision fields")
     if result["bundle_id"] != request["bundle_id"] or result["bundle_sha256"] != request["bundle_sha256"]:
@@ -326,7 +330,15 @@ def validate(raw, request):
         raise ValueError("decision needs a reason and expected progress")
     if action in {DecisionAction.ASK_USER.value, DecisionAction.NOTIFY_USER.value} and not result["message"].strip():
         raise ValueError("user interaction needs a message")
-    return _safe(result)
+    safe = _safe(result)
+    if action == DecisionAction.ASK_USER:
+        required = request.get(question_choices.REQUIRED_FLAG, False)
+        error = question_choices.validation_error(safe.get("choices", []), required=required)
+        if error:
+            raise ValueError(error)
+        if required and safe["choices"] != result["choices"]:
+            raise ValueError("Question choices must already be safe to share.")
+    return safe
 
 
 def approve(conn, config, request, output, now):
@@ -366,6 +378,7 @@ def approve(conn, config, request, output, now):
         if unchanged_notice:
             state["notification_id"] = previous["notification_id"]
             write(conn, root_id, state, now)
+            store.update_checkpoint(conn, "decision_record", root_id, request["bundle_id"], now=now, metadata=state)
             return True
         notifications.insert_notification(
             conn,
@@ -377,6 +390,7 @@ def approve(conn, config, request, output, now):
                 {
                     "reason_code": action,
                     "required_action": output["message"],
+                    **({"choices": output["choices"]} if output.get("choices") else {}),
                     "retryable": False,
                     "workstream_id": root_id,
                     "repo_id": current["context"]["repository"]["repo_id"],
@@ -400,6 +414,7 @@ def approve(conn, config, request, output, now):
                 root_id=root_id,
                 decision_id=request["bundle_id"],
                 body=output["message"],
+                choices=output.get("choices", []),
                 now=now,
             )
     write(conn, root_id, state, now)
@@ -463,6 +478,7 @@ def reply(conn, config, root_id, decision_id, body, now):
         {**state, "status": DecisionStatus.REPLY_RECEIVED.value, "reply": _safe(body), "next_check_at": now},
         now,
     )
+    notifications.resolve_supervisor_question(conn, decision_id)
 
 
 def has_ready_worker_retry(conn, config, repo_ids, now):

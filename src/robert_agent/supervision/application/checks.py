@@ -1,14 +1,17 @@
 """application supervision checks responsibilities."""
 
 from robert_agent.persistence import errors as db_errors
+from robert_agent.foundation.timestamps import timestamp_after
 from robert_agent.persistence import transactions as db_transactions
 
 from robert_agent.persistence.stores import notifications as db_write_notifications
 from contextlib import closing
 import hashlib
 import json
+import re
 import subprocess
 import sys
+import time
 from robert_agent.security import redaction
 from robert_agent.adapters.notifications import messaging as message_transport
 from robert_agent.supervision import actions as supervision_actions
@@ -69,11 +72,14 @@ def notify_changes(conn, changes, now):
 def check(config, *, record=False, now=None):
     now = now or supervision_health.utc_now()
     settings = {**supervision_config.DEFAULTS, **config.get("supervision", {})}
+    started = time.monotonic()
+    phase = "schema"
     try:
         with closing(boundary_adapters_sqlite_supervision.connect(config["db_path"], readonly=True)) as conn:
             schema_ready(conn)
             state = supervision_store.get_checkpoint(conn, "service", "supervisor", "cursor") if record else None
         cursor = (state or {}).get("metadata", {}).get("cursor", "")
+        phase = "collect"
         sampled = supervision_observe.collect(
             config["db_path"], now=now, limit=settings["batch_size"], config=config, cursor=cursor
         )
@@ -81,13 +87,15 @@ def check(config, *, record=False, now=None):
         changes = []
         recovery = []
         if record:
-            with closing(boundary_adapters_sqlite_supervision.connect(config["db_path"])) as conn, conn:
+            phase = "record"
+            with closing(boundary_adapters_sqlite_supervision.connect(config["db_path"], timeout=1.0)) as conn, conn:
                 db_transactions.begin(conn, immediate=True)
                 observations = [item for item in observations if supervision_observe.is_current(conn, item)]
                 changes = supervision_store.apply_observations(conn, observations, now)
                 supervision_store.update_checkpoint(
                     conn, "service", "supervisor", "cursor", now=now, metadata={"cursor": sampled.get("cursor", "")}
                 )
+                changes.extend(supervision_store.dismiss_terminal_tasks(conn, sampled.get("task_ids", ()), now))
                 supervision_actions.verify(conn, observations=observations, now=now)
                 recovery = supervision_actions.plan(conn, observations=observations, now=now, config=config)
                 queued_incidents = {item.get("incident_id") for item in recovery}
@@ -111,12 +119,34 @@ def check(config, *, record=False, now=None):
             "coverage_complete": sampled.get("coverage_complete", False),
         }
     except (OSError, db_errors.Error, ValueError) as exc:
+        if isinstance(exc, supervision_observe.ObservationUnavailable):
+            reason = exc.reason_code
+        elif str(exc) == "supervision_schema_missing":
+            reason = "database_schema_incompatible"
+        elif isinstance(exc, db_errors.Error):
+            reason = supervision_observe.database_error_reason(exc)
+        else:
+            reason = "database_unavailable"
+        explanation, action = observation_failure_message(reason)
+        if reason == "database_busy" and phase == "record":
+            explanation = "监督服务已读取任务状态，但本轮检查记录写入因数据库锁竞争受阻。"
+        cause = exc.__cause__ or exc
+        errorname = getattr(cause, "sqlite_errorname", None)
         result = {
             "ok": False,
             "status": "unobservable",
             "checked_at": now,
             "error_class": type(exc).__name__,
-            "safe_error": "Observation unavailable; inspect the database and supervision schema.",
+            "reason_code": reason,
+            "safe_error": explanation,
+            "required_action": action,
+            "diagnostics": {
+                "phase": phase,
+                "sqlite_errorname": errorname
+                if isinstance(errorname, str) and re.fullmatch(r"SQLITE_[A-Z_0-9]+", errorname)
+                else None,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+            },
         }
     if record:
         try:
@@ -125,6 +155,34 @@ def check(config, *, record=False, now=None):
             result["health_persisted"] = False
             print("Robert supervision: observation health cannot be persisted", file=sys.stderr)
     return result
+
+
+def observation_failure_message(reason):
+    messages = {
+        "database_observation_deadline": (
+            "监督服务读取数据库超时，查询超过观察时间预算，当前无法确认任务进展。",
+            "检查监督查询的索引、数据库大小和磁盘负载；查看 Supervisor 健康状态。",
+        ),
+        "database_busy": (
+            "本轮监督检查因数据库锁竞争受阻，尚不能确认任务进展。",
+            "检查数据库锁和长事务，查看 Supervisor 健康状态。",
+        ),
+        "database_corrupt": (
+            "数据库格式或完整性检查失败，监督服务无法确认任务进展。",
+            "备份数据库并检查完整性，查看 Supervisor 健康状态。",
+        ),
+        "database_schema_incompatible": (
+            "数据库结构与监督服务不兼容，当前无法确认任务进展。",
+            "检查数据库升级状态和运行版本，查看 Supervisor 健康状态。",
+        ),
+    }
+    return messages.get(
+        reason,
+        (
+            "监督服务无法访问数据库，当前无法确认任务进展。",
+            "检查数据库路径、访问权限和 Supervisor 健康状态。",
+        ),
+    )
 
 
 def status(config):
@@ -174,7 +232,13 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
                         state["notification_id"],
                         "sent" if state.get("status") == "sent" else "resolved",
                         state["created_at"],
-                        json.dumps({"delivery": state, "reason_code": "observation_unavailable"}),
+                        json.dumps(
+                            {
+                                "delivery": state,
+                                "reason_code": state.get("reason_code", "observation_unavailable"),
+                                "diagnostics": state.get("diagnostics", {}),
+                            }
+                        ),
                     )
             except (OSError, db_errors.Error):
                 return
@@ -186,17 +250,27 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
     # A stale single failure is not an outage: require a later failed observation.
     if health.get("consecutive_failures", 0) < 2 or not checked or not eligible or checked < eligible:
         return
+    settings = (config or {}).get("messaging", {})
+    if (settings.get("enabled") or "send_after" in settings) and not timestamp_after(
+        health.get("first_failed_at"), settings.get("send_after")
+    ):
+        return
     identifier = health.get("delivery_id")
     if not identifier:
         return
+    reason = health.get("reason_code", "database_unavailable")
+    explanation, action = observation_failure_message(reason)
+    explanation = health.get("safe_error") or explanation
     fields = {
-        "reason_code": "observation_unavailable",
-        "required_action": "Inspect the Robert database and supervisor health.",
+        "reason_code": reason,
+        "safe_error": explanation,
+        "required_action": action,
         "retryable": False,
     }
-    digest = hashlib.sha256(json.dumps(["supervisor_unobservable", fields], sort_keys=True).encode()).hexdigest()[:16]
+    # The outage, not a changing error classification, owns the retry budget.
+    digest = hashlib.sha256(identifier.encode()).hexdigest()[:16]
     delivery_id = identifier + ":" + digest
-    if state.get("delivery_id") != delivery_id:
+    if state.get("notification_id") != identifier:
         state = {
             "notification_id": identifier,
             "delivery_id": delivery_id,
@@ -205,13 +279,25 @@ def deliver_health(db_path, path, *, runner=subprocess.run, config=None):
         }
     if state.get("status") == "sent" or state["attempt_count"] >= 3:
         return
-    state.update(status="sending", attempt_count=state["attempt_count"] + 1)
+    state.update(
+        status="sending",
+        attempt_count=state["attempt_count"] + 1,
+        reason_code=reason,
+        diagnostics=health.get("diagnostics", {}),
+    )
     # Without a durable claim we must not repeatedly send on every failed tick.
     try:
         supervision_health.atomic_json(state_path, state)
     except OSError:
         return
-    payload = {"type": "supervisor_unobservable", "delivery_id": delivery_id, **fields}
+    payload = {
+        "type": "supervisor_unobservable",
+        "delivery_id": delivery_id,
+        "occurred_at": health["first_failed_at"],
+        "summary": explanation,
+        "diagnostics": health.get("diagnostics", {}),
+        **fields,
+    }
     sent = message_transport.send(payload, config=config, runner=runner)
     state.update(status="sent" if sent else "failed")
     try:

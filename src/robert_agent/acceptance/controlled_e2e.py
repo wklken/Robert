@@ -200,8 +200,13 @@ class _PublishRunner:
 
         if command == ["git", "rev-parse", "HEAD"]:
             return Completed("a" * 40 + "\n")
-        if command == ["git", "remote", "get-url", "origin"]:
+        if command in (
+            ["git", "remote", "get-url", "origin"],
+            ["git", "remote", "get-url", "--push", "--all", "origin"],
+        ):
             return Completed("https://github.com/example/repo.git\n")
+        if command[:3] == ["git", "ls-remote", "--get-url"]:
+            return Completed(command[-1] + "\n")
         if command[:3] == ["git", "ls-remote", "--heads"]:
             return Completed("")
         if command[:2] == ["git", "push"]:

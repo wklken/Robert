@@ -37,7 +37,17 @@ def _json_object(value):
     return parsed if isinstance(parsed, dict) else {}
 
 
-def ordinary_dispatch_allowed(conn, task_id, repo, config=None):
+def _classification_handoff(conn, task_id):
+    """The task carries out the request its classification parent was running."""
+    parent = db_records.first(db_read_tasks.find_parent_task_id_by_task_id(conn, task_id))
+    row = (
+        db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, parent[0])) if parent and parent[0] else None
+    )
+    handoff = _json_object(row[0] if row else None).get("classification_handoff") or {}
+    return handoff.get("child_task_id") == task_id
+
+
+def ordinary_dispatch_allowed(conn, task_id, repo, config=None, *, publishing=False):
     row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
     if not row or row[0] != TaskKind.HUMAN_REQUEST.value:
         return True  # System remediation is governed by its Episode policy.
@@ -60,12 +70,14 @@ def ordinary_dispatch_allowed(conn, task_id, repo, config=None):
         events = [event for event in events if event.get("event_fingerprint") in triggers]
     if not events:
         return False
+    already_running = publishing or (work_queries.tapd_driven(events) and _classification_handoff(conn, task_id))
     return any(
         source_policy.reauthorize_saved_request(
             event,
             repo,
             conn=conn,
             config=config,
+            already_running=already_running,
             known_workstreams=[]
             if event.get("event_type") in {"assigned", "review_request", "notification"}
             else [event["workstream_id"]],

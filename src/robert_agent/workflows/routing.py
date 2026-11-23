@@ -1,12 +1,19 @@
 """Resolve workflow policy, current authority and installed skill requirements."""
 
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
+from robert_agent.foundation.contracts.work import SourceProvider
 
 from robert_agent.adapters.github import discovery as discover
 from robert_agent.workflows import routes as route
 from robert_agent.context import skills
 from robert_agent.configuration import routes as route_config
 from robert_agent.work import source_policy
+from robert_agent.work import tapd_policy
+
+_TAPD_BLOCK_REASON = (
+    "TAPD requests support analysis, clarification and pull request changes only. Explain that this kind of "
+    "request is not supported from TAPD; do not perform it."
+)
 
 
 def effective_route(config_result, repo, event, route_id=None):
@@ -25,7 +32,20 @@ def effective_route(config_result, repo, event, route_id=None):
         candidate = route_config.resolve_route_config(config_result, repo, route_config.ROUTE_POLICIES["review-pr"])
         if len(route_config.review_workers_for_author(candidate, event.get("pr_author_login"))) > 1:
             event = {**event, "authorization_status": "authorized_trigger"}
+    tapd = event.get("provider") == SourceProvider.TAPD
+    allowed = tapd_policy.allowed_routes(event) if tapd else None
+    if tapd and route_id == "new-pr" and event.get("has_open_dd_pr"):
+        route_id = "update-existing-pr"
+    tapd_blocked = tapd and route_id is not None and route_id not in allowed
+    if tapd_blocked:
+        route_id = "waiting-for-user"
     base_route = dict(route.ROUTES[route_id]) if route_id else route.route_task(event)
+    if tapd and base_route["route_id"] == "new-pr" and event.get("has_open_dd_pr"):
+        base_route = dict(route.ROUTES["update-existing-pr"])
+    if tapd and base_route["route_id"] not in allowed:
+        base_route = dict(route.ROUTES["classification-result"])
+    if tapd_blocked:
+        base_route["routing_block_reason"] = _TAPD_BLOCK_REASON
     if config_result is None:
         return base_route
     if (
@@ -44,6 +64,17 @@ def effective_route(config_result, repo, event, route_id=None):
         repo,
         policy,
     )
+    if resolved.get("pre_pr_review"):
+        configured = {worker["name"]: worker for worker in config_result["workers"]}
+        resolved["pre_pr_review_plan"] = {
+            "workers": [configured[name] for name in resolved["pre_pr_review"]["workers"]],
+            "implementer": {
+                **configured[resolved["worker"]],
+                "default_model": resolved["model"],
+                "default_effort": resolved["effort"],
+            },
+            "timeout_seconds": config_result.get("hard_timeout_seconds", 3600),
+        }
     if resolved["id"] == "review-pr":
         selected = route_config.review_workers_for_author(resolved, event.get("pr_author_login"))
         if len(selected) > 1:
@@ -81,6 +112,8 @@ def effective_route(config_result, repo, event, route_id=None):
                 required_skills=[],
                 recommended_skills=[],
             )
+    if tapd_blocked:
+        resolved["routing_block_reason"] = _TAPD_BLOCK_REASON
     installed = skills.discover_skill_names(config_result["skills"]["search_paths"])
     required_skills = list(resolved["required_skills"])
     for skill_name in base_route.get("required_skills", []):

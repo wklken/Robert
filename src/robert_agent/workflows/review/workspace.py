@@ -55,13 +55,24 @@ def _source_hashes(tree):
     return result
 
 
-def _runtime_info(tree):
+def _runtime_info(tree, changed_paths=()):
     declarations = {}
-    for name in (".python-version", "pyproject.toml", "setup.cfg", "Pipfile"):
-        path = tree / name
+    directories = {Path(".")}
+    for name in changed_paths:
+        directories.update(Path(name).parents)
+    names = (
+        (directory / name).as_posix()
+        for directory in sorted(directories)
+        for name in (".python-version", "pyproject.toml", "setup.cfg", "Pipfile")
+    )
+    for name in names:
+        try:
+            path = review_files.safe_path(tree / name, tree)
+        except ValueError:
+            continue
         if path.is_file() and not path.is_symlink():
             text = path.read_text(encoding="utf-8", errors="replace")
-            if name == ".python-version":
+            if path.name == ".python-version":
                 declarations[name] = text.strip()
             else:
                 matches = re.findall(
@@ -142,9 +153,34 @@ def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info,
         or _git(repo_root, "rev-parse", base_local_ref).strip() != base_sha
     ):
         raise ValueError("PR snapshot changed while fetching; recapture PR metadata")
+    return _build_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, github_context)
+
+
+def prepare_candidate_snapshot(
+    repo_root, worktree_root, artifact_root, round_id, repo, base_ref, base_sha, head_sha, event
+):
+    info = {
+        "head": {"sha": head_sha},
+        "base": {"ref": base_ref, "sha": base_sha, "repo": {"full_name": repo}},
+        "kind": "new-pr-candidate",
+    }
+    return _build_snapshot(
+        Path(repo_root).resolve(),
+        Path(worktree_root).resolve(),
+        Path(artifact_root).resolve(),
+        round_id,
+        info,
+        [event],
+    )
+
+
+def _build_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, github_context):
+    number = pr_info.get("number")
+    head_sha = pr_info["head"]["sha"]
+    base_sha, base_ref = pr_info["base"]["sha"], pr_info["base"]["ref"]
     merge_base = _git(repo_root, "merge-base", base_sha, head_sha).strip()
     snapshot_id = _digest(json.dumps([round_id, number, head_sha, base_sha, base_ref, merge_base]))[:24]
-    tree = worktree_root / "review" / f"pr-{number}" / round_id / snapshot_id
+    tree = worktree_root / "review" / (f"pr-{number}" if number else "candidate") / round_id / snapshot_id
     artifacts = artifact_root / round_id / snapshot_id
     context = artifacts / "context"
     if tree.exists() or artifacts.exists():
@@ -166,7 +202,7 @@ def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info,
             raise ValueError("existing round snapshot identity does not match")
         if _trigger(github_context).get("trigger_event_fingerprint") != saved.get("trigger_event_fingerprint"):
             raise ValueError("existing round trigger identity does not match")
-        verify_snapshot(saved)
+        verify_snapshot(saved, require_current_prompt=True)
         return saved
     tree.parent.mkdir(parents=True, exist_ok=True)
     context.mkdir(parents=True)
@@ -181,14 +217,16 @@ def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info,
         head_sha,
         "--",
     )
+    changed_paths = _git(tree, "diff", "--no-ext-diff", "--name-only", merge_base, head_sha, "--")
     content = {
         "pr-info.json": json.dumps(pr_info, ensure_ascii=False, indent=2) + "\n",
         "github-context.json": json.dumps(github_context, ensure_ascii=False, indent=2) + "\n",
-        "changed-files.txt": _git(tree, "diff", "--no-ext-diff", "--name-only", merge_base, head_sha, "--"),
+        "changed-files.txt": changed_paths,
         "diff.patch": diff,
         "diff-stat.txt": _git(tree, "diff", "--no-ext-diff", "--stat", merge_base, head_sha, "--"),
         "diff-linecount.txt": str(len(diff.splitlines())) + "\n",
-        "runtime-info.json": json.dumps(_runtime_info(tree), ensure_ascii=False, indent=2) + "\n",
+        "runtime-info.json": json.dumps(_runtime_info(tree, changed_paths.splitlines()), ensure_ascii=False, indent=2)
+        + "\n",
     }
     for name, text in content.items():
         (context / name).write_text(text, encoding="utf-8")
@@ -203,7 +241,7 @@ def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info,
         "base_ref": base_ref,
         "merge_base_sha": merge_base,
         "pr_number": number,
-        "repo": (base.get("repo") or {}).get("full_name", ""),
+        "repo": (pr_info["base"].get("repo") or {}).get("full_name", ""),
         "worktree_path": str(tree),
         "context_dir": str(context),
         "artifact_root": str(artifacts),
@@ -224,7 +262,8 @@ def _reviewer_text(manifest):
     ).text
 
 
-def verify_snapshot(manifest):
+def verify_snapshot(manifest, *, require_current_prompt=False):
+    """Verify frozen bytes against the manifest, or check an unregistered snapshot before adoption."""
     tree = Path(manifest["worktree_path"])
     try:
         if _git(tree, "rev-parse", "HEAD").strip() != manifest["head_sha"]:
@@ -249,7 +288,7 @@ def verify_snapshot(manifest):
             path = review_files.safe_path(manifest["prompt_path"], manifest["artifact_root"])
             if review_files.sha256_file(path) != manifest["prompt_sha256"]:
                 raise ValueError("review prompt hash changed")
-            if path.read_text(encoding="utf-8") != _reviewer_text(manifest):
+            if require_current_prompt and path.read_text(encoding="utf-8") != _reviewer_text(manifest):
                 raise ValueError("review prompt no longer matches the built-in template")
             saved = json.loads(Path(manifest["context_dir"], "manifest.json").read_text(encoding="utf-8"))
             if saved != manifest:
@@ -276,7 +315,7 @@ def freeze_context(manifest):
         expected_files = set(manifest["files"]) | {str(Path(manifest["context_dir"]) / name) for name in PRIMARY_FILES}
         if set(saved.get("files", {})) != expected_files:
             raise ValueError("frozen manifest has unexpected context files")
-        verify_snapshot(saved)
+        verify_snapshot(saved, require_current_prompt=True)
         return saved
     context = Path(manifest["context_dir"])
     summary = review_files.safe_path(context / "context-summary.md", manifest["artifact_root"])
@@ -304,9 +343,12 @@ def freeze_context(manifest):
         frozen["files"][str(context / name)] = review_files.sha256_file(context / name)
     prompt_path = Path(manifest["artifact_root"]) / "reviewer-prompt.md"
     review_files.safe_path(prompt_path, manifest["artifact_root"])
+    expected_prompt = _reviewer_text(frozen)
     if prompt_path.exists():
-        raise ValueError("unregistered reviewer prompt already exists")
-    prompt_path.write_text(_reviewer_text(frozen), encoding="utf-8")
+        if prompt_path.read_text(encoding="utf-8") != expected_prompt:
+            raise ValueError("unregistered reviewer prompt differs from frozen context")
+    else:
+        prompt_path.write_text(expected_prompt, encoding="utf-8")
     frozen.update(
         prompt_path=str(prompt_path),
         prompt_sha256=review_files.sha256_file(prompt_path),

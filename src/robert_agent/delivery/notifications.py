@@ -50,9 +50,7 @@ def insert_notification(conn, action, notification_type, result, now):
             for key in ("reason_code", "error_class", "required_action", "retryable")
         ):
             metadata["delivery"] = previous["delivery"]
-        db_write_notifications.insert_notification_2(
-            conn, now, publication_values.encode_json(metadata), notification_id
-        )
+        db_write_notifications.insert_notification_2(conn, publication_values.encode_json(metadata), notification_id)
         return
     db_write_notifications.insert_notification(
         conn,
@@ -75,5 +73,5 @@ def resolve_action_notification(conn, action, notification_type, result, now):
     metadata["resolved_external_id"] = result.get("external_id", "")
     metadata["resolved_target_url"] = result.get("target_url", "")
     db_write_notifications.update_for_resolve_action_notification(
-        conn, now, publication_values.encode_json(metadata), notification_id
+        conn, publication_values.encode_json(metadata), notification_id
     )

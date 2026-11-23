@@ -3,11 +3,13 @@
 import json
 from pathlib import Path
 import sys
+from robert_agent.foundation.timestamps import utc_timestamp
 
 import yaml
 
 from robert_agent import worker_adapters
 from robert_agent.configuration import supervision as supervision_policy
+from robert_agent.configuration import tapd as tapd_config
 from robert_agent.configuration.loading import load_config
 from robert_agent.configuration.routes import load_route_policies, resolve_route_config
 from robert_agent.configuration.schema import apply_schema
@@ -50,6 +52,8 @@ def _workers(config):
 def _normalize(config, path, skip_external):
     schema = json.loads(resource("schemas/config.schema.json").read_text(encoding="utf-8"))
     config = apply_schema(config, schema, schema, "config")
+    if any(not path.strip() for path in config["skills"]["search_paths"]):
+        raise ValueError("skills.search_paths must contain non-empty paths")
     data_dir = Path(config["data_dir"]).expanduser()
     database = config["database"].strip()
     if Path(database).name != database or database in {".", ".."}:
@@ -124,12 +128,15 @@ def _normalize(config, path, skip_external):
         limit = raw.get("max_concurrency", scheduler["max_concurrency"])
         if limit > scheduler["max_concurrency"]:
             raise ValueError(f"repos[{index}].max_concurrency exceeds global max_concurrency")
-        if raw["pr_automation"]["ci"]["enabled"] and not raw["pr_automation"]["ci"]["check_allowlist"]:
-            raise ValueError(f"repos[{index}].pr_automation.ci.check_allowlist must not be empty when enabled")
         ci = raw["pr_automation"]["ci"]
-        ci["check_allowlist"] = [check.strip() for check in ci["check_allowlist"]]
-        if len(ci["check_allowlist"]) != len(set(ci["check_allowlist"])):
-            raise ValueError(f"repos[{index}].pr_automation.ci.check_allowlist entries must be unique")
+        if ci["enabled"] and not (ci["check_allowlist"] or ci["workflow_path_allowlist"]):
+            raise ValueError(
+                f"repos[{index}].pr_automation.ci.check_allowlist or workflow_path_allowlist must not be empty when enabled"
+            )
+        for field in ("check_allowlist", "workflow_path_allowlist"):
+            ci[field] = [entry.strip() for entry in ci[field]]
+            if len(ci[field]) != len(set(ci[field])):
+                raise ValueError(f"repos[{index}].pr_automation.ci.{field} entries must be unique")
         result["repos"].append(
             {
                 **raw,
@@ -167,10 +174,25 @@ def _normalize(config, path, skip_external):
         for policy in known_routes.values():
             resolve_route_config(result, repo, policy)
     messaging = result["messaging"]
+    if "send_after" in messaging:
+        start = utc_timestamp(messaging["send_after"])
+        if start is None:
+            raise ValueError("messaging.send_after must be an ISO timestamp with an explicit timezone")
+        messaging["send_after"] = start.isoformat()
     if messaging.get("dispatch_enabled") and not messaging["enabled"]:
         raise ValueError("messaging.dispatch_enabled requires messaging.enabled")
+    if messaging.get("contextual_replies") and not messaging["enabled"]:
+        raise ValueError("messaging.contextual_replies requires messaging.enabled")
+    if receipts := messaging.get("receipts"):
+        if receipts["enabled"] and not messaging["enabled"]:
+            raise ValueError("messaging.receipts.enabled requires messaging.enabled")
+        if receipts["enabled"] or "send_after" in receipts:
+            start = utc_timestamp(receipts.get("send_after"))
+            if start is None:
+                raise ValueError("messaging.receipts.send_after must be an ISO timestamp with an explicit timezone")
+            receipts["send_after"] = start.isoformat()
     if messaging["enabled"]:
-        for field in ("channel", "account", "target", "conversation", "allowed_senders", "repos"):
+        for field in ("channel", "account", "target", "conversation", "allowed_senders", "repos", "send_after"):
             if not messaging.get(field):
                 raise ValueError(f"messaging.{field} is required when enabled")
         for field in ("channel", "account", "target", "conversation"):
@@ -180,7 +202,29 @@ def _normalize(config, path, skip_external):
             raise ValueError("messaging.allowed_senders must use exact sender IDs")
         if set(messaging["repos"]) - {repo["full_name"] for repo in result["repos"]}:
             raise ValueError("messaging.repos must reference configured repositories")
+    result["tapd"] = tapd_config.normalize(config["tapd"], repositories={repo["full_name"] for repo in result["repos"]})
+    result["proposer"] = _proposer(config["proposer"], result)
     return result
+
+
+def _proposer(setting, config):
+    github = set(setting["github_repositories"])
+    known = {repo["full_name"] for repo in config["repos"]}
+    tapd = set(setting["tapd_projects"])
+    known_tapd = {f"{project['host']}/{project['workspace_id']}" for project in config["tapd"]["projects"]}
+    if github - known or tapd - known_tapd:
+        raise ValueError("proposer sources must reference configured GitHub repositories and TAPD projects")
+    if setting["enabled"]:
+        if not (github or tapd) or not setting.get("gateway_metadata") or not setting.get("model"):
+            raise ValueError("proposer requires configured sources, gateway_metadata and model")
+        if tapd and not config["tapd"]["enabled"]:
+            raise ValueError("proposer.tapd_projects requires TAPD integration")
+        setting["gateway_metadata"] = str(Path(setting["gateway_metadata"]).expanduser())
+    for field in ("github_assignees", "tapd_assignees"):
+        if any(value != value.strip() for value in setting[field]):
+            raise ValueError(f"proposer.{field} must use exact account names")
+    setting["github_assignees"] = [login.casefold() for login in setting["github_assignees"]]
+    return setting
 
 
 def validate_config(config_path, skip_external=False):

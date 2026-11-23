@@ -44,8 +44,12 @@ def check_run(check_id, conclusion, *, app=None):
 class CIProducerIdentityTests(unittest.TestCase):
     def summarize(self, workflow_runs, check_runs):
         responses = {
-            ("gh", "api", f"repos/{REPO}/actions/runs?head_sha={HEAD}&per_page=100"): {"workflow_runs": workflow_runs},
-            ("gh", "api", f"repos/{REPO}/commits/{HEAD}/check-runs?per_page=100"): {"check_runs": check_runs},
+            ("gh", "api", f"repos/{REPO}/actions/runs?head_sha={HEAD}&per_page=100", "--paginate", "--slurp"): {
+                "workflow_runs": workflow_runs
+            },
+            ("gh", "api", f"repos/{REPO}/commits/{HEAD}/check-runs?per_page=100", "--paginate", "--slurp"): {
+                "check_runs": check_runs
+            },
         }
         for run in workflow_runs:
             if run["conclusion"] == "failure":
@@ -53,7 +57,7 @@ class CIProducerIdentityTests(unittest.TestCase):
                 responses[("gh", "api", f"repos/{REPO}/actions/runs/{run['id']}/jobs?per_page=100")] = {
                     "jobs": [{"id": job_id, "name": "unit", "status": "completed", "conclusion": "failure"}],
                 }
-                responses[("gh", "api", f"repos/{REPO}/actions/jobs/{job_id}/logs")] = "Test failed"
+                responses[("gh", "run", "view", "--repo", REPO, "--job", str(job_id), "--log-failed")] = "Test failed"
         for check in check_runs:
             if check["conclusion"] == "failure":
                 responses[("gh", "api", f"repos/{REPO}/check-runs/{check['id']}/annotations?per_page=100")] = []

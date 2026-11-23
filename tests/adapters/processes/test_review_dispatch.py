@@ -14,6 +14,46 @@ from robert_agent.worker_adapters import build_worker_launch
 
 
 class ReviewDispatchTests(unittest.TestCase):
+    def test_tclaude_skips_wrapper_update_and_produces_review_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / "prompt.md"
+            prompt.write_text("Review the requested change", encoding="utf-8")
+            wrapper = root / "wrapper.py"
+            wrapper.write_text("""import json,os,sys
+from pathlib import Path
+if os.environ.get('TCLAUDE_SKIP_UPDATE') != '1':
+    print('Updated tclaude. Please restart tclaude.')
+    sys.exit(0)
+Path(os.environ['ROBERT_REVIEW_OUTPUT_DIR'],'result.json').write_text(json.dumps({
+    'prompt':sys.stdin.read(),'sandbox':os.environ.get('IS_SANDBOX'),'args':sys.argv[1:]}))
+""")
+            with patch.dict(os.environ, {"TCLAUDE_SKIP_UPDATE": "0"}):
+                result = dispatch_worker(
+                    "task",
+                    "review",
+                    prompt,
+                    model="default",
+                    reasoning_effort="default",
+                    worker_agent_config={
+                        "agent": "tclaude",
+                        "command_argv": ["env", "IS_SANDBOX=1", sys.executable, str(wrapper)],
+                        "environment_allowlist": ["TCLAUDE_SKIP_UPDATE"],
+                    },
+                    dry_run=False,
+                    trusted_environment={"ROBERT_REVIEW_OUTPUT_DIR": str(root)},
+                    log_dir=root,
+                )
+                self.assertTrue(result["ok"], result)
+                if not result.get("process_exited"):
+                    self.assertEqual(_BACKGROUND_PROCESSES.pop(result["pid"]).wait(timeout=5), 0)
+                self.assertTrue((root / "result.json").exists(), (root / "stdout.log").read_text())
+                captured = json.loads((root / "result.json").read_text())
+                self.assertEqual(captured["prompt"], prompt.read_text())
+                self.assertEqual(captured["sandbox"], "1")
+                self.assertEqual(captured["args"][0], "-p")
+                self.assertEqual(os.environ["TCLAUDE_SKIP_UPDATE"], "0")
+
     def test_claude_streaming_print_mode_includes_required_verbose_flag(self):
         for agent in ("claude", "tclaude"):
             launch = build_worker_launch(

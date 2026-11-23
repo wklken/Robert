@@ -1,9 +1,17 @@
-"""Reconcile terminal GitHub source state with owned work."""
+"""Reconcile terminal GitHub and TAPD source state with owned work."""
 
+from robert_agent.foundation.contracts.delivery import GitHubActionType, PublishStatus
 from robert_agent.foundation.contracts.execution import AttemptStatus, BindingStatus
-from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, WorkstreamLifecycle
+from robert_agent.foundation.contracts.work import (
+    REMEDIATION_TASK_KINDS,
+    TERMINAL_TASK_LIFECYCLES,
+    SourceProvider,
+    SourceType,
+    WorkstreamLifecycle,
+)
 
 from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
 
 from robert_agent.persistence import transactions as db_transactions
 from robert_agent.persistence.dialects import sqlite as db_sqlite
@@ -17,23 +25,43 @@ from robert_agent.persistence.stores import audit_events as db_write_audit_event
 from robert_agent.persistence.stores import github_events as db_write_github_events
 from robert_agent.persistence.stores import github_sources as db_write_github_sources
 from robert_agent.persistence.stores import tasks as db_write_tasks
+from robert_agent.persistence.stores import wakeups as db_write_wakeups
 from robert_agent.persistence.stores import work_items as db_write_work_items
 from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from robert_agent.delivery.application import outcomes as publication_outcomes
+from robert_agent.adapters.github import discovery as github_discovery
 from robert_agent.adapters.github import sources as github_sources
 from robert_agent.persistence import transactions as transactions
 from robert_agent.execution.application import monitor
 from robert_agent.work.application import commands as work_items
-from robert_agent.work import control_queries
+from robert_agent.work import control_queries, receipt_events, tapd_notices, tapd_policy
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.execution import operations as execution_operations
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.persistence import execution_control as execution_store
-from robert_agent.foundation import values
+from robert_agent.foundation import tapd_identity, values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.work import queries as work_queries
 from robert_agent.workflows import pr_remediation as remediation
 import json
+import subprocess
+
+_TICKET_SOURCE_TYPES = frozenset({SourceType.ISSUE, SourceType.TAPD_STORY, SourceType.TAPD_BUG})
+
+
+def _stored_tapd_state(conn, source_id):
+    """The scan lane owns TAPD reads; a failed read never marks a ticket ended."""
+    row = db_records.first(db_read_github_sources.find_metadata_json_and_state_by_source_id(conn, source_id))
+    if not row or row[1] != "closed":
+        return None
+    snapshot = values.json_object(row[0]).get("tapd") or {}
+    return {
+        "state": "closed",
+        "state_reason": "completed",
+        "tapd_status": snapshot.get("status"),
+        "updated_at": snapshot.get("observed_at"),
+        "closed_at": snapshot.get("observed_at"),
+    }
 
 
 def _remote_terminal_state(source_type, remote_state):
@@ -61,6 +89,9 @@ def record_remote_terminal_state(
     workstream_lifecycle,
     audit_type,
     run_now,
+    *,
+    receipt_config=None,
+    repository="",
 ):
     from robert_agent.delivery.lock import task_publication_lock
 
@@ -78,6 +109,8 @@ def record_remote_terminal_state(
         workstream_lifecycle,
         audit_type,
         run_now,
+        receipt_config,
+        repository,
     )
     if not task_id or not database:
         return _record_remote_terminal_state_locked(*args)
@@ -94,6 +127,39 @@ def record_remote_terminal_state(
             raise
 
 
+def _tapd_terminal_delivery_still_blocked(
+    conn, workstream_id, source_id, source_key, task_id, remote_state, workstream_lifecycle
+):
+    stream = db_records.first(db_read_workstreams.find_terminal_reconciliation_state(conn, workstream_id))
+    if not stream or stream["lifecycle"] != workstream_lifecycle or stream["active_task_id"] is not None:
+        return False
+    previous = values.json_object(stream["metadata_json"]).get("remote_reconciliation")
+    if (
+        not isinstance(previous, dict)
+        or previous.get("status") != "remote_source_closed"
+        or previous.get("source_key") != source_key
+        or "task_id" not in previous
+        or previous["task_id"] != task_id
+    ):
+        return False
+    recorded = previous.get("remote_state")
+    # The TAPD scan timestamps describe the observation, not a new closure.
+    if not isinstance(recorded, dict) or any(
+        recorded.get(key) != remote_state.get(key) for key in ("state", "state_reason", "tapd_status")
+    ):
+        return False
+    # An open TAPD observation clears the source's closure receipt. A later
+    # close with the same status must be applied again.
+    source = db_records.first(db_read_github_sources.find_metadata_json_and_state_by_source_id(conn, source_id))
+    if not source or values.json_object(source[0]).get("remote_state") != recorded:
+        return False
+    item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
+    if not item or item["origin_source_id"] != source_id:
+        return False
+    facts = control_queries.lifecycle_facts(conn, item)
+    return bool(facts["open_pull_requests"] or facts["unmerged_pull_requests"])
+
+
 def _record_remote_terminal_state_locked(
     conn,
     repo_id,
@@ -107,15 +173,31 @@ def _record_remote_terminal_state_locked(
     workstream_lifecycle,
     audit_type,
     run_now,
+    receipt_config=None,
+    repository="",
 ):
+    if (
+        source_type == SourceType.PULL_REQUEST
+        and tapd_identity.is_source_key(workstream_id)
+        and work_queries.active_task_id(conn, workstream_id) != task_id
+    ):
+        return False
     subject_type, subject_id = "task", task_id
-    if task_id:
-        task_row = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(conn, task_id))
-        task_metadata = values.json_object(task_row[1] if task_row else None)
-        episode_id = task_metadata.get("remediation_episode_id") if task_row else None
-        if task_row and task_row[0] in REMEDIATION_TASK_KINDS and episode_id:
+    task_row = db_records.first(db_read_tasks.find_record_by_task_id(conn, task_id)) if task_id else None
+    if task_row and task_row["task_kind"] in REMEDIATION_TASK_KINDS:
+        episode_id = values.json_object(task_row["metadata_json"]).get("remediation_episode_id")
+        if episode_id:
             subject_type, subject_id = "remediation_episode", str(episode_id)
     binding = execution_store.get_binding(conn, subject_type, subject_id) if subject_id else None
+    if (
+        source_type in {SourceType.TAPD_STORY, SourceType.TAPD_BUG}
+        and (binding is None or binding["binding_status"] == BindingStatus.TERMINAL)
+        and (task_id is None or (task_row and task_row["lifecycle"] in TERMINAL_TASK_LIFECYCLES))
+        and _tapd_terminal_delivery_still_blocked(
+            conn, workstream_id, source_id, source_key, task_id, remote_state, workstream_lifecycle
+        )
+    ):
+        return False
     workflow_fact = None
     if binding and binding["binding_status"] == BindingStatus.ACTIVE:
         marker = (
@@ -208,6 +290,7 @@ def _record_remote_terminal_state_locked(
         json.dumps({"remote_reconciliation": remote_payload}, ensure_ascii=False, sort_keys=True),
         task_id,
     )
+    db_write_wakeups.cancel_terminal_task_requests(conn, task_id, run_now)
     for attempt_id, metadata in attempt_metadata.items():
         metadata["remote_reconciliation"] = remote_payload
         db_write_attempts.record_remote_terminal_state_locked(
@@ -219,7 +302,11 @@ def _record_remote_terminal_state_locked(
         db_read_workstreams.find_metadata_json_by_workstream_id(conn, workstream_id)
     )
     workstream_metadata = values.json_object(workstream_metadata_row[0] if workstream_metadata_row else None)
-    workstream_metadata["remote_reconciliation"] = remote_payload
+    workstream_metadata["remote_reconciliation"] = (
+        {**remote_payload, "task_id": task_id}
+        if source_type in {SourceType.TAPD_STORY, SourceType.TAPD_BUG}
+        else remote_payload
+    )
     db_write_workstreams.record_remote_terminal_state_locked(
         conn,
         workstream_lifecycle,
@@ -237,14 +324,21 @@ def _record_remote_terminal_state_locked(
         run_now,
         json.dumps(remote_payload, ensure_ascii=False, sort_keys=True),
     )
+    if source_type == SourceType.PULL_REQUEST:
+        kind = tapd_policy.PR_MERGED_NOTICE if audit_type == "remote_pr_merged" else tapd_policy.PR_CLOSED_NOTICE
+        tapd_notices.record_pr_notices(conn, workstream_id, kind, (number,), run_now)
+        if audit_type == "remote_pr_merged":
+            receipt_events.record_merge(conn, receipt_config, repo_id, repository, remote_state)
     item = work_items.resolve_work_item_for_workstream(conn, workstream_id)
-    if item and source_type == "issue" and item["origin_source_id"] == source_id:
+    if item and source_type in _TICKET_SOURCE_TYPES and item["origin_source_id"] == source_id:
         facts = control_queries.lifecycle_facts(conn, item)
         unfinished = db_records.first(
             db_read_tasks.record_remote_terminal_state_locked(conn, item["workstream_id"], item["workstream_id"])
         )
         if (
             not unfinished
+            and not facts["open_pull_requests"]
+            and not facts["unmerged_pull_requests"]
             and not facts["running"]
             and not facts["actions"]
             and not facts["cleanup_pending"]
@@ -257,7 +351,11 @@ def _record_remote_terminal_state_locked(
                 item["work_item_id"],
                 event_type="completed" if workstream_lifecycle == WorkstreamLifecycle.COMPLETED else "canceled",
                 idempotency_key=f"issue-closed:{source_key}:{remote_state.get('closed_at') or run_now}",
-                body="GitHub issue closed: " + (remote_state.get("state_reason") or "closed"),
+                body=(
+                    "GitHub issue closed: " + (remote_state.get("state_reason") or "closed")
+                    if source_type == SourceType.ISSUE
+                    else "TAPD ticket ended: " + (remote_state.get("tapd_status") or "closed")
+                ),
                 resolves_event_id=(decision["event_id"] if hasattr(decision, "keys") else decision[0])
                 if decision
                 else None,
@@ -277,10 +375,27 @@ def _record_remote_terminal_state_locked(
                 metadata={"source_key": source_key, "number": number},
                 now=run_now,
             )
-            db_write_work_items.update_for_finalize_accepted_result(
-                conn, remote_state.get("merged_at") or run_now, run_now, item["work_item_id"]
+            unfinished = db_records.first(
+                db_read_tasks.record_remote_terminal_state_locked(
+                    conn,
+                    item["workstream_id"],
+                    item["workstream_id"],
+                )
             )
-            db_write_workstreams.record_remote_terminal_state_locked_2(conn, run_now, item["work_item_id"])
+            facts = control_queries.lifecycle_facts(conn, item)
+            if (
+                not unfinished
+                and not facts["open_pull_requests"]
+                and not facts["unmerged_pull_requests"]
+                and not facts["running"]
+                and not facts["actions"]
+                and not facts["cleanup_pending"]
+                and not facts["workflow_attention"]
+            ):
+                db_write_work_items.update_for_finalize_accepted_result(
+                    conn, remote_state.get("merged_at") or run_now, run_now, item["work_item_id"]
+                )
+                db_write_workstreams.record_remote_terminal_state_locked_2(conn, run_now, item["work_item_id"])
         elif audit_type == "remote_pr_closed":
             work_items.record_system_event(
                 conn,
@@ -379,16 +494,84 @@ def record_current_state_closed_source_if_needed(conn, repo_id, source_id, event
     )
 
 
-def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
+def _unanswered_tapd_round(conn, workstream_id, source_type, number):
+    """The ticket round that opened this PR and has not answered on TAPD yet ends with the PR."""
+    if source_type != SourceType.PULL_REQUEST:
+        return None
+    origin = db_records.first(db_read_workstreams.find_origin_workstream_id_by_workstream_id(conn, workstream_id))
+    source = work_queries.tapd_origin(conn, workstream_id)
+    if not source:
+        return None
+    pr_url = f"https://github.com/{source['repo']}/pull/{number}"
+    opening = (
+        db_records.first(db_read_tasks.find_active_tapd_opening_task(conn, origin[0], pr_url))
+        if origin and origin[0]
+        else None
+    )
+    task_id = opening[1] if opening else None
+    if not task_id or not work_queries.tapd_driven(work_queries.task_events(conn, task_id)):
+        return None
+    actions = db_read_github_actions.find_for_actions_for_task(conn, task_id)
+    opened = any(
+        kind == GitHubActionType.OPEN_PR and status == PublishStatus.PUBLISHED and url.endswith(f"/pull/{number}")
+        for _id, kind, url, _external, _audit, status, _created in actions
+        if url
+    )
+    unanswered = any(
+        kind == GitHubActionType.COMMENT and status != PublishStatus.PUBLISHED
+        for _id, kind, _url, _external, _audit, status, _created in actions
+    )
+    return (opening[0], task_id) if opened and unanswered else None
+
+
+def _reconcile_tapd_reviews(conn, repo_id, repo, runner, run_now, settings):
+    if not (settings or {}).get("enabled"):
+        return
+    rows = db_read_workstreams.find_tapd_pull_requests_for_review_sync(conn, repo_id)
+    for workstream_id, source_id, number, project_key, closed_at in rows:
+        if not tapd_policy.project_for(settings, project_key):
+            continue
+        conn.commit()
+        try:
+            revisions = github_discovery.reviewed_revisions(
+                repo["full_name"], number, runner, own_login=repo["github_account"]
+            )
+        except ControlDeadlineExceeded:
+            raise
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if revisions is None:
+            continue
+        if revisions:
+            tapd_notices.record_pr_notices(conn, workstream_id, tapd_policy.PR_REVIEW_NOTICE, revisions, run_now)
+        if closed_at:
+            db_write_github_sources.record_tapd_review_sync(conn, source_id, closed_at)
+
+
+def reconcile_remote_source_states(
+    conn, repo_id, repo, runner, run_now, *, tapd_settings=None, tapd_only=False, receipt_config=None
+):
+    receipt_signal = receipt_events.receipt_settings(receipt_config)
+    merge_receipt_options = (
+        {"receipt_config": receipt_config, "repository": repo["full_name"]}
+        if receipt_signal and "pr_merged" in receipt_signal[0]
+        else {}
+    )
     rows = work_queries.remote_source_rows(conn, repo_id)
     reconciled = 0
-    for workstream_id, task_id, source_id, source_key, source_type, number in rows:
+    for workstream_id, task_id, source_id, source_key, source_type, number, provider, _state in rows:
+        if provider not in set(SourceProvider) or (tapd_only and provider != SourceProvider.TAPD):
+            continue
         task_id = task_id or work_queries.latest_task_id(conn, workstream_id)
         conn.commit()
         db_transactions.savepoint(conn, "reconcile_source")
         source_succeeded = False
         try:
-            remote_state = github_sources.read_source_state(repo["full_name"], source_type, number, runner)
+            remote_state = (
+                _stored_tapd_state(conn, source_id)
+                if provider == SourceProvider.TAPD
+                else github_sources.read_source_state(repo["full_name"], source_type, number, runner)
+            )
             if not remote_state:
                 continue
             terminal = _remote_terminal_state(source_type, remote_state)
@@ -396,6 +579,24 @@ def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
                 source_succeeded = True
                 continue
             workstream_lifecycle, audit_type = terminal
+            tapd_round = _unanswered_tapd_round(conn, workstream_id, source_type, number)
+            if tapd_round:
+                ticket_stream, ticket_task = tapd_round
+                if not record_remote_terminal_state(
+                    conn,
+                    repo_id,
+                    ticket_stream,
+                    source_id,
+                    source_key,
+                    source_type,
+                    number,
+                    ticket_task,
+                    remote_state,
+                    workstream_lifecycle,
+                    audit_type,
+                    run_now,
+                ):
+                    continue
             recorded = record_remote_terminal_state(
                 conn,
                 repo_id,
@@ -409,6 +610,7 @@ def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
                 workstream_lifecycle,
                 audit_type,
                 run_now,
+                **(merge_receipt_options if audit_type == "remote_pr_merged" else {}),
             )
             if not recorded:
                 source_succeeded = True
@@ -443,4 +645,6 @@ def reconcile_remote_source_states(conn, repo_id, repo, runner, run_now):
             if source_succeeded:
                 execution_notifications.update_failure(conn, "source_reconcile_failed", source_key, run_now)
             transactions.finish_isolation(conn, "reconcile_source")
+    if not tapd_only:
+        _reconcile_tapd_reviews(conn, repo_id, repo, runner, run_now, tapd_settings)
     return reconciled

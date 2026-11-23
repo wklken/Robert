@@ -124,10 +124,27 @@ class BoardHistoryPagingTests(BoardReadModelFixture):
         self.assertIsNotNone(page["next_cursor"])
         self.assertEqual(
             page["counts"],
-            {"backlog": 1, "todo": 1, "doing": 1, "waiting": 1, "review": 1, "done": 212, "history": 0},
+            {
+                "backlog": 1,
+                "todo": 1,
+                "doing": 1,
+                "waiting": 1,
+                "review": 1,
+                "done": 212,
+                "history": 0,
+                "needs_action": 1,
+            },
         )
         # Five active cards may need lifecycle evaluation, plus one page and its lookahead.
         self.assertLessEqual(project.call_count, 5 + 7 + 1)
+
+    def test_done_partition_keeps_completed_items_without_a_task(self):
+        item = self._create("Completed without a task")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("UPDATE work_items SET completed_at=? WHERE work_item_id=?", (NEWEST, item["work_item_id"]))
+        page = board.list_board(self.db_path, column="done")
+        self.assertEqual(page["counts"]["done"], 1)
+        self.assertEqual(self.item_ids(page), [item["work_item_id"]])
 
     def test_terminal_pages_preserve_order_counts_and_agent_filters(self):
         self.seed_filter_history()
@@ -139,15 +156,24 @@ class BoardHistoryPagingTests(BoardReadModelFixture):
         second = board.list_board(self.db_path, **filters, include_history=True, limit=2, cursor=first["next_cursor"])
         self.assertEqual(self.item_ids(second), ["item-30", "item-10"])
         self.assertIsNone(second["next_cursor"])
-        self.assertEqual(second["filters"]["agents"], ["Auto", "deep-worker"])
-        counts = {"backlog": 0, "todo": 0, "doing": 0, "waiting": 0, "review": 0, "done": 3, "history": 1}
+        self.assertEqual(second["filters"]["agents"], first["filters"]["agents"])
+        counts = {
+            "backlog": 0,
+            "todo": 0,
+            "doing": 0,
+            "waiting": 0,
+            "review": 0,
+            "done": 3,
+            "history": 1,
+            "needs_action": 0,
+        }
         self.assertEqual(first["counts"], counts)
         self.assertEqual(second["counts"], counts)
 
         done = board.list_board(self.db_path, **filters, include_history=True, column="done", limit=1)
         self.assertEqual(self.item_ids(done), ["item-60"])
         self.assertEqual(done["counts"], counts)
-        self.assertEqual(done["filters"]["agents"], ["Auto", "deep-worker", "latest-worker"])
+        self.assertEqual(done["filters"]["agents"], first["filters"]["agents"])
         archived = board.list_board(self.db_path, **filters, include_history=True, column="history")
         self.assertEqual(self.item_ids(archived), ["item-20"])
         visible = board.list_board(self.db_path, **filters)

@@ -42,7 +42,7 @@ supervision:
   repair: null
   build_manifest: null
   heartbeat_stale_seconds: 1200
-  hard_timeout_seconds: 2700
+  hard_timeout_seconds: 3600
   startup_grace_seconds: 300
 
 daemon:
@@ -70,14 +70,14 @@ workers:
     effort: default
     # 可选；如已有配置应保留实际值，不要照抄未验证模型名。
     # fallback_model: YOUR_SUPPORTED_FALLBACK_MODEL
-    timeout_seconds: 5400
+    timeout_seconds: 3600
     environment_allowlist: []
   reviewer:
     adapter: claude
     command: claude
     model: default
     effort: default
-    timeout_seconds: 5400
+    timeout_seconds: 3600
     environment_allowlist: []
 
 skills:
@@ -105,6 +105,15 @@ routes:
 
 # Add a real repository before running config validate or starting Robert.
 # See docs/reference.md#configuration for a complete repository example.
+# PR remediation is opt-in per repository. Set pr_automation.dispatch_mode to
+# direct to dispatch the first eligible repair under supervision.mode: decide.
+# CI requires check_allowlist names or workflow_path_allowlist exact paths.
+# check_mode: all requires every selector (default); observed waits only for
+# selected CI present on the current PR head, supporting component path filters.
+# Example per-repository pr_automation.ci:
+#   enabled: true
+#   check_mode: observed
+#   workflow_path_allowlist: [.github/workflows/backend.yml, dynamic/github-code-scanning/codeql]
 repos: []
 
 # Optional operator chat; disabled unless explicitly configured.
@@ -112,3 +121,22 @@ repos: []
 messaging:
   enabled: false
   dispatch_enabled: false
+  # Before enabling, set send_after to the current time with an explicit timezone.
+  # Retain that value on normal restarts; only newer notifications are delivered.
+  # To send receipt images through this OpenClaw target, add:
+  # receipts:
+  #   enabled: true
+  #   send_after: "2026-11-22T09:00:00+08:00"  # Set the receipt activation time.
+  #   events: [pr_opened, report_delivered]
+  #   chromium: chromium
+
+# Discover proposals in explicitly selected sources. See docs/features/proposer.md.
+proposer:
+  enabled: false
+  publish_comments: false
+  github_repositories: []
+  github_assignees: []
+  tapd_projects: []
+  tapd_assignees: []
+  # gateway_metadata: /path/to/local-messages-gateway.json
+  # model: your-local-gateway-model

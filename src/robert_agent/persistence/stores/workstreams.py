@@ -4,12 +4,24 @@ from robert_agent.foundation.contracts.work import WorkstreamLifecycle
 
 from robert_agent.persistence.expressions import sql_constant
 
-from sqlalchemy import select, update, bindparam, null, LABEL_STYLE_NONE
+from sqlalchemy import select, update, bindparam, func, null, LABEL_STYLE_NONE
 from sqlalchemy.dialects.sqlite import insert
 
 
 from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
+
+
+def set_decision_owner_origin(conn, workstream_id, origin_workstream_id):
+    table = tables["workstreams"]
+    statement = (
+        update(table)
+        .where(table.c.workstream_id == bindparam("owner_stream_id"), table.c.origin_workstream_id.is_(None))
+        .values(origin_workstream_id=bindparam("origin_workstream_id"))
+    )
+    return statements.write(
+        conn, statement, {"owner_stream_id": workstream_id, "origin_workstream_id": origin_workstream_id}
+    )
 
 
 def insert_fixture(conn, now, now_2):
@@ -128,6 +140,25 @@ def update_for_execute_command(conn, now, workstream_id):
     return statements.write(conn, stmt, {"p0": now, "p1": workstream_id})
 
 
+def ensure_tapd_delivery_stream(conn, *, workstream_id, repo_id, source_id, origin_id, public_ref, now):
+    """All target deliveries remain direct children of the ticket for lifecycle control."""
+    stmt = (
+        insert(tables["workstreams"])
+        .values(
+            workstream_id=workstream_id,
+            repo_id=repo_id,
+            primary_source_id=source_id,
+            origin_workstream_id=origin_id,
+            public_ref=public_ref,
+            lifecycle=WorkstreamLifecycle.COMPLETED.value,
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing(index_elements=["workstream_id"])
+    )
+    return statements.write(conn, stmt)
+
+
 def insert_for_materialize_open_pr_workstream(
     conn, pr_source_key, repo_id, pr_source_id, origin_workstream_id, run_now, run_now_6
 ):
@@ -207,9 +238,10 @@ def set_metadata_json_and_updated_at_by_workstream_id(conn, value_1, run_now, wo
 
 
 def insert_for_create_task_attempt_and_prompt(
-    conn, workstream_id, repo_id, source_id, lifecycle, task_id, run_now, run_now_7
+    conn, workstream_id, repo_id, source_id, lifecycle, task_id, run_now, run_now_7, public_ref=None
 ):
-    stmt = insert(tables["workstreams"]).values(
+    table = tables["workstreams"]
+    stmt = insert(table).values(
         {
             "workstream_id": bindparam("p0"),
             "repo_id": bindparam("p1"),
@@ -218,6 +250,7 @@ def insert_for_create_task_attempt_and_prompt(
             "active_task_id": bindparam("p4"),
             "created_at": bindparam("p5"),
             "updated_at": bindparam("p6"),
+            "public_ref": bindparam("p7"),
         }
     )
     stmt = stmt.on_conflict_do_update(
@@ -226,6 +259,7 @@ def insert_for_create_task_attempt_and_prompt(
             "lifecycle": stmt.excluded["lifecycle"],
             "active_task_id": stmt.excluded["active_task_id"],
             "updated_at": stmt.excluded["updated_at"],
+            "public_ref": func.coalesce(table.c["public_ref"], stmt.excluded["public_ref"]),
         },
     )
     return statements.write(
@@ -239,6 +273,7 @@ def insert_for_create_task_attempt_and_prompt(
             "p4": task_id,
             "p5": run_now,
             "p6": run_now_7,
+            "p7": public_ref,
         },
     )
 

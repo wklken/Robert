@@ -1,6 +1,8 @@
 """Project-memory helpers for DD GitHub agent tasks."""
 
+from robert_agent.context.memory_policy import redact_memory_delta
 from robert_agent.foundation.contracts.delivery import GitHubActionType
+from robert_agent.foundation.contracts.work import SourceProvider
 from robert_agent.persistence.queries import github_actions as action_queries
 from robert_agent.supervision.receipts import matches as receipt_matches
 
@@ -292,6 +294,10 @@ def record_memory_delta(conn, result_payload, workstream_id, repo_id, run_now):
     delta = result_payload.get("memory_delta")
     if not isinstance(delta, dict):
         return {"status": "skipped", "recorded_count": 0, "reason": "no_memory_delta"}
+    try:
+        delta = redact_memory_delta(delta)
+    except ValueError as exc:
+        return {"status": "skipped", "recorded_count": 0, "safe_error": str(exc)}
     status = _text(delta.get("status")) or "none"
     if status != "has_memory":
         return {
@@ -387,7 +393,9 @@ def retrieve_memories(conn, repo_id, workstream_id, route_result, events, limit=
         scores[memory_id] = scores.get(memory_id, 0) + score
     if not scores:
         return []
-    rows = db_read_project_memory_entries.retrieve_memories_filtered(conn, scores)
+    rows = db_read_project_memory_entries.retrieve_memories_filtered(
+        conn, scores, include_tapd=bool(events and events[0].get("provider") == SourceProvider.TAPD)
+    )
     memories = []
     for row in rows:
         (

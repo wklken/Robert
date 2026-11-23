@@ -258,6 +258,37 @@ class ProjectMemoryTests(unittest.TestCase):
             },
         }
 
+    def test_unsafe_or_oversized_memory_never_reaches_storage(self):
+        from robert_agent.context import project as project_memory
+
+        for title in ("password=private-test-value", "x" * 70000):
+            with self.subTest(kind=title[:20]), closing(sqlite3.connect(self.db_path)) as conn, conn:
+                payload = self._result_payload(title=title, short_summary="Useful context")
+                outcome = project_memory.record_memory_delta(
+                    conn, payload, "github:example/backend!456", self.repo_id, self.now
+                )
+                self.assertEqual(outcome["recorded_count"], 0)
+                self.assertEqual(conn.execute("SELECT count(*) FROM project_memory_entries").fetchone()[0], 0)
+
+    def test_record_memory_redacts_context_before_entries_and_revisions(self):
+        from robert_agent.context import project as project_memory
+
+        payload = self._result_payload(title="Test setup", short_summary="Use /tmp/robert-cache with 10.1.2.3")
+        payload["memory_delta"]["entries"][0]["evidence"] = [{"file": "/Users/sample/project"}]
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            outcome = project_memory.record_memory_delta(
+                conn, payload, "github:example/backend!456", self.repo_id, self.now
+            )
+            self.assertEqual(outcome["recorded_count"], 1)
+            entry = conn.execute("SELECT short_summary, metadata_json FROM project_memory_entries").fetchone()
+            revision = conn.execute("SELECT short_summary, payload_json FROM project_memory_revisions").fetchone()
+        self.assertEqual(entry[0], "Use <local-path> with <internal-ip>")
+        self.assertEqual(revision[0], entry[0])
+        for stored in (entry[1], revision[1]):
+            self.assertNotIn("/Users/sample/project", stored)
+            self.assertIn("<local-path>", stored)
+        self.assertIn("/tmp/robert-cache", payload["memory_delta"]["entries"][0]["short_summary"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,3 +15,6 @@ These rules apply to this directory and its descendants. Follow the
   notifying another process. Recheck active ownership before changing execution.
 - Test validation and policy with small inputs. Use a temporary database to
   verify command replay, stale versions, denied scope and durable handoff.
+- `decision_owner.py` owns the original human request owner and provenance.
+  Follow verified same-repository lineage; keep this identity separate from
+  execution ownership, PR authorship and current trigger authorization.

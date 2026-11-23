@@ -50,6 +50,10 @@ def read_health(config):
 
 def health(config, result, now):
     previous = read_health(config)
+    from robert_agent.supervision.rules import timestamp
+
+    current = timestamp(now)
+    poll = config.get("supervision", {}).get("poll_seconds", supervision_config.DEFAULTS["poll_seconds"])
     data = {
         "checked_at": now,
         "status": result["status"],
@@ -58,26 +62,54 @@ def health(config, result, now):
         "last_complete_check_at": (now if result.get("coverage_complete") else previous.get("last_complete_check_at")),
         "notification_delivery": "configured" if message_transport.configured(config) else "not_configured",
         "error_class": result.get("error_class"),
+        "reason_code": result.get("reason_code"),
+        "safe_error": result.get("safe_error"),
         "pid": os.getpid(),
     }
+    if result.get("diagnostics"):
+        data["diagnostics"] = result["diagnostics"]
+    # A successful tick reports current health immediately, but does not reset
+    # an outage's identity or delivery budget until recovery has been sampled.
+    if previous.get("delivery_id"):
+        for field in ("delivery_id", "first_failed_at", "delivery", "last_failure"):
+            if field in previous:
+                data[field] = previous[field]
     if not result["ok"]:
-        data["first_failed_at"] = previous.get("first_failed_at", now) if not previous.get("ok", True) else now
+        data["first_failed_at"] = previous.get("first_failed_at", now)
         continuing = not previous.get("ok", True)
         data["consecutive_failures"] = previous.get("consecutive_failures", 1) + 1 if continuing else 1
-        from robert_agent.supervision.rules import timestamp
-
-        first_failed = timestamp(data["first_failed_at"])
-        poll = config.get("supervision", {}).get("poll_seconds", supervision_config.DEFAULTS["poll_seconds"])
-        data["notification_eligible_at"] = (first_failed + timedelta(seconds=poll)).isoformat()
-        data["delivery"] = previous.get("delivery", {}) if continuing else {}
+        data["failure_streak_started_at"] = (
+            previous.get("failure_streak_started_at", data["first_failed_at"]) if continuing else now
+        )
+        data["notification_eligible_at"] = (
+            timestamp(data["failure_streak_started_at"]) + timedelta(seconds=poll)
+        ).isoformat()
+        data["delivery"] = previous.get("delivery", {})
         data["delivery_id"] = (
             "supervisor-health-"
             + hashlib.sha256((str(Path(config["db_path"]).resolve()) + data["first_failed_at"]).encode()).hexdigest()[
                 :24
             ]
         )
+        data["last_failure"] = {
+            "checked_at": now,
+            "reason_code": result.get("reason_code"),
+            "error_class": result.get("error_class"),
+            "safe_error": result.get("safe_error"),
+            "diagnostics": result.get("diagnostics", {}),
+        }
+    elif data.get("delivery_id"):
+        checked = timestamp(previous.get("checked_at"))
+        consecutive = bool(
+            previous.get("ok") and current and checked and 0 <= (current - checked).total_seconds() <= poll * 2 + 10
+        )
+        recovered_since = timestamp(previous.get("recovery_started_at")) if consecutive else current
+        data["recovery_started_at"] = (recovered_since or current).isoformat()
+        if consecutive and recovered_since and (current - recovered_since).total_seconds() >= max(300, poll * 2):
+            for field in ("delivery_id", "first_failed_at", "delivery", "recovery_started_at"):
+                data.pop(field, None)
     atomic_json(health_path(config), data)
-    if not result["ok"] and previous.get("ok", True):
+    if not result["ok"] and not previous.get("delivery_id"):
         print(
             "Robert supervision: observation unavailable; health recorded independently of the database",
             file=sys.stderr,

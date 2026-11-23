@@ -7,6 +7,7 @@ import subprocess
 from contextlib import closing
 from pathlib import Path
 
+from tests.support.work_items import example_choices
 from tests.support import review_input_workflow as review_fixtures
 from robert_agent.delivery.application import publish
 from robert_agent.runtime import cycle as run_once
@@ -286,6 +287,7 @@ class PublicationLifecycleFollowupTests(unittest.TestCase):
                     operator_question={
                         "kind": "clarification",
                         "summary": "Which behavior should be preserved?",
+                        "choices": example_choices(),
                     },
                 )
                 recorded = result.record_result(f.db_path, envelope, notifier=lambda _: None)

@@ -1,6 +1,7 @@
 import json
+import os
+import tempfile
 from pathlib import Path
-import shutil
 import subprocess
 
 from robert_agent.paths import default_data_dir
@@ -78,10 +79,11 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-async function runRobert(args, input) {
+async function runRobert(args, input, rawResult = false) {
   try {
     const serialized = input === undefined ? "" : JSON.stringify(input);
     if (Buffer.byteLength(serialized, "utf8") > 65536) {
+      if (rawResult) return { ok: false, safe_error: "Message exceeds the input limit." };
       return { text: "Message exceeds the input limit.", isError: true };
     }
     const pending = execFileAsync(
@@ -98,6 +100,7 @@ async function runRobert(args, input) {
     const { stdout } = await pending;
     if (inputError) return { text: "Robert could not receive the request.", isError: true };
     const parsed = JSON.parse(stdout);
+    if (rawResult) return parsed;
     if (parsed?.ok === true) {
       return { text: JSON.stringify(parsed, null, 2) };
     }
@@ -108,8 +111,10 @@ async function runRobert(args, input) {
   } catch (error) {
     try {
       const parsed = JSON.parse(error.stdout);
+      if (rawResult && typeof parsed?.safe_error === "string") return parsed;
       if (typeof parsed?.safe_error === "string") return { text: parsed.safe_error, isError: true };
     } catch {}
+    if (rawResult) return { ok: false, safe_error: "Robert command failed; inspect local diagnostics." };
     return {
       text: "Robert command failed; inspect local diagnostics.",
       isError: true,
@@ -134,9 +139,40 @@ export default definePluginEntry({
         thread: String(ctx.messageThreadId ?? ""), sender_id: ctx.senderId ?? "",
       };
     }
-    function runConfigured(args, input) {
+    function runConfigured(args, input, rawResult = false) {
       if (api.pluginConfig?.robertConfig) args.push("--config", api.pluginConfig.robertConfig);
-      return runRobert(args, input);
+      return runRobert(args, input, rawResult);
+    }
+    if (api.pluginConfig?.contextualReplies === true) {
+      api.on("reply_dispatch", async (event, host) => {
+        const ctx = event.ctx;
+        if (event.isTailDispatch || !ctx || ctx.CommandAuthorized !== true) return;
+        const body = String(ctx.RawBody ?? ctx.CommandBody ?? "").trim();
+        if (!body || body.startsWith("/") || event.sendPolicy === "deny"
+            || event.suppressUserDelivery || ctx.MediaPaths?.length || ctx.MediaPath) return;
+        const channel = ctx.Surface ?? ctx.Provider;
+        const identity = {
+          protocol: "robert.message.v1", provider: "openclaw", channel,
+          account: ctx.AccountId ?? "", conversation: ctx.From ?? "",
+          thread: String(ctx.MessageThreadId ?? ""), sender_id: ctx.SenderId ?? "",
+        };
+        const result = await runConfigured(["messages", "reply", "--output", "json"], {
+          ...identity, message_id: ctx.MessageSidFull ?? ctx.MessageSid ?? "", body,
+          quoted: Boolean(ctx.ReplyToIsQuote || ctx.ReplyToIdFull || ctx.ReplyToId || ctx.ReplyToBody),
+          quote_message_id: ctx.ReplyToIdFull ?? ctx.ReplyToId ?? "",
+          quote_body: ctx.ReplyToBody ?? "",
+        }, true);
+        if (result.status === "ignored") return;
+        const text = result.ok && result.status === "accepted"
+          ? `Robert 已收到答复。\\n关联消息: ${result.notification_id}\\n任务: ${result.task_id ?? "查看 /robert-inbox"}`
+          : result.ok && result.status === "no_question"
+            ? "Robert 当前没有已送达的待回复问题，请使用 /robert-inbox 查看。"
+            : `Robert 未提交答复: ${result.safe_error ?? "请查看本地诊断。"}`;
+        const queuedFinal = host.dispatcher.sendFinalReply({ text });
+        host.recordProcessed("completed", { reason: "robert_contextual_reply" });
+        host.markIdle("message_completed");
+        return { handled: true, queuedFinal, counts: host.dispatcher.getQueuedCounts() };
+      });
     }
     api.registerCommand({
       name: "robert-messaging-context",
@@ -169,12 +205,38 @@ export default definePluginEntry({
       acceptsArgs: true, requireAuth: true,
       handler: async (ctx) => {
         if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
-        const match = String(ctx.args ?? "").trim().match(/^(\\S+)\\s+(\\d+)\\s+(reply|approve|retry|retry_publish|cancel|ack)(?:\\s+([\\s\\S]*))?$/);
-        if (!match) return { text: "Usage: /robert-respond <message-id> <version> <action> [answer]", isError: true };
-        const [, notification_id, rawVersion, action, body = ""] = match;
+        const args = String(ctx.args ?? "").trim();
+        const button = args.match(/^([ad])([A-Za-z0-9_-]{22}):(\\d+):([1-5x])$/);
+        const typed = args.match(/^(\\S+)\\s+(\\d+)\\s+(reply|approve|retry|retry_publish|cancel|ack|pick)(?:\\s+([\\s\\S]*))?$/);
+        if (!button && !typed) return { text: "Usage: /robert-respond <message-id> <version> <action> [answer]", isError: true };
+        let notification_id, rawVersion, action, body, choice;
+        if (button) {
+          const [, prefix, encoded, version, selected] = button;
+          const identifier = Buffer.from(encoded, "base64url");
+          if (identifier.toString("base64url") !== encoded)
+            return { text: "Invalid question reference.", isError: true };
+          notification_id = (prefix === "a" ? "attention-wie-" : "decision-") + identifier.toString("hex");
+          rawVersion = version;
+          action = selected === "x" ? "custom_reply" : "reply";
+          if (action === "reply") choice = Number(selected);
+          body = "";
+        } else {
+          [, notification_id, rawVersion, action, body = ""] = typed;
+          if (action === "pick") {
+            if (!/^[1-5]$/.test(body)) return { text: "Choose an option number from 1 to 5.", isError: true };
+            choice = Number(body);
+            action = "reply";
+            body = "";
+          }
+        }
         const version = Number(rawVersion);
         if (!Number.isSafeInteger(version)) return { text: "Invalid version.", isError: true };
-        return runConfigured(["messages", "respond", "--output", "json"], { ...identity(ctx), notification_id, version, action, body });
+        const result = await runConfigured(["messages", "respond", "--output", "json"],
+          { ...identity(ctx), notification_id, version, action, body, choice }, button != null || choice !== undefined);
+        if (!button && choice === undefined) return result;
+        if (result.ok && result.status === "awaiting_custom_reply") return { text: result.message };
+        if (result.ok) return { text: "Robert 已收到你的选择。" };
+        return { text: result.safe_error ?? "Robert 未提交答复。", isError: true };
       },
     });
     api.registerCommand({
@@ -257,6 +319,26 @@ def write_plugin(plugin_dir, force=False, dry_run=False):
                     "robert openclaw status to inspect the installed plugin."
                 ),
             }
+    if path.is_symlink() or path.resolve() in {Path.home().resolve(), Path(path.anchor or "/")}:
+        return {"ok": False, "status": "unsafe_target", "safe_error": "Plugin target must be a dedicated directory."}
+    if path.exists():
+        try:
+            owned = (
+                all(
+                    (path / name).is_file() and not (path / name).is_symlink()
+                    for name in ("package.json", "openclaw.plugin.json", "index.js")
+                )
+                and json.loads((path / "openclaw.plugin.json").read_text())["id"] == PLUGIN_ID
+                and json.loads((path / "package.json").read_text())["name"] == "openclaw-robert-commands-local"
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            owned = False
+        if not owned:
+            return {
+                "ok": False,
+                "status": "unsafe_target",
+                "safe_error": "--force only updates an existing Robert plugin.",
+            }
     package = {
         "name": "openclaw-robert-commands-local",
         "version": "0.1.0",
@@ -272,7 +354,10 @@ def write_plugin(plugin_dir, force=False, dry_run=False):
         "configSchema": {
             "type": "object",
             "additionalProperties": False,
-            "properties": {"robertConfig": {"type": "string", "minLength": 1}},
+            "properties": {
+                "robertConfig": {"type": "string", "minLength": 1},
+                "contextualReplies": {"type": "boolean", "default": False},
+            },
         },
     }
     files = {
@@ -299,11 +384,19 @@ def write_plugin(plugin_dir, force=False, dry_run=False):
             "plugin_dir": str(path),
             "files": sorted(files),
         }
-    if path.exists():
-        shutil.rmtree(path)
-    path.mkdir(parents=True)
+    path.mkdir(parents=True, exist_ok=True)
     for name, content in files.items():
-        (path / name).write_text(content, encoding="utf-8")
+        # Replace the directory entry; never overwrite an existing inode that
+        # could also be linked from an unrelated path.
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path, delete=False) as output:
+                temporary = Path(output.name)
+                output.write(content)
+            os.replace(temporary, path / name)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     return {
         "ok": True,
         "status": "written",

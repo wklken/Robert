@@ -22,6 +22,7 @@ def insert_for_ensure_github_work_item(
     activated_at,
     created_at,
     now,
+    origin_type="github",
 ):
     stmt = insert(tables["work_items"]).values(
         {
@@ -30,7 +31,7 @@ def insert_for_ensure_github_work_item(
             "title": bindparam("p2"),
             "description": sql_constant(""),
             "priority": sql_constant("P1"),
-            "origin_type": sql_constant("github"),
+            "origin_type": bindparam("p10"),
             "origin_source_id": bindparam("p3"),
             "routing_mode": sql_constant("auto"),
             "requested_worker": null(),
@@ -59,6 +60,7 @@ def insert_for_ensure_github_work_item(
             "p7": activated_at,
             "p8": created_at,
             "p9": now,
+            "p10": origin_type,
         },
     )
 
@@ -331,7 +333,6 @@ def edit_fields(conn, work_item_id, fields, now):
         "title",
         "description",
         "priority",
-        "route_id",
         "requested_worker",
         "routing_mode",
     }

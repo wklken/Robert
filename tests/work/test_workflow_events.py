@@ -84,6 +84,43 @@ class WorkflowEventClassifierTests(unittest.TestCase):
 
 
 class WorkflowEventApplicationTests(WorkflowEventApplicationFixture):
+    def test_new_input_does_not_apply_facts_to_stopped_execution(self):
+        self._bind()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            for status in ("terminal", "attention"):
+                with self.subTest(binding_status=status):
+                    conn.execute("UPDATE execution_subjects SET binding_status=?", (status,))
+                    binding = execution_store.get_binding(conn, "task", "task-1")
+                    result = facts.apply_workflow_event_fact(conn, _fact(workstream_id="ws-1"), NOW)
+                    self.assertIsNone(result)
+                    self.assertEqual(execution_store.get_binding(conn, "task", "task-1"), binding)
+                    self.assertEqual(conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0], 0)
+
+    def test_recorded_fact_remains_replayable_after_execution_closes(self):
+        self._bind()
+        fact = _fact()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            execution_operations.apply_classified_fact(conn, "task", "task-1", fact, now=NOW)
+            execution_store.close_binding(conn, "task", "task-1", NOW)
+            binding = execution_store.get_binding(conn, "task", "task-1")
+            result = execution_operations.apply_classified_fact(conn, "task", "task-1", fact, now=NOW)
+            self.assertTrue(result["duplicate"])
+            self.assertEqual(execution_store.get_binding(conn, "task", "task-1"), binding)
+            with self.assertRaisesRegex(ValueError, "not active"):
+                execution_operations.apply_classified_fact(conn, "task", "task-1", _fact(fact_id="event:new"), now=NOW)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0], 1)
+
+    def test_unproven_invalidation_still_requires_attention_for_active_execution(self):
+        self._bind()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            result = facts.apply_workflow_event_fact(
+                conn, _fact(workstream_id="ws-1", event_type="snapshot", invalidation_reason="head_changed"), NOW
+            )
+            self.assertEqual(result["classification"], "invalidating")
+            self.assertIn("old_head_sha", result["validation_error"])
+            self.assertEqual(execution_store.get_binding(conn, "task", "task-1")["binding_status"], "attention")
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM execution_fact_receipts").fetchone()[0], 0)
+
     def test_invalidation_persists_attention_and_receipt_atomically(self):
         self._bind()
         fact = _fact(old_head_sha="a" * 40, new_head_sha="b" * 40, event_type="snapshot")

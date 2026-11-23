@@ -15,6 +15,7 @@ from robert_agent.execution import operations as execution_operations
 from robert_agent.persistence import execution_control as execution_store
 
 from robert_agent.delivery.application import scope as publication_scope
+from robert_agent.delivery.application import tapd_comments
 from robert_agent.delivery import intents as intent_facts
 from robert_agent.delivery import notifications as publication_notifications
 from robert_agent.delivery import values as publication_values
@@ -69,10 +70,45 @@ def mark_attention(conn, action, intent, scope, reconciliation, now):
     insert_workflow_attention_notification(conn, action, reason_code, now)
 
 
+def schedule_reconcile_retry(conn, action, reconciliation, now):
+    """Keep an unresolved effect executing while its failed read retries within the shared budget."""
+    intent = intent_facts.load_intent(conn, action["action_id"])
+    if not intent or intent["status"] != PublicationStatus.EXECUTING:
+        return None
+    fresh = db_records.first(db_read_github_actions.find_metadata_json_by_action_id(conn, action["action_id"]))
+    metadata = publication_values.decode_json(fresh[0] if fresh else action["metadata_json"])
+    prior = dict(metadata.get("publish") or {})
+    previous = prior.get("reconcile_retry", {})
+    if not isinstance(previous, dict):
+        return None
+    reason_code = str(reconciliation.get("reason_code", ""))[:96]
+    state = retry_policy.failure_state(previous, reason_code, now)
+    if not state["retryable"]:
+        return None
+    # A publish_failed status keeps later actions of the result behind this unresolved effect.
+    metadata["publish"] = {
+        **prior,
+        "status": "publish_failed",
+        "reconcile_required": True,
+        "next_retry_at": state["next_retry_at"],
+        "safe_error": f"Publication reconciliation read failed: {reason_code}",
+        "reconcile_retry": {
+            "attempt_count": state["attempt_count"],
+            "first_failed_at": state["first_failed_at"],
+            "failed_at": now,
+            "reason_code": reason_code,
+        },
+    }
+    db_write_github_actions.set_metadata_json_by_action_id(
+        conn, publication_values.encode_json(metadata), action["action_id"]
+    )
+    return state
+
+
 def mark_skipped(conn, action, result, now):
     review_publish.record_outcome(conn, action, result.get("status"), now)
     vote_publish.record_outcome(conn, action, result.get("status"), now)
-    if result.get("status") == "superseded":
+    if result.get("status") in {"superseded", tapd_comments.PR_TERMINAL}:
         intent = intent_facts.load_intent(conn, action["action_id"])
         if intent and intent["status"] == PublicationStatus.EXECUTING:
             execution_store.transition_publication_intent(
@@ -80,7 +116,10 @@ def mark_skipped(conn, action, result, now):
                 intent["publication_id"],
                 PublicationStatus.CONFIRMED_ABSENT.value,
                 now,
-                remote_evidence={"reason_code": "publication_superseded", "status": "confirmed_absent"},
+                remote_evidence={
+                    "reason_code": "publication_superseded" if result["status"] == "superseded" else result["status"],
+                    "status": "confirmed_absent",
+                },
             )
     metadata = publication_values.decode_json(action["metadata_json"])
     metadata["publish"] = {
@@ -140,7 +179,10 @@ def record_failure(conn, action, result, now, *, reconcile_required=False):
     metadata = publication_values.decode_json(fresh[0] if fresh else action["metadata_json"])
     prior = dict(metadata.get("publish") or {})
     if prior.get("attempt_charged"):
-        prior["attempt_count"] = max(0, int(prior.get("attempt_count", 0)) - 1)
+        try:
+            prior["attempt_count"] = max(0, int(prior.get("attempt_count", 0)) - 1)
+        except (ValueError, TypeError, OverflowError):
+            prior["attempt_count"] = retry_policy.MAX_ATTEMPTS
     state = retry_policy.failure_state(prior, result.get("safe_error"), now, retryable=result.get("retryable", True))
     # Authentication, permission, and branch rejections establish failure.
     # Only an ambiguous transport outcome needs a final reconciliation pass.

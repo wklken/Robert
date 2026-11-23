@@ -4,12 +4,15 @@ from sqlalchemy import case, func, select
 
 from robert_agent.persistence import statements
 from robert_agent.persistence.catalog import tables
+from robert_agent.persistence.queries.run_summaries import resolved_summary
 
 
 def steps(conn, run_ids):
     steps, runs = tables["run_steps"], tables["agent_runs"]
     step = steps.c
-    referenced = case((step.step_key == "summarize", runs.c.summary_json)).label("referenced_summary_json")
+    referenced = case((step.step_key.in_(("summarize", "repo_pipelines")), resolved_summary(conn, runs))).label(
+        "referenced_summary_json"
+    )
     query = (
         select(
             step.run_id,

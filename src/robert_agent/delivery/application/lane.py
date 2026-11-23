@@ -13,6 +13,7 @@ from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.adapters.github import read as github_read
 
 from robert_agent.adapters.github import budget as github_budget
+from robert_agent.delivery.application import proposal_feedback, receipt_notifications, tapd_notifications
 
 
 def publish(config_path, *, dry_run=False):
@@ -35,6 +36,8 @@ def publish(config_path, *, dry_run=False):
             repo_ids.append(row[0])
     if not dry_run:
         notify.deliver_pending(config["db_path"], repo_ids=repo_ids, config=config)
+        receipt_notifications.deliver_pending(config, repo_ids=repo_ids)
+        tapd_notifications.deliver_pending(config)
         session = github_read.GitHubReadSession(
             config["db_path"],
             account=config["repos"][0]["github_account"],
@@ -51,6 +54,8 @@ def publish(config_path, *, dry_run=False):
             raise
         except (subprocess.SubprocessError, OSError, ValueError):
             return {"ok": False, "status": "rate_limit_check_failed"}
+    if not dry_run:
+        proposal_feedback.deliver_pending(config)
     for repo_id in repo_ids:
         results.append(
             publisher.publish_ready_actions(config["db_path"], repo_id=repo_id, dry_run=dry_run, limit=5, config=config)

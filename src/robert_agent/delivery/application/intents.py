@@ -18,7 +18,9 @@ from robert_agent.supervision import git as supervision_git
 
 from robert_agent.delivery.application import effects as publication_effects
 from robert_agent.delivery.application import scope as publication_scope
+from robert_agent.delivery.application import tapd_comments
 from robert_agent.delivery import intents as intent_facts
+from robert_agent.foundation import tapd_identity
 from robert_agent.delivery import values as publication_values
 
 
@@ -117,6 +119,11 @@ def prepare_publication_intent(db_path, action_id, run_command):
     if intent is None:
         if scope is None or not isinstance(scope, dict):
             return {"state": "scope_missing", "action": action, "intent": None, "scope": None}
+        if action.get("action_type") == GitHubActionType.COMMENT and tapd_identity.parse_ticket_url(
+            action.get("target_url")
+        ):
+            with closing(db_database.connect(db_path)) as conn, conn:
+                action = tapd_comments.link_pull_request(conn, action)
         try:
             idempotency_key, request_fingerprint = publication_reconcile.derive_publication_keys(action, scope)
         except ValueError:

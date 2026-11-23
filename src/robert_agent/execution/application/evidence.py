@@ -18,6 +18,7 @@ from robert_agent.foundation import values
 from robert_agent.execution import command as command_heartbeat
 from robert_agent.execution import progress as worker_snapshot
 from robert_agent.execution import rounds as native_rounds
+from robert_agent.persistence.rounds import pre_pr_review
 import hashlib
 import json
 import os
@@ -140,7 +141,7 @@ def _command_process_status(pid, identity):
     current_identity = command_heartbeat.process_identity(pid)
     if identity and current_identity and identity != current_identity:
         return "not_found"
-    return "alive" if current_identity else "unknown"
+    return "alive" if identity and current_identity else "unknown"
 
 
 def attempt_command_records(conn, attempt_id, task_id, *, persist=True):
@@ -256,15 +257,24 @@ def terminal_transport_failure(logs):
 
 def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
 
-    review = native_rounds.session(conn, task_id=task_id) if conn is not None else None
+    review = (
+        native_rounds.session(conn, task_id=task_id) or pre_pr_review.session(conn, task_id=task_id)
+        if conn is not None
+        else None
+    )
     if review:
+        revision_changed = (
+            review["status"] == RoundStatus.SUPERSEDED
+            and review.get("error") == "PR head/base changed after context preparation"
+        )
         row = db_records.first(db_read_attempts.find_metadata_json_by_attempt_id(conn, attempt_id))
         diagnostic = values.json_object(row[0] if row else None).get("submission_validation", {})
         return {
             "status": "recoverable_progress"
-            if review["status"] not in {RoundStatus.CANCELED, RoundStatus.SUPERSEDED, RoundStatus.ATTENTION}
+            if revision_changed
+            or review["status"] not in {RoundStatus.CANCELED, RoundStatus.SUPERSEDED, RoundStatus.ATTENTION}
             else "unrecoverable",
-            "reason_code": "native_review_checkpoint",
+            "reason_code": "review_revision_changed" if revision_changed else "native_review_checkpoint",
             "round_id": review["round_id"],
             "task_id": task_id,
             "previous_attempt_id": attempt_id,

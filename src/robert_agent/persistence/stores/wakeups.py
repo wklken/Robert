@@ -1,15 +1,24 @@
 """Shared stores operations for wakeups."""
 
-from robert_agent.foundation.contracts.work import PUBLICATION_RETRY_WAKEUP_KIND, WakeupStatus
+from robert_agent.foundation.contracts.work import PUBLICATION_RETRY_WAKEUP_KIND, TaskLifecycle, WakeupStatus
 
 from robert_agent.persistence.expressions import sql_constant
 
-from sqlalchemy import update, delete, bindparam, and_, not_, null, func
+from sqlalchemy import update, delete, bindparam, and_, or_, not_, null, func, select
 from sqlalchemy.dialects.sqlite import insert
 
 
 from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
+
+
+def delete_tapd_observations(conn, wakeup_ids):
+    wakeup = tables["wakeups"]
+    stmt = delete(wakeup).where(
+        wakeup.c.wakeup_id.in_(bindparam("items", expanding=True)),
+        func.json_extract(wakeup.c.metadata_json, "$.kind") == "tapd_observation_ready",
+    )
+    return statements.write(conn, stmt, {"items": wakeup_ids})
 
 
 def update_for_publish_ready_actions(conn, value_1, task_id):
@@ -82,18 +91,39 @@ def insert_worker_result_wakeup(
     )
 
 
-def update_for_cancel_execution(conn, now, work_item_id):
+def update_for_cancel_execution(conn, now, work_item_id, *, task_ids):
     stmt = (
         update(tables["wakeups"])
         .values({"status": sql_constant(WakeupStatus.CANCELED.value), "updated_at": bindparam("p0")})
         .where(
             and_(
-                (tables["wakeups"].c["work_item_id"] == bindparam("p1")),
+                or_(
+                    tables["wakeups"].c["work_item_id"] == bindparam("p1"),
+                    tables["wakeups"].c["task_id"].in_(bindparam("task_ids", expanding=True)),
+                ),
                 (tables["wakeups"].c["status"] == sql_constant(WakeupStatus.PENDING.value)),
             )
         )
     )
-    return statements.write(conn, stmt, {"p0": now, "p1": work_item_id})
+    return statements.write(conn, stmt, {"p0": now, "p1": work_item_id, "task_ids": task_ids})
+
+
+def cancel_terminal_task_requests(conn, task_id, now):
+    """Retire obsolete request hints with the source-owned task cancellation."""
+    wakeups, tasks = tables["wakeups"], tables["tasks"]
+    canceled = select(1).where(tasks.c.task_id == task_id, tasks.c.lifecycle == TaskLifecycle.CANCELED.value)
+    stmt = (
+        update(wakeups)
+        .values(status=WakeupStatus.CANCELED.value, updated_at=now)
+        .where(
+            wakeups.c.task_id == task_id,
+            wakeups.c.status == WakeupStatus.PENDING.value,
+            wakeups.c.reason == "manual_operator_request",
+            func.coalesce(func.json_extract(wakeups.c.metadata_json, "$.kind"), "") != "github_retrigger",
+            canceled.exists(),
+        )
+    )
+    return statements.write(conn, stmt)
 
 
 def update_for_finalize_superseded_result(conn, now, result_id):

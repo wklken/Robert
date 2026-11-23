@@ -83,6 +83,20 @@ class SupervisionActionTests(unittest.TestCase):
             config=config or self.config,
         )
 
+    def test_unrelated_cancellation_does_not_block_recovery(self):
+        self.task("other", "other-lineage")
+        self.conn.execute(
+            "INSERT INTO work_items(work_item_id,repo_id,workstream_id,origin_type,title,"
+            "creation_idempotency_key,created_by,created_at,updated_at,canceled_at) "
+            "VALUES('other-item','repo','stream-other','web','Canceled','other','operator',?,?,?)",
+            (NOW, NOW, NOW),
+        )
+        self.assertEqual(len(self.plan()), 1)
+        self.assertEqual(self.begin()["status"], "claimed")
+        self.assertEqual(
+            actions.plan(self.conn, observations=[self.observation("other")], now=NOW, config=self.config), []
+        )
+
     def test_plan_reserves_once_without_mutating_business_state(self):
         first = self.plan()
         self.assertEqual(len(first), 1)
@@ -229,6 +243,19 @@ class SupervisionActionTests(unittest.TestCase):
             validate.assert_not_called()
             self.assertEqual(self.begin(config=config)["reason_code"], "recovery_policy_unavailable")
             validate.assert_called_once()
+
+    def test_unclaimed_native_retry_waits_for_decision_in_readiness_and_consumer(self):
+        self.conn.commit()
+        config = {**self.config, "supervision": {"mode": "decide"}}
+        for kind in actions.STAGES:
+            with self.subTest(kind=kind):
+                arguments = dict(
+                    task_id="task", kind=kind, target_id="native-target", now=NOW, config=config, native_retry=True
+                )
+                self.assertTrue(actions.blocks_consumer(self.conn, **arguments))
+                self.assertEqual(actions.begin(self.conn, **arguments)["reason_code"], "waiting_for_model_decision")
+                self.assertFalse(self.conn.in_transaction)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM supervision_recovery_actions").fetchone()[0], 0)
 
     def test_cancellation_after_claim_prevents_later_application(self):
         self.plan()

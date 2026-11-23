@@ -21,6 +21,8 @@ from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from contextlib import contextmanager
 from pathlib import Path
 from robert_agent.adapters.processes import attempt as attempt_process
+from robert_agent.adapters.processes import model_usage
+from robert_agent.execution.usage import record_dispatch_usage
 from robert_agent.execution.application import evidence
 from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import lifecycle as work_application_lifecycle
@@ -179,7 +181,7 @@ def supervise_running_attempts(
                 started_at=started_at,
                 now=now_dt,
                 heartbeat_stale_seconds=config_result.get("heartbeat_stale_seconds", 1200),
-                global_timeout_seconds=config_result.get("hard_timeout_seconds", 2700),
+                global_timeout_seconds=config_result.get("hard_timeout_seconds", 3600),
                 hard_timeout_seconds=worker_timeout_seconds,
             )
         process_status = {"status": "not_checked"}
@@ -192,8 +194,16 @@ def supervise_running_attempts(
         }:
             conn.commit()  # Process observation may wait; never retain the domain writer.
             process_status = attempt_process.dispatch_status(metadata)
+            dispatch = metadata.get("dispatch")
+            dispatch = dispatch if isinstance(dispatch, dict) else {}
+            observed = (
+                model_usage.read_dispatch(data_dir, dispatch)
+                if data_dir is not None and process_status["status"] == "dead"
+                else {}
+            )
             if not _supervision_observation_current(conn, attempt_id, task_id, snapshot, received_result, run_now):
                 continue
+            record_dispatch_usage(conn, data_dir, "worker", attempt_id, task_id, dispatch, observed=observed)
         if received_result and process_status["status"] != "unknown":
             if process_status["status"] == "dead" or status.get("terminate"):
                 if process_status["status"] == "dead":
@@ -288,7 +298,10 @@ def supervise_running_attempts(
                 and db_path is not None
                 and repo is not None
             ):
-                if supervision_decisions.enabled(config_result):
+                if (
+                    supervision_decisions.enabled(config_result)
+                    or recovery.get("reason_code") == "review_revision_changed"
+                ):
                     conn.commit()
                     stopped = native_rounds.terminate_children(conn, task_id) != "attention"
                     if not _supervision_observation_current(
@@ -323,6 +336,7 @@ def supervise_running_attempts(
                             "task_id": task_id,
                             "attempt_id": attempt_id,
                             "recovery_status": recovery["status"],
+                            "reason_code": recovery.get("reason_code"),
                             "identity_status": "dead",
                             "failure": recovery.get("error_class"),
                         },
@@ -392,6 +406,7 @@ def supervise_running_attempts(
                         attempt_id,
                         run_now,
                         recovery,
+                        config_result=config_result,
                     )
                     if resume:
                         supervision_decisions.executed(conn, config_result, workstream_id, {"resume": resume}, run_now)
@@ -666,6 +681,7 @@ def recover_failed_timeout_attempts(
                 "task_id": task_id,
                 "attempt_id": attempt_id,
                 "recovery_status": recovery["status"],
+                "reason_code": recovery.get("reason_code"),
                 "identity_status": "dead",
                 "failure": recovery.get("error_class"),
             },
@@ -715,6 +731,7 @@ def recover_failed_timeout_attempts(
             attempt_id,
             run_now,
             recovery,
+            config_result=config_result,
         )
         if not resume:
             _record_recovery_creation_attention(
@@ -774,6 +791,11 @@ def terminate_owned_attempt(conn, task_id, metadata):
     if outcome.get("status") in {"terminated", "not_found", "already_dead"}:
         if native_rounds.terminate_children(conn, task_id) == "attention":
             return {"status": "attention", "reason": "native_model_cleanup_unconfirmed"}
+        dispatch = metadata.get("dispatch")
+        if isinstance(dispatch, dict) and dispatch.get("attempt_id"):
+            database = db_sqlite.main_database_path(conn)
+            if database:
+                record_dispatch_usage(conn, database.parent, "worker", dispatch["attempt_id"], task_id, dispatch)
     return outcome
 
 

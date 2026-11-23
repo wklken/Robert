@@ -15,6 +15,7 @@ from robert_agent.delivery import values as publication_values
 from robert_agent.delivery.application import publish
 from robert_agent.persistence.schema import database as storage
 from robert_agent.supervision import actions as supervision_actions
+from robert_agent.supervision.application import observation as supervision_observe
 from robert_agent.supervision.application import publication as supervision_publication
 
 
@@ -45,6 +46,10 @@ class SupervisedPublicationTests(unittest.TestCase):
         self.error = "connection reset by peer"
 
     def runner(self, command, **kwargs):
+        if command[:3] == ["git", "remote", "get-url"]:
+            return SimpleNamespace(returncode=0, stdout="https://github.com/x/y.git\n", stderr="")
+        if command[:3] == ["git", "ls-remote", "--get-url"]:
+            return SimpleNamespace(returncode=0, stdout=command[-1] + "\n", stderr="")
         self.commands.append(command[:2])
         if command[:2] == ["git", "ls-remote"]:
             return SimpleNamespace(returncode=0, stdout=self.remote, stderr="")
@@ -207,6 +212,37 @@ class SupervisedPublicationTests(unittest.TestCase):
         self.cycle(config=self.config)
         self.assertEqual(self.commands.count(["git", "push"]), 1)
         self.assertEqual(self.intent()[0], "published")
+        self.verify()
+        self.assertEqual(self.actions(), [("publication_reconcile", "succeeded", 1)])
+
+    def test_failed_reconcile_read_is_observed_until_native_recheck_confirms(self):
+        self.cycle()
+        self.request("publication_reconcile", 60)
+        original = self.runner
+
+        def unreadable(command, **kwargs):
+            if command[:3] == ["git", "ls-remote", "--heads"]:
+                self.commands.append(command[:2])
+                return SimpleNamespace(returncode=128, stdout="", stderr="connection reset")
+            return original(command, **kwargs)
+
+        with mock.patch.object(self, "runner", side_effect=unreadable):
+            self.cycle(config=self.config)
+        self.assertEqual(self.intent()[0], "executing")
+        self.assertEqual(self.actions(), [("publication_reconcile", "observing", 1)])
+
+        def publication(now):
+            rows = supervision_observe.collect(self.db, now=now)["observations"]
+            row = next(row for row in rows if row["rule_id"] == "publication_stalled")
+            return row["classification"], row["reason_code"]
+
+        self.assertEqual(publication(self.now), ("expected_wait", "publication_backoff"))
+        self.assertEqual(publication(self.now + timedelta(seconds=600)), ("confirmed", "publication_effect_unresolved"))
+
+        self.remote = "b" * 40 + "\trefs/heads/codex/fix\n"
+        self.cycle(60, self.config)
+        self.assertEqual(self.intent()[0], "published")
+        self.assertEqual(self.commands.count(["git", "push"]), 1)
         self.verify()
         self.assertEqual(self.actions(), [("publication_reconcile", "succeeded", 1)])
 

@@ -1,20 +1,22 @@
 """Audit saved results with fresh execution and publication evidence."""
 
-from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.delivery import AuditStatus, OutputType
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
+from robert_agent.delivery.application import tapd_publication
+from robert_agent.work import queries as work_queries
 
 from robert_agent.persistence import transactions as db_transactions
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
 from robert_agent.persistence.queries import dispatch_requests as dispatch_queries
-from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
 from robert_agent.persistence.stores import attempts as db_write_attempts
 from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import worker_results as db_write_worker_results
 from robert_agent.delivery.application import audit as audit_result
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.delivery import results
 from robert_agent.delivery.application import scope as result_scope
 from robert_agent.execution.application import evidence
@@ -28,7 +30,7 @@ from robert_agent.execution import ownership as execution_ownership
 from robert_agent.execution import retry as retry_policy
 from robert_agent.foundation import commands as control_commands
 from robert_agent.foundation import values
-from robert_agent.readmodels import usage
+from robert_agent.adapters.processes import model_usage
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.work import wakeup
 from robert_agent.workflows import pr_remediation as remediation
@@ -37,10 +39,20 @@ import json
 import subprocess
 
 
-def _record_result_usage_status(conn, attempt_id, result_id):
+def _record_result_usage_status(conn, attempt_id, result_id, data_dir):
     attempt_row = db_records.first(db_read_attempts.find_metadata_json_by_attempt_id(conn, attempt_id))
     attempt_metadata = values.json_object(attempt_row[0] if attempt_row else None)
-    usage_status = usage.extract_attempt_usage(attempt_metadata)
+    dispatch = attempt_metadata.get("dispatch")
+    dispatch = dispatch if isinstance(dispatch, dict) else {}
+    observed = (
+        model_usage.read_dispatch(data_dir, dispatch)
+        if dispatch.get("worker_agent")
+        else model_usage.read_legacy_log(dispatch.get("stdout_path"))
+    )
+    if observed.get("usage_available"):
+        usage_status = observed
+    else:
+        usage_status = attempt_metadata.get("usage") or observed or model_usage.event_usage(None)
     if attempt_row and attempt_metadata.get("usage") != usage_status:
         attempt_metadata["usage"] = usage_status
         db_write_attempts.set_metadata_json_by_attempt_id(
@@ -108,8 +120,7 @@ def audit_completed_results(
         if not evidence.inspection_due(observation, run_now):
             continue
         payload = results.load_result_payload(conn, result_row)
-        origin_row = db_records.first(db_read_work_items.find_origin_type_by_workstream_id(conn, workstream_id))
-        origin_type = origin_row[0] if origin_row else "github"
+        origin_type = result_scope.origin_type(conn, payload["task_id"], workstream_id)
         recovery_config = None if dry_run else config_result
         if not conn.in_transaction:
             db_transactions.begin(conn, immediate=True)
@@ -125,7 +136,8 @@ def audit_completed_results(
         if gate["status"] == "blocked":
             continue
         claim = gate.get("claim")
-        _record_result_usage_status(conn, payload["attempt_id"], payload["result_id"])
+        _record_result_usage_status(conn, payload["attempt_id"], payload["result_id"], data_dir)
+        ticket = work_queries.tapd_origin(conn, workstream_id)
         conn.commit()
         try:
             action_scope = result_scope.for_result(
@@ -134,6 +146,17 @@ def audit_completed_results(
                 payload["attempt_id"],
                 workstream_id,
                 command_runner=control_commands.run_command,
+            )
+            tapd_violation = (
+                tapd_publication.check(
+                    payload["planned_github_actions"],
+                    action_scope or {},
+                    ticket,
+                    (config_result or {}).get("tapd"),
+                    run_command=control_commands.run_command,
+                )
+                if ticket
+                else None
             )
         except ControlDeadlineExceeded:
             raise
@@ -223,6 +246,35 @@ def audit_completed_results(
             remediation_attestation=remediation_attestation,
             review_input_policy=task_metadata.get("review_input_policy", "required"),
         )
+        review = pre_pr_review.session(conn, task_id=payload["task_id"])
+        if review or task_metadata.get("pre_pr_review_required"):
+            metadata = values.json_object(result_row[7])
+            if (
+                not review
+                or not action_scope
+                or not pre_pr_review.matches_submission(
+                    review,
+                    payload["attempt_id"],
+                    metadata.get("submission_fingerprint"),
+                    head=action_scope.get("result_head_sha") or "",
+                    result_id=payload["result_id"],
+                )
+            ):
+                audit = {
+                    "ok": False,
+                    "status": AuditStatus.POLICY_VIOLATION.value,
+                    "violations": ["pre_pr_review_proof_mismatch"],
+                    "safe_error": "The final result is missing a matching review and disposition record.",
+                }
+            elif audit["status"] == "accepted":
+                audit["action_scope"]["pre_pr_review"] = review["proof"]
+        if tapd_violation:
+            audit = {
+                "ok": False,
+                "status": AuditStatus.POLICY_VIOLATION.value,
+                "violations": [tapd_violation],
+                "safe_error": "GitHub content contains a TAPD identifier or its commit range could not be verified.",
+            }
         if claim and not supervision_actions.finish(
             conn,
             claim,

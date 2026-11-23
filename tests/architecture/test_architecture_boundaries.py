@@ -67,6 +67,8 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             "robert_agent.resource_files",
             "robert_agent.worker_adapters",
             "robert_agent.foundation.commands",
+            "robert_agent.foundation.timestamps",
+            "robert_agent.foundation.tapd_identity",
         )
         for name, dependencies in self.graph.items():
             if name.startswith("robert_agent.configuration."):
@@ -79,8 +81,11 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                     )
 
     def test_pure_policies_have_no_application_dependencies(self):
-        self.assert_dependencies("robert_agent.work.policies", ())
-        self.assert_dependencies("robert_agent.delivery.policies", {"robert_agent.foundation.contracts.delivery"})
+        self.assert_dependencies("robert_agent.work.policies", {"robert_agent.foundation.contracts.work"})
+        self.assert_dependencies(
+            "robert_agent.delivery.policies",
+            {"robert_agent.foundation.contracts.delivery", "robert_agent.foundation.question_choices"},
+        )
         self.assert_dependencies(
             "robert_agent.work.inputs", {"robert_agent.work.errors", "robert_agent.foundation.contracts.work"}
         )
@@ -93,6 +98,28 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom):
                     self.assertEqual(node.module, "enum", (name, node.lineno))
                 self.assertNotIsInstance(node, (ast.Import, ast.FunctionDef, ast.AsyncFunctionDef))
+
+    def test_shared_timestamps_are_a_standard_library_leaf(self):
+        name = "robert_agent.foundation.timestamps"
+        self.assert_dependencies(name, ())
+        path = PACKAGE / "foundation/timestamps.py"
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                self.assertEqual(node.module, "datetime", (name, node.lineno))
+            self.assertNotIsInstance(node, ast.Import)
+
+    def test_shared_tapd_identity_is_a_standard_library_leaf(self):
+        name = "robert_agent.foundation.tapd_identity"
+        self.assert_dependencies(name, ())
+        path = PACKAGE / "foundation/tapd_identity.py"
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                self.assertEqual(node.module, "urllib.parse", (name, node.lineno))
+            if isinstance(node, ast.Import):
+                self.assertEqual([alias.name for alias in node.names], ["re"], (name, node.lineno))
+
+    def test_shared_question_choices_have_no_domain_dependencies(self):
+        self.assert_dependencies("robert_agent.foundation.question_choices", ())
 
     def test_leaf_capabilities_do_not_import_their_callers(self):
         lower = (
@@ -151,7 +178,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             else:
                 continue
             for dependency in dependencies - {"robert_agent"}:
-                if name.startswith("robert_agent.persistence.") and dependency in VALUE_CONTRACTS:
+                if name.startswith("robert_agent.persistence.") and (
+                    dependency in VALUE_CONTRACTS or dependency == "robert_agent.foundation.timestamps"
+                ):
                     continue
                 self.assertIn(dependency.split(".")[1], allowed, (name, dependency))
 
@@ -211,10 +240,12 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assert_dependencies(
             "robert_agent.delivery.contract",
             {
+                "robert_agent.context.memory_policy",
                 "robert_agent.delivery",
                 "robert_agent.delivery.policies",
                 "robert_agent.foundation.contracts.delivery",
                 "robert_agent.foundation.contracts.work",
+                "robert_agent.foundation.tapd_identity",
             },
         )
         for dependency in self.graph["robert_agent.execution.stages"]:

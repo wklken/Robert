@@ -8,6 +8,7 @@ import shlex
 import sys
 from string import Template
 
+from robert_agent.foundation import question_choices
 from robert_agent.context.prompt_contract import ContextItem, PromptInput, RenderedPrompt
 from robert_agent.context.prompt_profiles import GUIDANCE, STAGES
 from robert_agent.context.worker_prompt import worker_prompt_input
@@ -120,7 +121,7 @@ def render_prompt(request: PromptInput) -> RenderedPrompt:
         return loaded[path]
 
     template_values = dict(request.values)
-    sections = {name: [] for name in _SECTIONS}
+    sections: dict[str, list[str]] = {name: [] for name in _SECTIONS}
     stage = _split_sections(load(f"stages/{request.stage.replace('.', '-').replace('_', '-')}.md"))
     if not {"Task", "Work"} <= stage.keys() or stage.keys() - set(_SECTIONS[1:]):
         raise ValueError(f"invalid stage resource: {request.stage}")
@@ -128,7 +129,7 @@ def render_prompt(request: PromptInput) -> RenderedPrompt:
         sections[section].append(content)
     if profile.boundary:
         sections["Boundaries"].insert(0, load(f"stages/{profile.boundary}-boundary.md"))
-    for name in request.guidance:
+    for name in (*profile.guidance, *request.guidance):
         if name not in GUIDANCE:
             raise ValueError(f"unknown prompt guidance: {name}")
         group, section = GUIDANCE[name]
@@ -140,6 +141,8 @@ def render_prompt(request: PromptInput) -> RenderedPrompt:
     else:
         for section, content in _split_sections(load(f"protocols/{protocol}.md")).items():
             sections[section].append(content)
+    if protocol == "helper" or request.stage in {"vote.prepare", "review.address_findings", "supervision.decide"}:
+        sections["Delivery"].append(load(question_choices.PROMPT_RESOURCE))
     sections["Boundaries"].insert(0, load("common.md"))
     if request.stage.startswith("task.") or request.stage == "maintenance.repair":
         sections["Context"].insert(0, load("guidance/context.md"))

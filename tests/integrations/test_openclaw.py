@@ -88,3 +88,45 @@ class OpenClawTests(unittest.TestCase):
             ],
         )
         self.assertIn("restart", result["safe_error"].lower())
+
+    def test_force_preserves_unowned_directories_and_extra_plugin_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "data"
+            target.mkdir()
+            keep = target / "user.txt"
+            keep.write_text("valuable")
+            self.assertFalse(write_plugin(target, force=True)["ok"])
+            self.assertEqual(keep.read_text(), "valuable")
+            plugin = Path(tmp) / "plugin"
+            self.assertTrue(write_plugin(plugin)["ok"])
+            (plugin / "user.txt").write_text("custom")
+            self.assertTrue(write_plugin(plugin, force=True)["ok"])
+            self.assertEqual((plugin / "user.txt").read_text(), "custom")
+            link = Path(tmp) / "link"
+            link.symlink_to(plugin, target_is_directory=True)
+            self.assertFalse(write_plugin(link, force=True)["ok"])
+
+    def test_force_rejects_generated_file_symlinks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = Path(tmp) / "plugin"
+            write_plugin(plugin)
+            outside = Path(tmp) / "outside"
+            outside.write_text("keep")
+            (plugin / "index.js").unlink()
+            (plugin / "index.js").symlink_to(outside)
+            self.assertFalse(write_plugin(plugin, force=True)["ok"])
+            self.assertEqual(outside.read_text(), "keep")
+
+    def test_force_replaces_hard_link_without_modifying_other_name(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = Path(tmp) / "plugin"
+            write_plugin(plugin)
+            unrelated = Path(tmp) / "unrelated.txt"
+            unrelated.write_text("keep unrelated contents")
+            (plugin / "index.js").unlink()
+            os.link(unrelated, plugin / "index.js")
+            self.assertTrue(write_plugin(plugin, force=True)["ok"])
+            self.assertEqual(unrelated.read_text(), "keep unrelated contents")
+            self.assertNotEqual((plugin / "index.js").stat().st_ino, unrelated.stat().st_ino)

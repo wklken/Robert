@@ -1,0 +1,166 @@
+"""Publish Robert's TAPD comments and find them again by their visible receipt."""
+
+import hashlib
+import json
+import subprocess
+from urllib.parse import urlparse
+
+from robert_agent.adapters.github import sources as github_sources
+from robert_agent.adapters.tapd import client as tapd_client
+from robert_agent.delivery import values as publication_values
+from robert_agent.foundation import tapd_identity
+from robert_agent.persistence.queries import github_actions as db_read_github_actions
+from robert_agent.persistence.stores import github_actions as db_write_github_actions
+from robert_agent.work import tapd_policy
+
+RECEIPT_LABEL = "回执"
+PULL_REQUEST_LABEL = "PR："
+PR_TERMINAL = "tapd_pr_terminal"
+PROTOCOL_ERRORS = (tapd_client.TapdError, subprocess.TimeoutExpired, OSError)
+_UNAVAILABLE_READS = frozenset({"timeout", "command_failed", "not_found"})
+
+
+def read_unavailable(exc):
+    """A read that did not answer proves nothing; a malformed or ambiguous answer needs operator evidence."""
+    return not isinstance(exc, tapd_client.TapdError) or exc.code in _UNAVAILABLE_READS
+
+
+class Publisher:
+    """TAPD comment access for one publication pass; the client is built on first use."""
+
+    def __init__(self, settings, data_dir, *, runner=None, client=None):
+        self.settings = settings
+        self._data_dir = data_dir
+        self._runner = runner
+        self._client = client
+
+    def client(self):
+        if self._client is None:
+            self._client = tapd_client.client_for(self.settings, self._data_dir, runner=self._runner)
+        return self._client
+
+
+def publisher_for(config, runner=None):
+    settings = (config or {}).get("tapd") or {}
+    return Publisher(settings, config["data_dir"], runner=runner) if settings.get("enabled") else None
+
+
+def receipt_token(marker):
+    return hashlib.sha256(marker.encode("utf-8")).hexdigest()[:16]
+
+
+def ticket_body(body, marker, mention_name):
+    """TAPD drops HTML comments, so the receipt is a visible final paragraph."""
+    text = tapd_policy.neutralize_mentions(body.replace(marker, "").strip(), mention_name)
+    return f"{tapd_policy.automatic_prefix(mention_name)}\n\n{text}\n\n{RECEIPT_LABEL} {receipt_token(marker)}"
+
+
+def pull_request_suffix(url):
+    """The exact controller-owned addition to an audited TAPD comment."""
+    return f"\n\n{PULL_REQUEST_LABEL}{url}"
+
+
+def link_pull_request(conn, action):
+    """Fix the round's PR link into the body; call only before the action has a publication intent."""
+    url = db_read_github_actions.find_pull_request_url_for_action(conn, action["action_id"])
+    metadata = publication_values.decode_json(action["metadata_json"])
+    if not url or url in metadata.get("body", ""):
+        return action
+    metadata["body"] += pull_request_suffix(url)
+    metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+    db_write_github_actions.set_metadata_json_by_action_id(conn, metadata_json, action["action_id"])
+    return {**action, "metadata_json": metadata_json}
+
+
+def pull_request_write_guard(conn, action, run_command):
+    if conn is None:
+        return None
+    notice_pr = db_read_github_actions.find_pull_request_url_for_action(
+        conn, action["action_id"], include_other_pr_results=True
+    )
+    if not notice_pr:
+        return None
+    url = urlparse(notice_pr)
+    parts = url.path.strip("/").split("/")
+    if url.netloc != "github.com" or len(parts) != 4 or parts[2] != "pull" or not parts[3].isdigit():
+        return _failure("Invalid GitHub pull request for TAPD comment", retryable=False)
+    repo = f"{parts[0]}/{parts[1]}"
+    state = github_sources.read_source_state(
+        repo, "pull_request", int(parts[3]), run_command, require_explicit_state=True
+    )
+    if state and (state.get("state") == "closed" or state.get("merged") or state.get("merged_at")):
+        return {"ok": True, "status": PR_TERMINAL, "safe_error": "Pull request closed before the TAPD comment"}
+    if not state or state.get("state") != "open":
+        return _failure("Could not confirm the GitHub pull request is still open")
+    return None
+
+
+def ticket_target(url, settings):
+    """Return (workspace_id, kind, external_id) for a ticket of a configured project, else None."""
+    parsed = tapd_identity.parse_ticket_url(url)
+    if not parsed:
+        return None
+    host, workspace_id, kind, external_id = parsed
+    if not tapd_policy.project_for(settings, tapd_identity.project_key(host, workspace_id)):
+        return None
+    return workspace_id, kind, external_id
+
+
+def receipts(client, target, marker, mention_name):
+    """Automatic comments on the ticket that end with this action's receipt."""
+    ending = f"{RECEIPT_LABEL} {receipt_token(marker)}"
+    found = []
+    for comment in client.ticket_comments(*target):
+        parsed = tapd_policy.parse_comment(comment.body, mention_name)
+        if parsed.automatic and parsed.text.endswith(ending):
+            found.append(comment.comment_id)
+    return found
+
+
+def _failure(safe_error, *, retryable=True):
+    return {"ok": False, "status": "publish_failed", "safe_error": safe_error, "retryable": retryable, "command": []}
+
+
+def _published(action, comment_id, *, deduplicated=False):
+    return {
+        "ok": True,
+        "status": "published",
+        "deduplicated": deduplicated,
+        "external_id": comment_id,
+        "target_url": action["target_url"],
+        "response": {"tapd_comment_id": comment_id},
+        "command": [],
+    }
+
+
+def publish(action, publisher, marker, *, scope_guard):
+    body = publication_values.decode_json(action["metadata_json"]).get("body")
+    target = ticket_target(action.get("target_url"), publisher.settings) if publisher else None
+    if not target or not isinstance(body, str) or not body.strip():
+        return _failure("comment target is not a configured TAPD ticket", retryable=False)
+    mention_name = publisher.settings["mention_name"]
+    try:
+        client = publisher.client()
+        existing = receipts(client, target, marker, mention_name)
+    except PROTOCOL_ERRORS as exc:
+        if read_unavailable(exc):
+            return _failure("TAPD comment preflight failed")
+        return _failure("tapd_comment_response_malformed", retryable=False)
+    if len(existing) > 1:
+        return _failure("TAPD receipt matches several comments", retryable=False)
+    if existing:
+        return _published(action, existing[0], deduplicated=True)
+    blocked = scope_guard()
+    if blocked:
+        return blocked
+    try:
+        comment_id = client.add_comment(*target, ticket_body(body, marker, mention_name))
+    except PROTOCOL_ERRORS as exc:
+        return _failure(f"TAPD comment write failed: {getattr(exc, 'code', type(exc).__name__)}")
+    try:
+        confirmed = receipts(client, target, marker, mention_name)
+    except PROTOCOL_ERRORS:
+        return _published(action, comment_id)
+    if confirmed != [comment_id]:
+        return _failure("TAPD comment readback did not confirm the write")
+    return _published(action, comment_id)

@@ -31,7 +31,33 @@ class AgentRun(Base):
         CheckConstraint("dry_run IN (0, 1)"),
         Index("idx_agent_runs_retention", "status", text("julianday(finished_at)")),
         Index("idx_agent_runs_started", text("started_at DESC"), text("run_id DESC")),
+        Index(
+            "idx_agent_runs_detail_compaction",
+            "status",
+            text(
+                "json_extract(CASE WHEN json_valid(summary_json) THEN summary_json ELSE '{}' END, '$.diagnostics.detail_status')"
+            ),
+            text("julianday(finished_at)"),
+        ),
     )
+
+
+class DiagnosticRunSummary(Base):
+    __tablename__ = "diagnostic_run_summaries"
+
+    summary_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    summary_json: Mapped[str] = mapped_column(Text)
+
+
+class AgentRunSummaryRef(Base):
+    __tablename__ = "agent_run_summary_refs"
+
+    run_id: Mapped[str] = mapped_column(Text, ForeignKey("agent_runs.run_id", ondelete="CASCADE"), primary_key=True)
+    summary_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("diagnostic_run_summaries.summary_id", ondelete="RESTRICT")
+    )
+
+    __table_args__ = (Index("idx_agent_run_summary_refs_summary", "summary_id"),)
 
 
 class RunStep(Base):
@@ -49,6 +75,13 @@ class RunStep(Base):
     __table_args__ = (
         CheckConstraint("status IN ('pending', 'running', 'succeeded', 'failed', 'skipped')"),
         UniqueConstraint("run_id", "step_key"),
+        Index(
+            "idx_run_steps_summary_references",
+            "step_key",
+            text("json_type(CASE WHEN json_valid(output_json) THEN output_json ELSE '{}' END, '$.summary_ref')"),
+            text("json_type(CASE WHEN json_valid(output_json) THEN output_json ELSE '{}' END, '$.repo_summaries_ref')"),
+            "status",
+        ),
     )
 
 
@@ -68,6 +101,7 @@ class RunRepoStep(Base):
     __table_args__ = (
         CheckConstraint("status IN ('pending', 'running', 'succeeded', 'failed', 'skipped')"),
         UniqueConstraint("run_id", "repo_id", "step_key"),
+        Index("idx_run_repo_steps_consumer_completed", "repo_id", "step_key", "status", "finished_at"),
     )
 
 

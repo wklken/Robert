@@ -141,6 +141,8 @@ def finish_run(conn, run_id, status, finished_at, summary, *, error=None, sort_k
             conn, status, finished_at, summary_json, json.dumps(error, ensure_ascii=False, sort_keys=True), run_id
         )
 
+    diagnostic_store.reference_pipeline_summary(conn, run_id)
+
 
 def running_repo_step(conn, run_id, repo_id):
     row = db_records.first(db_read_run_repo_steps.find_for_running_repo_step(conn, run_id, repo_id))

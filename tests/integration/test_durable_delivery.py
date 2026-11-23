@@ -92,7 +92,6 @@ print(json.dumps(result.record_result(sys.argv[1],json.load(open(sys.argv[2]))))
 """
         with closing(sqlite3.connect(fixture.db)) as blocker:
             blocker.execute("BEGIN IMMEDIATE")
-            start = time.monotonic()
             child = subprocess.run(
                 [sys.executable, "-c", program, str(fixture.db), str(payload)],
                 capture_output=True,
@@ -101,7 +100,9 @@ print(json.dumps(result.record_result(sys.argv[1],json.load(open(sys.argv[2]))))
             )
             self.assertEqual(child.returncode, 0, child.stderr)
             self.assertEqual(json.loads(child.stdout)["status"], "deferred")
-            time.sleep(max(0, 30 - (time.monotonic() - start)))
+            # Keep contention for the full interval after the spool is durable.
+            # Subprocess startup is outside the saved-to-ingested interval.
+            time.sleep(30)
             blocker.rollback()
         self.assertEqual(result.replay_pending_results(fixture.db)["recorded"], 1)
         self.assertEqual(result.replay_pending_results(fixture.db)["recorded"], 0)

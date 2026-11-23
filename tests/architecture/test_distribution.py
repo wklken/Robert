@@ -14,7 +14,7 @@ class DistributionTests(unittest.TestCase):
             data["project"]["scripts"]["robert"],
             "robert_agent.cli.main:main",
         )
-        self.assertEqual(data["project"]["version"], "0.1.0b2")
+        self.assertEqual(data["project"]["version"], "0.1.0b3")
 
     def test_ci_and_release_workflows_exist(self):
         self.assertTrue((ROOT / ".github/workflows/ci.yml").is_file())
@@ -26,7 +26,7 @@ class DistributionTests(unittest.TestCase):
             data["project"]["dependencies"],
             [
                 "PyYAML>=6.0,<7",
-                "SQLAlchemy>=2.0.47,<2.1",
+                "SQLAlchemy>=2.1.0,<2.2",
                 "supervisor>=4.2,<5",
             ],
         )

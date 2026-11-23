@@ -12,6 +12,29 @@ from tests.support.pr_remediation_integration import PrRemediationIntegrationFix
 
 
 class PrRemediationIntegrationTests(PrRemediationIntegrationFixture):
+    def test_observed_component_failure_and_dynamic_workflow_admit_ci_repair(self):
+        self.repo["pr_automation"]["conflict"]["enabled"] = False
+        policy = self.repo["pr_automation"]["ci"]
+        policy.update(check_mode="observed", check_allowlist=["unit", "untriggered frontend"])
+        runner = self.runner(mergeable=True)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            events = remediation_requests.collect_pr_remediation_decisions(
+                conn, "repo:example/backend", self.repo, runner, "2026-11-19T00:00:00Z"
+            )
+        self.assertEqual([event["task_kind"] for event in events], ["ci_remediation"])
+
+        policy.update(check_allowlist=[], workflow_path_allowlist=["dynamic/github-code-scanning/codeql"])
+        runner = self.runner(mergeable=True)
+        key = ("gh", "api", "repos/example/backend/actions/runs?head_sha=head-1&per_page=100", "--paginate", "--slurp")
+        runner.responses[key]["workflow_runs"][0].update(
+            name="PR #13", path="dynamic/github-code-scanning/codeql", workflow_id=51
+        )
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            events = remediation_requests.collect_pr_remediation_decisions(
+                conn, "repo:example/backend", self.repo, runner, "2026-11-19T00:01:00Z"
+            )
+        self.assertEqual([event["task_kind"] for event in events], ["ci_remediation"])
+
     def test_collector_creates_system_events_and_conflict_first_decision(self):
 
         runner = self.runner()

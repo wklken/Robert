@@ -6,9 +6,12 @@ Returned evidence is deliberately small so a remote response can never leak
 an unbounded body, command output, or credential into Robert state.
 """
 
-from robert_agent.delivery.comment_receipts import match_comment
+from robert_agent.delivery.application import reviewed_pr
+from robert_agent.delivery.comment_receipts import comment_records, match_comment
 from robert_agent.delivery.application import scope as publication_scope
 from robert_agent.delivery.application import guards as publication_guards
+from robert_agent.delivery.application import tapd_comments
+from robert_agent.foundation import tapd_identity
 
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 
@@ -98,13 +101,12 @@ def _result(status, reason_code, **evidence):
     }
 
 
-def _iter_objects(value):
-    if isinstance(value, dict):
-        yield value
-        return
-    if isinstance(value, list):
-        for item in value:
-            yield from _iter_objects(item)
+def read_failed(reconciliation):
+    """A failed remote read proves nothing about the effect, unlike conflicting evidence."""
+
+    return reconciliation.get("status") == "unknown" and str(reconciliation.get("reason_code") or "").endswith(
+        "_query_failed"
+    )
 
 
 def _command_failure(completed, fallback):
@@ -233,14 +235,10 @@ def _reconcile_comment(action, action_scope, run_command):
         return _result("unknown", "comment_query_failed", error_type=type(exc).__name__)
     if _command_failure(completed, "comment_query_failed"):
         return _result("unknown", "comment_query_failed")
-    raw = getattr(completed, "stdout", "")
-    try:
-        response = json.loads(raw or "[]")
-    except (TypeError, ValueError):
+    comments = comment_records(getattr(completed, "stdout", ""))
+    if comments is None:
         return _result("unknown", "comment_response_malformed")
-    receipt = match_comment(
-        _iter_objects(response), metadata.get("body"), (action_scope or {}).get("github_account"), marker
-    )
+    receipt = match_comment(comments, metadata.get("body"), (action_scope or {}).get("github_account"), marker)
     if receipt["status"] == "confirmed_effect":
         comment = receipt["comment"]
         return _result(
@@ -250,6 +248,26 @@ def _reconcile_comment(action, action_scope, run_command):
             target_url=comment.get("html_url") or comment.get("url") or "",
         )
     return _result(receipt["status"], receipt["reason_code"])
+
+
+def _reconcile_tapd_comment(action, tapd):
+    marker = _marker(_decode_json(action.get("metadata_json")).get("body"), COMMENT_MARKER_RE)
+    target = tapd_comments.ticket_target(action.get("target_url"), tapd.settings) if tapd else None
+    if not marker:
+        return _result("unknown", "comment_marker_missing")
+    if not target:
+        return _result("unknown", "comment_target_malformed")
+    try:
+        found = tapd_comments.receipts(tapd.client(), target, marker, tapd.settings["mention_name"])
+    except tapd_comments.PROTOCOL_ERRORS as exc:
+        if tapd_comments.read_unavailable(exc):
+            return _result("unknown", "tapd_comment_query_failed")
+        return _result("unknown", "tapd_comment_response_malformed", error_code=exc.code)
+    if len(found) > 1:
+        return _result("unknown", "comment_marker_conflict")
+    if found:
+        return _result("confirmed_effect", "tapd_receipt_match", external_id=found[0], target_url=action["target_url"])
+    return _result("confirmed_absent", "comment_lookup_complete_absent")
 
 
 def _reconcile_open_pr(action, action_scope, run_command):
@@ -359,6 +377,8 @@ def _reconcile_open_pr(action, action_scope, run_command):
             and marker in body
             and (not expected_owner or _owner_matches(expected_owner, actual_owner))
         )
+        if exact and scope.get("pre_pr_review"):
+            exact = reviewed_pr.matches_remote_pr(scope, metadata, detail.get("number"), run_command)
         if exact:
             matches.append(detail)
             continue
@@ -373,6 +393,7 @@ def _reconcile_open_pr(action, action_scope, run_command):
         return _result(
             "confirmed_effect",
             "open_pr_marker_match",
+            source_sha=(scope.get("pre_pr_review") or {}).get("head_sha"),
             external_id=str(detail.get("number") or ""),
             target_url=detail.get("url") or "",
         )
@@ -444,12 +465,14 @@ def _remote_branch(action, action_scope, run_command, *, push_remote=None):
     return _result("unknown", "remote_sha_conflict", remote_sha=remote_sha)
 
 
-def classify_remote_state(action, action_scope, run_command, *, conn=None):
+def classify_remote_state(action, action_scope, run_command, *, conn=None, tapd=None):
     """Classify one action without changing SQLite or remote state."""
 
     if not isinstance(action_scope, dict):
         return _result("unknown", "audited_scope_missing")
     action_type = action.get("action_type")
+    if action_type == GitHubActionType.COMMENT and tapd_identity.parse_ticket_url(action.get("target_url")):
+        return _reconcile_tapd_comment(action, tapd)
     if vote_publish.is_vote(action):
         return vote_publish.reconcile(action, action_scope, run_command)
     if action_type == GitHubActionType.SUBMIT_PR_REVIEW:
@@ -460,12 +483,15 @@ def classify_remote_state(action, action_scope, run_command, *, conn=None):
     if action_type == GitHubActionType.OPEN_PR:
         return _reconcile_open_pr(action, action_scope, run_command)
     if action_type == GitHubActionType.PUSH_EXISTING_PR:
+        push_scope = publication_scope.trusted_action_scope(conn, action, include_output_type=True)
         target_scope = {
             **action_scope,
             "github_account": publication_scope.comment_publisher(conn, action, action_scope),
         }
-        target = publication_guards.existing_pr_push_target(target_scope, run_command, reconcile=True)
+        if isinstance(push_scope, dict):
+            target_scope["output_type"] = push_scope["output_type"]
+        target = publication_guards.push_target(target_scope, run_command, reconcile=True)
         if target and not target["ok"]:
-            return _result("unknown", "existing_pr_push_target_mismatch")
+            return _result("unknown", target.get("reason_code", "existing_pr_push_target_mismatch"))
         return _remote_branch(action, action_scope, run_command, push_remote=target["read_remote"] if target else None)
     return _result("unknown", "unsupported_action_type")

@@ -46,6 +46,37 @@ def set_metadata_json_by_notification_id(conn, value_1, notification_id):
     return statements.write(conn, stmt, {"p0": value_1, "p1": notification_id})
 
 
+def refresh_remediation_notice(conn, notification_id, metadata_json):
+    """Merge observation facts without overwriting concurrent delivery or ack receipts."""
+    notice = tables["notifications"]
+    stmt = (
+        update(notice)
+        .where(notice.c.notification_id == notification_id, notice.c.status != "resolved")
+        .values(
+            metadata_json=func.json_patch(notice.c.metadata_json, func.json(bindparam("metadata_json"))),
+        )
+    )
+    return statements.write(conn, stmt, {"metadata_json": metadata_json})
+
+
+def record_receipt_event(conn, notification_id, task_id, kind, occurred_at, metadata_json):
+    notice = tables["notifications"]
+    return statements.write(
+        conn,
+        insert(notice)
+        .values(
+            notification_id=notification_id,
+            task_id=task_id,
+            notification_type=kind,
+            channel="receipt",
+            status="recorded",
+            created_at=occurred_at,
+            metadata_json=metadata_json,
+        )
+        .on_conflict_do_nothing(index_elements=[notice.c.notification_id]),
+    )
+
+
 def insert_workflow_attention_notification(conn, notification_id, value_2, now, value_4):
     stmt = insert(tables["notifications"]).values(
         {
@@ -94,34 +125,32 @@ def insert_notification(conn, value_1, task_id, notification_type, now, value_5)
     )
 
 
-def update_for_resolve_action_notification(conn, now, value_2, notification_id):
+def update_for_resolve_action_notification(conn, value_2, notification_id):
     stmt = (
         update(tables["notifications"])
         .values(
             {
                 "status": sql_constant("resolved"),
-                "created_at": bindparam("p0"),
-                "metadata_json": bindparam("p1"),
+                "metadata_json": bindparam("p0"),
             }
         )
-        .where((tables["notifications"].c["notification_id"] == bindparam("p2")))
+        .where((tables["notifications"].c["notification_id"] == bindparam("p1")))
     )
-    return statements.write(conn, stmt, {"p0": now, "p1": value_2, "p2": notification_id})
+    return statements.write(conn, stmt, {"p0": value_2, "p1": notification_id})
 
 
-def insert_notification_2(conn, now, value_2, notification_id):
+def insert_notification_2(conn, value_2, notification_id):
     stmt = (
         update(tables["notifications"])
         .values(
             {
                 "status": sql_constant("recorded"),
-                "created_at": bindparam("p0"),
-                "metadata_json": bindparam("p1"),
+                "metadata_json": bindparam("p0"),
             }
         )
-        .where((tables["notifications"].c["notification_id"] == bindparam("p2")))
+        .where((tables["notifications"].c["notification_id"] == bindparam("p1")))
     )
-    return statements.write(conn, stmt, {"p0": now, "p1": value_2, "p2": notification_id})
+    return statements.write(conn, stmt, {"p0": value_2, "p1": notification_id})
 
 
 def insert_for_prepare(conn, value_1, task_id, now, value_4):
@@ -186,6 +215,32 @@ def update_for_resolve_control_failure(conn, lane):
         )
     )
     return statements.write(conn, stmt, {"p0": lane})
+
+
+def resolve_decision_unavailable(conn, now, decision_id):
+    """Resolve global service alerts while retaining delivery and operator receipts."""
+    notice = tables["notifications"]
+    stmt = (
+        update(notice)
+        .values(
+            status="resolved",
+            metadata_json=func.json_set(
+                notice.c.metadata_json,
+                "$.resolved_at",
+                bindparam("now"),
+                "$.resolution_decision_id",
+                bindparam("decision_id"),
+                "$.resolution_reason",
+                "validated_model_call",
+            ),
+        )
+        .where(
+            notice.c.notification_type == "supervision_decision_unavailable",
+            notice.c.task_id.is_(None),
+            notice.c.status != "resolved",
+        )
+    )
+    return statements.write(conn, stmt, {"now": now, "decision_id": decision_id})
 
 
 def record_control_stop(conn, value_1, now, value_3):
@@ -386,6 +441,16 @@ def update_failure(conn, kind, key):
     return statements.write(conn, stmt, {"p0": kind, "p1": key})
 
 
+def resolve_supervisor_question(conn, decision_id):
+    notice = tables["notifications"]
+    stmt = (
+        update(notice)
+        .values(status="resolved")
+        .where(notice.c.notification_id == decision_id, notice.c.notification_type == "supervision_question")
+    )
+    return statements.write(conn, stmt)
+
+
 def resolve_attention(conn, event_id):
     notice = tables["notifications"]
     stmt = (
@@ -427,3 +492,32 @@ def set_delivery_state(conn, notification_id, delivery_json):
         .values(metadata_json=func.json_set(notice.c.metadata_json, "$.delivery", func.json(delivery_json)))
     )
     return statements.write(conn, stmt)
+
+
+def insert_tapd_notification(conn, notification_id, notification_type, created_at, metadata_json):
+    """A repeated observation of the same dedupe key keeps the first row."""
+    stmt = insert(tables["notifications"]).values(
+        notification_id=bindparam("p0"),
+        notification_type=bindparam("p1"),
+        channel=sql_constant("tapd"),
+        status=sql_constant("pending"),
+        created_at=bindparam("p2"),
+        metadata_json=bindparam("p3"),
+    )
+    stmt = stmt.on_conflict_do_nothing(index_elements=["notification_id"])
+    return statements.write(
+        conn, stmt, {"p0": notification_id, "p1": notification_type, "p2": created_at, "p3": metadata_json}
+    )
+
+
+def record_tapd_delivery(conn, notification_id, status, delivery_json):
+    notice = tables["notifications"]
+    stmt = (
+        update(notice)
+        .where(notice.c.notification_id == bindparam("p0"), notice.c.channel == sql_constant("tapd"))
+        .values(
+            status=bindparam("p1"),
+            metadata_json=func.json_set(notice.c.metadata_json, "$.tapd_delivery", func.json(bindparam("p2"))),
+        )
+    )
+    return statements.write(conn, stmt, {"p0": notification_id, "p1": status, "p2": delivery_json})

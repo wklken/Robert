@@ -8,9 +8,19 @@ from pathlib import Path
 from robert_agent.foundation.commands import emit, run_command
 
 
+_SOURCE_REFERENCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}")
+
+
 def _slug(value):
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip().lower()).strip("-")
     return normalized or "task"
+
+
+def _source_reference(value):
+    """Accept a GitHub number or a local/TAPD reference that is safe inside a branch name."""
+    if not _SOURCE_REFERENCE.fullmatch(value):
+        raise argparse.ArgumentTypeError("must be a source number or reference")
+    return value
 
 
 def _existing_worktree_for_branch(repo_root, branch_name):
@@ -71,6 +81,7 @@ def plan_worktree(
     elif mode == "reuse_existing_worktree":
         commands.append(f"reuse existing worktree {worktree_path}")
     else:
+        commands.append(f"git fetch upstream pull/{source_number}/head:refs/heads/{branch_name}")
         commands.append(f"git worktree add {worktree_path} {branch_name}")
 
     result = {
@@ -85,6 +96,10 @@ def plan_worktree(
         "start_point": start_point,
         "commands": commands,
     }
+    if existing_worktree_path:
+        error = check_worktree_reuse(repo_root, worktree_root, worktree_path, dry_run=dry_run)
+        if error:
+            return {**result, "ok": False, "status": error}
     if dry_run:
         return result
 
@@ -116,6 +131,13 @@ def plan_worktree(
             capture_output=True,
         )
     else:
+        run_command(
+            ["git", "fetch", "upstream", f"pull/{source_number}/head:refs/heads/{branch_name}"],
+            cwd=repo_root,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
         run_command(
             ["git", "worktree", "add", str(worktree_path), branch_name],
             cwd=repo_root,
@@ -310,6 +332,49 @@ def _workspace_reuse_error(worktree_path, worktree_root, dry_run):
     return None
 
 
+def check_worktree_reuse(
+    repo_root, worktree_root, worktree_path, *, dry_run=False, branch_name=None, allow_dirty=False
+):
+    """Validate checkout identity; only a proven owned resume may retain edits."""
+    error = _workspace_reuse_error(worktree_path, worktree_root, True)
+    if error:
+        return error
+    if not _registered_worktree(repo_root, worktree_path):
+        return "blocked_unregistered_worktree"
+    try:
+        expected_common = run_command(
+            ["git", "rev-parse", "--git-common-dir"], cwd=repo_root, check=True, text=True, capture_output=True
+        ).stdout.strip()
+        identity = run_command(
+            ["git", "rev-parse", "--git-common-dir", "--show-toplevel"],
+            cwd=worktree_path,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.splitlines()
+        if (
+            len(identity) != 2
+            or (Path(worktree_path) / identity[0]).resolve() != (Path(repo_root) / expected_common).resolve()
+            or Path(identity[1]).resolve() != Path(worktree_path).resolve()
+        ):
+            return "blocked_changed_repository"
+        if branch_name:
+            actual = run_command(
+                ["git", "symbolic-ref", "--quiet", "HEAD"],
+                cwd=worktree_path,
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.strip()
+            if actual != f"refs/heads/{branch_name}":
+                return "blocked_changed_branch"
+        if not allow_dirty:
+            return _workspace_reuse_error(worktree_path, worktree_root, dry_run)
+    except (subprocess.CalledProcessError, OSError):
+        return "blocked_unavailable_worktree"
+    return None
+
+
 def plan_review_worktree(
     repo_root,
     worktree_root,
@@ -493,12 +558,15 @@ def plan_analysis_worktree(
         "mode": "analysis",
         "worktree_path": str(worktree_path),
         "branch_name": None,
+        "base_branch": base_branch,
+        "base_ref": f"upstream/{base_branch}",
         "commands": [" ".join(shlex.quote(part) for part in command) for command in commands],
     }
 
 
 def resolve_task_workspace(repo, route, source, dry_run):
     mode = route["workspace_mode"]
+    base_branch = source.get("base_branch") or repo["default_base_branch"]
     if mode == "none":
         return {
             "ok": True,
@@ -512,7 +580,7 @@ def resolve_task_workspace(repo, route, source, dry_run):
             worktree_root=repo["worktree_root"],
             source_number=source["number"],
             short_slug=source["branch_slug"],
-            base_branch=repo["default_base_branch"],
+            base_branch=base_branch,
             dry_run=dry_run,
         )
     if mode == "existing_pr":
@@ -521,7 +589,7 @@ def resolve_task_workspace(repo, route, source, dry_run):
             worktree_root=repo["worktree_root"],
             source_number=source["number"],
             short_slug=source["branch_slug"],
-            base_branch=repo["default_base_branch"],
+            base_branch=base_branch,
             existing_pr_head_branch=source["head_branch"],
             dry_run=dry_run,
         )
@@ -531,7 +599,7 @@ def resolve_task_workspace(repo, route, source, dry_run):
             worktree_root=repo["worktree_root"],
             source_number=source["number"],
             short_slug=source["branch_slug"],
-            base_branch=repo["default_base_branch"],
+            base_branch=base_branch,
             dry_run=dry_run,
         )
     if mode == "analysis":
@@ -539,7 +607,7 @@ def resolve_task_workspace(repo, route, source, dry_run):
             repo_root=repo["repo_root"],
             worktree_root=repo["worktree_root"],
             source_number=source["number"],
-            base_branch=repo["default_base_branch"],
+            base_branch=base_branch,
             dry_run=dry_run,
         )
     raise ValueError(f"unsupported workspace_mode: {mode}")
@@ -549,7 +617,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--worktree-root", required=True)
-    parser.add_argument("--source-number", required=True, type=int)
+    parser.add_argument("--source-number", required=True, type=_source_reference)
     parser.add_argument("--short-slug", required=True)
     parser.add_argument("--base-branch", required=True)
     parser.add_argument("--existing-pr-head-branch")

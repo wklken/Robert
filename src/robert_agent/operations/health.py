@@ -95,12 +95,7 @@ def collect(db_path, *, now, repo_ids, limit=100, supervision_owns_alerts=False)
                     "notification-delay-" + task_id + "-" + reason,
                     task_id,
                     now,
-                    json.dumps(
-                        {
-                            "reason_code": reason,
-                            "required_action": "Inspect queue capacity, worker state and publication failure details.",
-                        }
-                    ),
+                    json.dumps({"reason_code": reason}),
                 )
     except db_errors.OperationalError as exc:
         if str(exc) not in {"database is locked", "database table is locked", "database schema is locked"}:

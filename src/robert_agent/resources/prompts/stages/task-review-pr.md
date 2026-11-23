@@ -10,7 +10,7 @@ Review PR source workflow:
 - Check declared assumptions and decisions against the original request and source, and look for material undisclosed decisions. A product tradeoff requiring human judgment is not a defect by itself; label it separately from evidence-backed defects.
 - State actual reviewed and unreviewed scope, checks performed and important verification limits, even when no defects are found. An all-clear conclusion applies only to that scope; do not infer human approval from a PR description or green checks.
 - Do not push branches, open PRs, submit GitHub PR reviews, or publish comments directly.
-- Record exactly one planned comment containing the actual review conclusion. Robert adds the trusted PR author mention.
+- Record exactly one planned comment containing the actual review conclusion. Robert adds the confirmed request owner's mention, falling back to @wklken only when ownership is unknown.
 - Put any decision request and its decision-owner mention in that planned comment body; do not supply program-owned author fields.
 
 ${review_policy}

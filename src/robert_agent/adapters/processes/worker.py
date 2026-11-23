@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from robert_agent import worker_adapters
+from robert_agent.adapters.processes import model_usage
 from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.foundation.commands import emit
 
@@ -152,6 +153,9 @@ def dispatch_worker(
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     environment = _worker_environment(launch.environment_allowlist)
     environment.update(trusted_environment or {})
+    environment.update(launch.environment)
+    if launch.agent == "command":
+        environment[model_usage.SIDECAR_ENV] = str(model_usage.dispatch_sidecar(stdout_path).absolute())
     try:
         with ExitStack() as stack:
             prompt_file = stack.enter_context(prompt_path.open("r", encoding="utf-8"))

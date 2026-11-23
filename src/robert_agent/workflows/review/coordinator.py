@@ -29,6 +29,7 @@ from robert_agent.execution.stages import (
 )
 from robert_agent.execution.rounds import SLOT_STORES
 from robert_agent.delivery.application import submission as worker_result
+from robert_agent.work import decision_owner
 
 
 def same_revision(manifest, pr):
@@ -49,9 +50,7 @@ class ReviewSubmissionRejected(RuntimeError):
         )
 
 
-class Coordinator(StageCoordinator):
-    store = store
-    workspace = review_workspace
+class ReviewStages(StageCoordinator):
     artifact_files = review_files
     slot_stores = SLOT_STORES
     voter_stage = "review"
@@ -63,53 +62,16 @@ class Coordinator(StageCoordinator):
     artifact_kinds = ("result", "report", "evaluation", "context_summary", "source_index")
     workflow_name = "review"
 
-    def __init__(self, db_path, task_id, attempt_id, *, fetch_pr=read_pr, **kwargs):
-        super().__init__(db_path, task_id, attempt_id, **kwargs)
-        self.fetch_pr = fetch_pr
-
-    def prepare(self):
-        self.phase(RoundStatus.PREPARING.value)
-        self.reconcile_running()
-        repo = self.request["repo"]
-        if not self.manifest:
-            # Fetch races are bounded; no models have started and no bundle is sealed.
-            for retry in range(2):
-                pr = self.fetch_pr(repo["full_name"], self.session["pr_number"])
-                if pr.get("state") != "open":
-                    raise StageSuperseded("PR is closed")
-                expected_author = self.request["event"].get("pr_author_login", "")
-                if pr.get("user", {}).get("login", "").casefold() != expected_author.casefold():
-                    raise ValueError("PR author does not match the authorized review request")
-                try:
-                    self.manifest = review_workspace.prepare_snapshot(
-                        repo["repo_root"],
-                        repo["worktree_root"],
-                        self.data_dir
-                        / "artifacts"
-                        / "reviews"
-                        / hashlib.sha256(repo["full_name"].encode()).hexdigest()[:16],
-                        self.round_id,
-                        pr,
-                        [self.request["event"]],
-                    )
-                    if not self.manifest.get("frozen"):
-                        self.manifest["github_account"] = repo["github_account"]
-                        self.manifest["worker_config_sha256"] = hashlib.sha256(
-                            json.dumps(self.request["workers"], sort_keys=True).encode()
-                        ).hexdigest()
-                        review_files.atomic_json(Path(self.manifest["context_dir"]) / "manifest.json", self.manifest)
-                    break
-                except ValueError as exc:
-                    if retry or "changed while fetching" not in str(exc):
-                        raise
-            self.save_manifest()
+    def prepare_context(self):
         review_workspace.verify_snapshot(self.manifest)
         if not self.manifest.get("frozen"):
-            prompt = self.prompt("prepare-prompt.md", render_prompt(review_prepare_input(self.manifest)).text)
+            prompt = self.prompt(
+                "prepare-prompt.md", render_prompt(review_prepare_input(self.manifest)).text, stage="prepare"
+            )
 
             def validate(output, model):
-                summary = review_files.safe_path(output / "context-summary.md", output)
-                index = review_files.safe_path(output / "source-index.json", output)
+                summary = review_files.safe_path(output / "context-summary.md", self.manifest["artifact_root"])
+                index = review_files.safe_path(output / "source-index.json", self.manifest["artifact_root"])
                 if not summary.read_text(encoding="utf-8").strip():
                     raise ValueError("primary context summary is empty")
                 source_index = json.loads(index.read_text(encoding="utf-8"))
@@ -143,8 +105,6 @@ class Coordinator(StageCoordinator):
                 shutil.copyfile(result[kind + "_path"], Path(self.manifest["context_dir"]) / name)
             self.manifest = review_workspace.freeze_context(self.manifest)
             self.save_manifest()
-        if not same_revision(self.manifest, self.fetch_pr(repo["full_name"], self.session["pr_number"])):
-            raise StageSuperseded("PR head/base changed after context preparation")
 
     def review(self):
         self.phase(RoundStatus.REVIEWING.value)
@@ -153,7 +113,7 @@ class Coordinator(StageCoordinator):
             def validate(output, model, worker=worker):
                 result_path = output / "result.json"
                 result = review_files.read_result(result_path, self.manifest)
-                report_path = review_files.safe_path(output / "report.md", output)
+                report_path = review_files.safe_path(output / "report.md", self.manifest["artifact_root"])
                 report = review_files.render_individual(result, worker["name"], model)
                 if report_path.exists() and report_path.read_text(encoding="utf-8") != report:
                     raise ValueError("derived review report changed")
@@ -180,7 +140,7 @@ class Coordinator(StageCoordinator):
             raise RuntimeError("; ".join(failures))
         return records
 
-    def synthesize(self, records):
+    def evaluate(self, records):
         self.phase(RoundStatus.SYNTHESIZING.value)
         inputs = review_files.write_synthesis_inputs(self.manifest, records)
         prompt_input = review_synthesize_input(
@@ -193,6 +153,7 @@ class Coordinator(StageCoordinator):
         prompt = self.prompt(
             f"synthesis-prompt-{inputs['sha256']}.md",
             render_prompt(prompt_input).text,
+            stage="synthesis",
         )
 
         def validate(output, model):
@@ -203,7 +164,63 @@ class Coordinator(StageCoordinator):
             return {"evaluation_path": str(path), "evaluation_sha256": store.digest(path)}
 
         result = self.run_phase("synthesis", self.request["workers"][0], prompt, validate, input_hash=inputs["sha256"])
-        evaluation = review_files.read_evaluation(result["evaluation_path"], self.manifest, records)
+        return review_files.read_evaluation(result["evaluation_path"], self.manifest, records)
+
+
+class Coordinator(ReviewStages):
+    store = store
+    workspace = review_workspace
+
+    def __init__(self, db_path, task_id, attempt_id, *, fetch_pr=read_pr, **kwargs):
+        super().__init__(db_path, task_id, attempt_id, **kwargs)
+        self.fetch_pr = fetch_pr
+
+    def prepare(self):
+        self.phase(RoundStatus.PREPARING.value)
+        self.reconcile_running()
+        repo = self.request["repo"]
+        if not self.manifest:
+            # Fetch races are bounded; no models have started and no bundle is sealed.
+            for retry in range(2):
+                pr = self.fetch_pr(repo["full_name"], self.session["pr_number"])
+                if pr.get("state") != "open":
+                    raise StageSuperseded("PR is closed")
+                expected_author = self.request["event"].get("pr_author_login", "")
+                if pr.get("user", {}).get("login", "").casefold() != expected_author.casefold():
+                    raise ValueError("PR author does not match the authorized review request")
+                try:
+                    self.manifest = review_workspace.prepare_snapshot(
+                        repo["repo_root"],
+                        repo["worktree_root"],
+                        self.data_dir
+                        / "artifacts"
+                        / "reviews"
+                        / hashlib.sha256(repo["full_name"].encode()).hexdigest()[:16],
+                        self.round_id,
+                        pr,
+                        [self.request["event"]],
+                    )
+                    if not self.manifest.get("frozen"):
+                        self.manifest["github_account"] = repo["github_account"]
+                        with store.connect(self.db_path) as conn:
+                            self.manifest["decision_owner"] = decision_owner.for_workstream(
+                                conn, self.session["workstream_id"], repo["github_account"]
+                            )
+                        self.manifest["worker_config_sha256"] = hashlib.sha256(
+                            json.dumps(self.request["workers"], sort_keys=True).encode()
+                        ).hexdigest()
+                        review_files.atomic_json(Path(self.manifest["context_dir"]) / "manifest.json", self.manifest)
+                    break
+                except ValueError as exc:
+                    if retry or "changed while fetching" not in str(exc):
+                        raise
+            self.save_manifest()
+        self.prepare_context()
+        if not same_revision(self.manifest, self.fetch_pr(repo["full_name"], self.session["pr_number"])):
+            raise StageSuperseded("PR head/base changed after context preparation")
+
+    def synthesize(self, records):
+        evaluation = self.evaluate(records)
         body = review_files.render_merged(self.manifest, records, evaluation)
         body += f"\n<!-- robert-review round={self.round_id} -->\n"
         redacted = redaction.redact_text(body)
@@ -257,6 +274,7 @@ class Coordinator(StageCoordinator):
             f"Review report: {path}",
             [action],
             used_skills=[],
+            receipt_summary=evaluation.get("receipt_summary"),
         )
         recorded = worker_result.record_result(self.db_path, payload)
         if not recorded.get("ok"):

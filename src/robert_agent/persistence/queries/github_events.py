@@ -268,6 +268,7 @@ def scan_repo_filtered(conn, items, value_1, value_2):
                 func.lower(table1.c["actor_login"]) != bindparam("p1"),
                 table1.c["actor_kind"] != sql_constant("github_system"),
                 func.lower(table2.c["state"]) == sql_constant("open"),
+                table2.c["provider"] == sql_constant("github"),
                 table3.c["lifecycle"].in_(
                     [sql_constant(WorkstreamLifecycle.COMPLETED.value), sql_constant(WorkstreamLifecycle.FAILED.value)]
                 ),
@@ -301,3 +302,69 @@ def legacy_body_request(conn, repo_id, source_key, actor, body):
         .limit(1)
     )
     return statements.read(conn, query, {})
+
+
+TAPD_TRIGGER_STATUSES = ("authorized_trigger", "accepted_context")
+
+
+def _tapd_unprocessed(event):
+    """A first-observed trusted TAPD request with no task link or admission disposition."""
+    task_event = tables["task_events"]
+    checkpoint = tables["supervision_checkpoints"]
+    linked = select(sql_constant(1)).where(task_event.c["event_id"] == event.c["event_id"]).correlate(event)
+    disposed = (
+        select(sql_constant(1))
+        .where(
+            checkpoint.c["scope_type"] == sql_constant("github_event"),
+            checkpoint.c["scope_id"] == event.c["event_id"],
+            checkpoint.c["rule_id"] == sql_constant("admission"),
+            func.coalesce(
+                func.json_extract(checkpoint.c["metadata_json"], sql_constant("$.disposition")), sql_constant("")
+            ).not_in([sql_constant(""), sql_constant("deferred")]),
+        )
+        .correlate(event)
+    )
+    return and_(
+        event.c["authorization_status"].in_([sql_constant(status) for status in TAPD_TRIGGER_STATUSES]),
+        not_(linked.exists()),
+        not_(disposed.exists()),
+    )
+
+
+def find_tapd_pending_triggers(conn, repo_id, limit):
+    event = tables["github_events"].alias("ge")
+    source = tables["github_sources"].alias("gs")
+    query = (
+        select(event.c["event_id"], event.c["payload_json"])
+        .select_from(event.join(source, source.c["source_id"] == event.c["source_id"]))
+        .where(
+            event.c["repo_id"] == bindparam("p0"),
+            source.c["provider"] == sql_constant("tapd"),
+            _tapd_unprocessed(event),
+        )
+        .order_by(event.c["event_at"].asc(), event.c["event_id"].asc())
+        .limit(bindparam("p1"))
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    return statements.read(conn, query, {"p0": repo_id, "p1": limit})
+
+
+def find_existing_fingerprints(conn, fingerprints):
+    event = tables["github_events"]
+    query = (
+        select(event.c["event_fingerprint"])
+        .where(event.c["event_fingerprint"].in_(bindparam("items", expanding=True)))
+        .set_label_style(LABEL_STYLE_NONE)
+    )
+    return statements.read(conn, query, {"items": list(fingerprints)})
+
+
+def tapd_unprocessed_exists(source):
+    event = tables["github_events"].alias("pending_event")
+    return (
+        select(sql_constant(1))
+        .select_from(event)
+        .where(event.c["source_id"] == source.c["source_id"], _tapd_unprocessed(event))
+        .correlate(source)
+        .exists()
+    )

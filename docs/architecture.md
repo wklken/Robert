@@ -42,7 +42,7 @@ robert_agent/
   readmodels/                 # dashboard/board/status/workbench/history/usage
   models/                     # SQLAlchemy 2 mapped tables; existing column/storage contracts
   persistence/                # shared queries/stores/transactions/schema/dialects
-  adapters/                   # github/git/processes/notifications/services
+  adapters/                   # github/git/tapd/processes/notifications/services
   application/                # 只保留跨领域的 repository-cycle 组合
   runtime/                    # once/loop/daemon/scan/supervisor/paused monitor
   interfaces/web/             # HTTP、输入/CSRF、模板、服务启动
@@ -69,6 +69,18 @@ robert_agent/
 数据库写入和 JSON/YAML 等序列化边界使用 `.value`，保留原有字符串编码。
 数据库 CHECK、模型映射与协议 Schema 继续声明各自边界约束，合同测试校验共享值的一致性。
 
+[`foundation/timestamps.py`](../src/robert_agent/foundation/timestamps.py) 只使用标准库，
+供配置校验、SQLite 方言函数与监督告警共用 UTC 时间解析和微秒比较。
+它不执行 I/O，也不依赖领域或用例；通知的启用时间边界在各条投递路径保持一致。
+
+[`foundation/tapd_identity.py`](../src/robert_agent/foundation/tapd_identity.py) 同样只使用标准库，
+定义 TAPD 主机、项目键、单据 URL、来源键和评论 fingerprint 的语法，供配置、适配器、
+来源 owner 和发布合同共用。
+
+[`foundation/question_choices.py`](../src/robert_agent/foundation/question_choices.py) 提供有序选项的共享格式和校验。
+Worker 结果和原生阶段在进入等待前校验新提问。看板和 OpenClaw 的点选复用版本化回复命令，
+从当前问题记录解析选项，发布与监督继续使用各自的授权边界。
+
 稳定领域能力、纯策略、适配器和读模型不依赖应用用例、具体 workflow、runtime 或接口。
 领域 `application/` 与具体 workflow 属于应用层，按明确的模块依赖组合能力；跨领域
 调度放在外层组合入口。公共函数/类型/常量归实际 owner；不靠延迟 import、动态查找、
@@ -88,6 +100,15 @@ robert_agent/
 - 包根目录只保留 `__init__.py`、`paths.py` 和 `resource_files.py`。可执行入口位于所属模块，
   例如 `robert_agent.runtime.scan` 和 `robert_agent.worker.result`。安装检查使用
   [入口清单](../src/robert_agent/resources/entrypoints.json)。
+- `readmodels.artifacts` 统一工件预览和可预览提示的路径约束，按目录描述符打开文件。
+- `readmodels.agent_session` 按任务、尝试和模型执行投影公开会话记录；
+  `persistence.queries.agent_sessions` 查询模型归属，`adapters.processes.session_history`
+  验证本地 session 身份并按字节位置倒序读取。页面展开时加载，历史分页不推进执行状态。
+- workbench 列表读取当前任务的最新尝试、阶段和结果，在分页后补充看板生命周期。
+  列表仍扫描轻量任务标识以保留全库搜索、计数和筛选项；完整尝试与工件历史由详情页读取。
+- `readmodels.timeline` 从已完成任务、审核结果和发布记录投影日、周、月工作清单，并沿工作流来源关联原始需求。
+- `work.receipt_events` 记录关键交付节点，`delivery.application.receipt_notifications` 将独立小票按批投递到已授权的 OpenClaw 目标。
+- `context.memory_policy` 定义项目记忆的大小和脱敏约束，供提交、审计和入库共用。
 
 [架构门禁](../tests/architecture/test_architecture_boundaries.py) 检查无环、层次方向、根目录合同和
 全部业务调用方的 SQL 边界。 [pyproject.toml](../pyproject.toml) 统一配置 Ruff 和 import-linter，
@@ -168,6 +189,11 @@ worktree 和文件 hash 校验不提供操作系统沙箱。Worker 按协议只�
 [控制子进程](../src/robert_agent/runtime/control.py)、[扫描与发布入口](../src/robert_agent/runtime/scan.py)、
 [服务生成](../src/robert_agent/adapters/services/native.py)。
 
+独立监督可显式配置
+[本地 Messages 网关适配器](../src/robert_agent/adapters/services/supervision_model.py)。
+该入口只负责无工具模型传输、思考块过滤和输出校验；决策调度、授权及业务动作
+仍由监督用例和既有消费者负责。
+
 ## 模块关系
 
 箭头表示主要调用关系，节点按责任分组，不表示全部 Python import。
@@ -195,7 +221,10 @@ flowchart LR
 | 责任 | 主要模块 | 关键契约 |
 | --- | --- | --- |
 | 外部发现 | [runtime/scan.py](../src/robert_agent/runtime/scan.py)、[adapters/github/read.py](../src/robert_agent/adapters/github/read.py)、[adapters/github/discovery.py](../src/robert_agent/adapters/github/discovery.py) | 完整观察批次先落盘；缓存命中仍需本地授权 |
+| TAPD 来源 | [adapters/tapd/client.py](../src/robert_agent/adapters/tapd/client.py)、[work/tapd_policy.py](../src/robert_agent/work/tapd_policy.py)、[work/application/tapd_scan.py](../src/robert_agent/work/application/tapd_scan.py)、[work/application/tapd_intake.py](../src/robert_agent/work/application/tapd_intake.py)、[delivery/application/tapd_comments.py](../src/robert_agent/delivery/application/tapd_comments.py) | 授权在第一次观察时固定；复核不访问网络；回评按回执对账 |
+| Proposer | [候选扫描](../src/robert_agent/work/application/proposal_scan.py)、[Web 审批](../src/robert_agent/work/application/proposal_commands.py)、[执行受理](../src/robert_agent/work/application/proposal_admission.py)、[单据回评](../src/robert_agent/delivery/application/proposal_feedback.py) | 无工具评估固定代码版本；审批进入现有工作队列；回评绑定获批任务和派生 PR |
 | 授权与协作线程 | [security/authorization.py](../src/robert_agent/security/authorization.py)、[work/streams.py](../src/robert_agent/work/streams.py) | 正文不能扩大权限；Issue 与 PR 保留各自主线 |
+| 请求归属人 | [work/decision_owner.py](../src/robert_agent/work/decision_owner.py)、[context/decision_owner.py](../src/robert_agent/context/decision_owner.py) | 首次已接纳的可信请求固定归属人及事件证据；同仓库派生 PR 继承，询问与决策使用控制器确认的身份；不授予执行权限 |
 | 路由与准备 | [workflows/routes.py](../src/robert_agent/workflows/routes.py)、[configuration/routes.py](../src/robert_agent/configuration/routes.py)、[context/skills.py](../src/robert_agent/context/skills.py)、[adapters/git/workspace.py](../src/robert_agent/adapters/git/workspace.py)、[context/prompts.py](../src/robert_agent/context/prompts.py) | 固定输出、动作权限与 workspace 策略；缺必需 Skill 时不启动 |
 | 执行与监督 | [adapters/processes/worker.py](../src/robert_agent/adapters/processes/worker.py)、[worker_adapters/](../src/robert_agent/worker_adapters/)、[execution/inspection.py](../src/robert_agent/execution/inspection.py)、[adapters/processes/identity.py](../src/robert_agent/adapters/processes/identity.py) | 环境白名单、进程身份、心跳、超时与退出证明 |
 | Worker 交接 | [worker/](../src/robert_agent/worker/)、[delivery/contract.py](../src/robert_agent/delivery/contract.py)、[execution/spool.py](../src/robert_agent/execution/spool.py) | 绑定任务与 Attempt；规范化计划动作；持久提交与冲突拒绝 |
@@ -242,6 +271,25 @@ flowchart TD
 `route_task` 按来源、意图与已有 PR 选择分析、新 PR、更新 PR、源码评审、评审回复、
 投票或分类。配置不能扩大固定路由的 `allowed_github_actions`、`expected_output`、
 `verification_policy` 与 workspace 权限。
+
+TAPD 请求由扫描通道写入来源行和事件，授权状态在第一次观察时固定。仓库循环中的
+`tapd_intake.collect_decisions` 按当前配置与已保存的单据结束状态复核，再交给同一条
+workstream、路由和准备流程。存在一个打开的派生 PR 时，TAPD 请求进入该 PR 的
+workstream。明确的多分支回移由 [work/backports.py](../src/robert_agent/work/backports.py) 解析，
+受理先保存每个目标的独立事件，再处置原始命令。每个目标工作流及创建的 PR 都直接关联原单据，
+因此取消和来源状态对账覆盖全部目标。按目标 base 选择已有 PR；没有匹配时创建独立任务。
+本地已接受回复通过同一分发能力保存目标请求。任务保存 base，工作区、提示和发布审核沿用这份范围。
+修改路由复用同一分支，回评目标仍是原单据。发布审核检查 GitHub 动作和
+本次推送的提交信息中的 TAPD 标识。PR 创建确认后即建立本地关联，后续回评使用
+已保存的正文及 PR 链接。PR 终态、修复轮次终态和已提交的 GitHub review 通过
+[`work/tapd_notices.py`](../src/robert_agent/work/tapd_notices.py) 查找原单据，
+按事件身份写入 TAPD 通知。发布通道使用固定文案和 PR 链接，独立于运营者消息投递。
+详见 [TAPD 来源](features/tapd.md)。
+
+网页中的单据澄清回复由工作项命令创建续办任务。
+`operator_queries` 按来源读取回复后的扫描快照，`ready_work.prepare_operator_tasks`
+复核原请求授权后准备同一任务的执行，保留原工作区和工作项回复。
+未刷新单据时不占 Worker 槽位，也不触发重复的空本地循环。
 
 源码：[authorize_event](../src/robert_agent/security/authorization.py)、[plan_event](../src/robert_agent/work/streams.py)、
 [route_task](../src/robert_agent/workflows/routes.py)、[仓库用例编排](../src/robert_agent/application/repository_cycle.py)（`run_repo_pipeline`）、
@@ -354,7 +402,11 @@ flowchart TD
     Uncertain -->|"是"| Read["只读对账：marker · 正文 · owner · SHA"]
     Read --> Remote{"远端判定"}
     Remote -->|"confirmed_effect"| Receipt["回填 published 回执，不重复写入"]
-    Remote -->|"unknown"| Attention["attention，保留证据等待处理"]
+    Remote -->|"unknown：读取失败"| Reread{"重读次数与时长未用尽？"}
+    Reread -->|"是"| Backoff["保持 executing，退避后只读重查"]
+    Backoff --> Read
+    Reread -->|"否"| Attention
+    Remote -->|"unknown：证据歧义"| Attention["attention，保留证据等待处理"]
     Remote -->|"confirmed_absent"| Budget
     Uncertain -->|"否"| Budget{"重试预算与当前政策允许？"}
     Budget -->|"否"| Failed["失败 / 需处理；显式恢复入口"]
@@ -369,7 +421,11 @@ flowchart TD
 
 去重不等于网络请求保证恰好一次。`action_id`、`idempotency_key` 与请求 fingerprint
 绑定本地 intent；远端 marker、正文、PR owner、分支与 SHA 证明实际效果。
-无法证明存在或缺失时进入 `attention`，不能假设写入失败而重复发布。
+读取失败（`*_query_failed`，包括超时）不构成证据：intent 保持 `executing`，按
+`execution/retry.py` 的次数、时长与退避只重新读取，同一结果中排在后面的动作继续等待；
+用尽后进入 `attention`。标记缺失、候选冲突、SHA 或范围冲突、响应结构异常属于证据歧义，
+立即进入 `attention`。两种情况都不能假设写入失败而重复发布。退避期间监督把它视为预期等待，
+退避结束仍未解决时照常报告 `publication_effect_unresolved`。
 发布前的远端校验独立于 discovery 缓存。自动重试受次数、时间与退避约束，
 人工重试也须重新核对当前权限和版本。
 
@@ -481,6 +537,9 @@ flowchart TD
 
 ## 多模型评审与投票
 
+[新 PR 发布前 Review](features/pre-pr-review.md) 使用本地候选快照和独立 run，
+复用共享模型阶段和并发额度。结构化处置与验证绑定最终提交，审计和发布核对持久证明。
+
 两种内建协调器共用 `StageCoordinator` 和 SQLite 模型进程池。一轮占一个任务并发槽，
 各阶段模型再申请共享额度。图用两个模型说明阶段顺序，实际数量来自配置。
 
@@ -562,7 +621,18 @@ helper、原子文件、stdout JSON 保持各自结果格式和完成条件。�
 ## PR 自修复
 
 CI 和冲突修复默认关闭，按仓库 `pr_automation` 显式开启；CI 还要求非空
-`check_allowlist`。Episode 将系统请求限制在当前 PR 的版本、次数和预算内。
+`check_allowlist` 或 `workflow_path_allowlist`。默认等待所有配置的名称和路径；
+`check_mode: observed` 只等待当前 PR head 实际出现的已选 CI，支持组件路径过滤和动态名称。
+未观察到已选 CI 或 CI API 读取失败时继续等待。Episode 将系统请求限制在当前 PR 的版本、次数和预算内。
+仓库可用 `pr_automation.dispatch_mode: direct` 直接派发每个版本的首次
+合规修复。开启冲突修复时，CI 修复等待 GitHub 确认可合并。修复任务失败后的
+合规重试仍由 `decide` 模式下的 Supervisor 决定，其余模式记录需处理通知。
+默认 `follow_supervision` 沿用现有监督策略。
+
+已取消的 PR 工作流不参与自动修复扫描，待发送修复通知也会检查取消状态。
+CI 告警按 PR head、失败原因和 CI run/attempt 归并；仅目标分支推进时更新本地告警，
+保留发送与 ack 回执。Episode 的版本身份与预算保持独立。恢复、新 head 或远端终态
+关闭旧 CI 告警；新故障或恢复后复发可再次通知，详见[操作消息](features/operator-messaging.md)。
 
 ```mermaid
 flowchart TD
@@ -573,7 +643,10 @@ flowchart TD
     Evidence -->|"是"| Episode["创建 / 更新绑定版本的 Episode"]
     Episode --> Budget{"次数、时间、成本与当前状态允许？"}
     Budget -->|"否"| Stop["exhausted / 需处理，保存通知"]
-    Budget -->|"是"| Task["受控系统 Task → update-existing-pr"]
+    Budget -->|"是"| Dispatch{"当前尝试需要模型授权？"}
+    Dispatch -->|"是"| Supervisor["等待 Supervisor 选择并授权"]
+    Dispatch -->|"否"| Task["受控系统 Task → update-existing-pr"]
+    Supervisor -->|"授权有效"| Task
     Task --> Worker["当前 PR worktree 修复并验证"]
     Worker --> Audit["审计修复证据与结果版本"]
     Audit --> Fresh{"发布前版本、分支与 PR 状态仍有效？"}
@@ -619,6 +692,9 @@ flowchart LR
 workstream 保留多轮 Task 历史，活动任务由部分唯一索引串行约束。Task 可有多个
 Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result。
 本地和 GitHub 任务进入同一控制面，`work_items` 提供生命周期投影与操作入口。
+`github_sources` 以 `provider` 区分来源：GitHub 行保留 Issue/PR 编号，TAPD 需求和缺陷
+行没有编号，以 `project_key` 与 `external_id` 标识。workstream 的可空唯一 `public_ref`
+是对外关联 ID；没有编号的来源用它命名工作区和分支。
 
 专用表保留各自边界：`github_scan_batches` / `github_scan_reads` 保存扫描重放输入；
 `leases` / `github_control_children` 保存执行所有权；`review_sessions` / `review_runs`
@@ -627,6 +703,7 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 保存独立监督的观察、事件和恢复记录。
 
 源码：[主 schema](../src/robert_agent/resources/db/schema.sql)、[存储初始化](../src/robert_agent/persistence/schema/database.py)、
+[来源表重建](../src/robert_agent/persistence/schema/source_providers.py)、
 [执行主体与事实回执](../src/robert_agent/persistence/execution_control.py)、[persistence/rounds/review.py](../src/robert_agent/persistence/rounds/review.py)、
 [persistence/rounds/vote.py](../src/robert_agent/persistence/rounds/vote.py)。基础概念见 [concepts.md](concepts.md)，
 配置见 [reference.md](reference.md)。

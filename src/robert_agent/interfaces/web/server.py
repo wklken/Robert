@@ -1,4 +1,5 @@
 from robert_agent.persistence import errors as db_errors
+from robert_agent.interfaces.web.shell import render_shell
 from robert_agent.interfaces.web.templates import render_dashboard_html
 from robert_agent.context.application import knowledge_review
 from robert_agent.work.application import web_setup
@@ -6,19 +7,26 @@ from robert_agent.readmodels import dashboard
 
 #!/usr/bin/env python3
 import argparse
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from contextlib import closing
+from pathlib import Path
+from robert_agent.persistence import database as db_database
+from robert_agent.persistence.queries import sqlite_master
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from importlib.resources import files
 import ipaddress
 import json
+import re
 import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from robert_agent.configuration import command as validate_config
-from robert_agent.readmodels import board
+from robert_agent.readmodels import agent_session, board, timeline
 from robert_agent.work.application import commands as work_items
-from robert_agent.readmodels import workbench
+from robert_agent.work.application import proposal_commands
+from robert_agent.readmodels import proposals, workbench
 from robert_agent.foundation.commands import emit
 
 
@@ -27,6 +35,11 @@ WEB_ASSETS = {
     "/": ("board.html", "text/html; charset=utf-8"),
     "/work": ("index.html", "text/html; charset=utf-8"),
     "/board": ("board.html", "text/html; charset=utf-8"),
+    "/timeline": ("timeline.html", "text/html; charset=utf-8"),
+    "/proposals": ("proposals.html", "text/html; charset=utf-8"),
+    "/assets/proposals.js": ("proposals.js", "text/javascript; charset=utf-8"),
+    "/assets/proposals.css": ("proposals.css", "text/css; charset=utf-8"),
+    "/assets/shell-preferences.js": ("shell-preferences.js", "text/javascript; charset=utf-8"),
     "/favicon.ico": ("robert-favicon.svg", "image/svg+xml"),
     "/assets/robert-favicon.svg": ("robert-favicon.svg", "image/svg+xml"),
     "/assets/robert-logo.svg": ("robert-logo.svg", "image/svg+xml"),
@@ -34,7 +47,11 @@ WEB_ASSETS = {
     "/assets/operations.css": ("operations.css", "text/css; charset=utf-8"),
     "/assets/board.css": ("board.css", "text/css; charset=utf-8"),
     "/assets/board-client.js": ("board-client.js", "text/javascript; charset=utf-8"),
+    "/assets/agent-session.js": ("agent-session.js", "text/javascript; charset=utf-8"),
     "/assets/board.js": ("board.js", "text/javascript; charset=utf-8"),
+    "/assets/timeline.css": ("timeline.css", "text/css; charset=utf-8"),
+    "/assets/timeline.js": ("timeline.js", "text/javascript; charset=utf-8"),
+    "/assets/receipt-image.js": ("receipt-image.js", "text/javascript; charset=utf-8"),
     "/assets/workbench.css": ("workbench.css", "text/css; charset=utf-8"),
     "/assets/workbench.js": (
         "workbench.js",
@@ -65,6 +82,49 @@ def validate_server_options(host, writable, allow_remote):
 
 
 @dataclass(frozen=True)
+class ReceiptExchangeRate:
+    usd_to_cny: Decimal
+    published_on: date
+    source: str
+
+    def apply(self, usage):
+        usd = usage["reported_cost_usd"]
+        return {
+            **usage,
+            "reported_cost_cny": format(Decimal(str(usd)) * self.usd_to_cny, "f") if usd is not None else None,
+            "usd_to_cny": format(self.usd_to_cny, "f"),
+            "fx_date": self.published_on.isoformat(),
+            "fx_source": self.source,
+        }
+
+
+# CFETS midpoint published on 2026-11-20. This is a dated display reference.
+DEFAULT_RECEIPT_FX = ReceiptExchangeRate(Decimal("6.7131"), date(2026, 11, 20), "cfets_reference")
+
+
+def add_receipt_fx_arguments(parser):
+    parser.add_argument("--receipt-fx-rate", help="CNY per USD for receipt estimates. Requires --receipt-fx-date.")
+    parser.add_argument("--receipt-fx-date", help="Reference date (YYYY-MM-DD) for --receipt-fx-rate.")
+
+
+def _receipt_exchange_rate(rate, published_on):
+    if rate is None and published_on is None:
+        return DEFAULT_RECEIPT_FX
+    if rate is None or published_on is None:
+        raise ValueError("--receipt-fx-rate and --receipt-fx-date must be given together.")
+    try:
+        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", rate) or len(rate) > 32:
+            raise ValueError("invalid decimal notation")
+        amount = Decimal(rate)
+        rate_date = date.fromisoformat(published_on)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("Receipt exchange rate requires a positive decimal and a YYYY-MM-DD date.") from exc
+    if amount <= 0 or rate_date.isoformat() != published_on:
+        raise ValueError("Receipt exchange rate requires a positive decimal and a YYYY-MM-DD date.")
+    return ReceiptExchangeRate(amount, rate_date, "operator_reference")
+
+
+@dataclass(frozen=True)
 class ControlContext:
     db_path: str
     operator_identity: str
@@ -74,6 +134,8 @@ class ControlContext:
     csrf_token: str
     writes_enabled: bool
     write_error: str | None
+    proposal_enabled: bool = False
+    receipt_fx: ReceiptExchangeRate = DEFAULT_RECEIPT_FX
 
 
 def _query_limit(query, default=50):
@@ -88,13 +150,31 @@ def build_http_response(path, db_path, control_context=None):
     parsed = urlsplit(path)
     route = parsed.path
     if route in WEB_ASSETS:
-        asset_route = "/work" if route == "/" and "bucket" in parse_qs(parsed.query) else route
+        query = parse_qs(parsed.query)
+        asset_route = "/work" if route == "/" and "bucket" in query else route
         filename, content_type = WEB_ASSETS[asset_route]
         try:
             payload = (WEB_ASSET_ROOT / filename).read_bytes()
         except OSError:
             return 404, {"content-type": "text/plain; charset=utf-8"}, b"not found\n"
+        if content_type.startswith("text/html"):
+            page = "/board" if asset_route == "/" else asset_route
+            html = render_shell(
+                payload.decode("utf-8"), page, history=page == "/work" and query.get("bucket") == ["history"]
+            )
+            payload = html.encode("utf-8")
         return 200, {"content-type": content_type}, payload
+    if route == "/api/proposals" or route.startswith("/api/proposals/"):
+        query = parse_qs(parsed.query)
+        status = (query.get("status") or ["pending"])[0]
+        if status != "all" and status not in proposals.VISIBLE_STATES:
+            return _json_response({"status": "failed_validation", "safe_error": "invalid proposal status"}, 400)
+        repo_ids = control_context.allowed_repo_ids if control_context and control_context.writes_enabled else None
+        if route == "/api/proposals":
+            rows = proposals.read(db_path, status=None if status == "all" else status, repo_ids=repo_ids)
+            return _json_response({"proposals": rows})
+        rows = proposals.read(db_path, proposal_id=unquote(route.removeprefix("/api/proposals/")), repo_ids=repo_ids)
+        return _json_response(rows[0]) if rows else _json_response({"status": "not_found"}, 404)
     if route == "/api/session":
         context = control_context
         payload = {
@@ -102,9 +182,35 @@ def build_http_response(path, db_path, control_context=None):
             "write_error": context.write_error if context else "Start with --config to enable writes.",
             "csrf_token": context.csrf_token if context else None,
             "operator_identity": context.operator_identity if context else None,
+            "proposal_enabled": bool(context and context.proposal_enabled),
             "allowed_repo_ids": sorted(context.allowed_repo_ids) if context else [],
             "allowed_workers": sorted(context.allowed_workers) if context else [],
         }
+        return _json_response(payload)
+    if route == "/api/agent-session":
+        query = parse_qs(parsed.query)
+        try:
+            raw_limit = (query.get("limit") or ["30"])[0]
+            try:
+                limit = int(raw_limit)
+            except ValueError as exc:
+                raise agent_session.SessionQueryError("limit must be between 1 and 50") from exc
+            payload = agent_session.load_agent_session(
+                db_path,
+                (query.get("task_id") or [""])[0],
+                (query.get("attempt_id") or [""])[0],
+                limit=limit,
+                cursor=(query.get("cursor") or [None])[0],
+                run_id=(query.get("run_id") or [None])[0],
+            )
+        except agent_session.SessionQueryError as exc:
+            return _json_response({"ok": False, "status": "invalid_query", "safe_error": str(exc)}, 400)
+        except db_errors.OperationalError:
+            return _json_response(
+                {"ok": False, "status": "unavailable", "safe_error": "Session data is unavailable."}, 409
+            )
+        if payload is None:
+            return _json_response({"ok": False, "status": "not_found", "safe_error": "Execution not found."}, 404)
         return _json_response(payload)
     if route == "/api/board":
         query = parse_qs(parsed.query)
@@ -127,6 +233,38 @@ def build_http_response(path, db_path, control_context=None):
                 422,
             )
         return _json_response(payload)
+    if route == "/api/timeline":
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        try:
+            payload = timeline.list_completed(
+                db_path,
+                view=query.get("view", ["week"])[0],
+                anchor_date=query.get("date", [None])[0],
+                timezone_name=query.get("tz", ["UTC"])[0],
+            )
+        except timeline.TimelineQueryError as exc:
+            return _json_response({"ok": False, "status": "failed_validation", "safe_error": str(exc)}, 422)
+        except db_errors.OperationalError:
+            return _json_response(
+                {"ok": False, "status": "unavailable", "safe_error": "timeline data is unavailable"}, 409
+            )
+        return _json_response(payload)
+    if route == "/api/timeline/receipt":
+        query = parse_qs(parsed.query)
+        task_id = query.get("task_id", [""])[0]
+        result_id = query.get("result_id", [""])[0]
+        if not all(value.strip() and len(value) <= 300 for value in (task_id, result_id)):
+            return _json_response({"ok": False, "status": "failed_validation"}, 422)
+        try:
+            payload = timeline.get_receipt(db_path, task_id, result_id)
+        except db_errors.OperationalError:
+            return _json_response(
+                {"ok": False, "status": "unavailable", "safe_error": "timeline data is unavailable"}, 409
+            )
+        if payload is None:
+            return _json_response({"ok": False, "status": "not_found"}, 404)
+        exchange_rate = control_context.receipt_fx if control_context else DEFAULT_RECEIPT_FX
+        return _json_response({**payload, "usage": exchange_rate.apply(payload["usage"])})
     if route.startswith("/api/work-items/"):
         raw_suffix = route[len("/api/work-items/") :]
         events_route = raw_suffix.endswith("/events")
@@ -350,12 +488,14 @@ def _handle_work_item_post(route, body, db_path, control_context, headers):
             expected_event_id=payload.get("expected_event_id"),
             idempotency_key=idempotency_key,
             body=payload.get("body", ""),
+            choice=payload.get("choice"),
             routing_mode=payload.get("routing_mode"),
             requested_worker=payload.get("requested_worker"),
             title=payload.get("title"),
             description=payload.get("description"),
             priority=payload.get("priority"),
             abandon_review_run_ids=payload.get("abandon_review_run_ids"),
+            dependency=payload.get("dependency"),
         )
         detail = board.get_work_item_detail(db_path, result["item"]["work_item_id"])
         return _json_response(detail)
@@ -431,6 +571,38 @@ def _handle_task_retrigger_post(route, body, db_path, control_context, headers):
         )
 
 
+def _handle_proposal_post(route, body, db_path, control_context, headers):
+    if error := _control_request_error(control_context, headers, json_required=True):
+        return error
+    if not control_context.writes_enabled or not control_context.proposal_enabled:
+        return _json_response({"status": "unavailable", "safe_error": "proposal decisions are disabled"}, 503)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_response({"status": "failed_validation", "safe_error": "invalid JSON body"}, 422)
+    if not isinstance(payload, dict):
+        return _json_response({"status": "failed_validation", "safe_error": "JSON body must be an object"}, 422)
+    proposal_id = unquote(route.removeprefix("/api/proposals/").removesuffix("/decisions"))
+    try:
+        proposal_commands.decide(
+            db_path,
+            proposal_id,
+            context=_work_item_context(control_context),
+            action=payload.get("action"),
+            expected_version=payload.get("expected_version"),
+            idempotency_key=headers.get("x-idempotency-key"),
+            reason=payload.get("reason", ""),
+        )
+    except work_items.WorkItemNotFoundError:
+        return _json_response({"status": "not_found"}, 404)
+    except work_items.WorkItemValidationError as exc:
+        return _json_response({"status": "failed_validation", "safe_error": str(exc)}, 422)
+    except work_items.WorkItemConflictError as exc:
+        return _json_response({"status": "conflict", "safe_error": str(exc)}, 409)
+    items = proposals.read(db_path, proposal_id=proposal_id, repo_ids=control_context.allowed_repo_ids)
+    return _json_response(items[0]) if items else _json_response({"status": "not_found"}, 404)
+
+
 def handle_dashboard_post(path, body, db_path, control_context=None, request_headers=None):
     route = urlsplit(path).path
     if len(body) > 64 * 1024:
@@ -439,6 +611,8 @@ def handle_dashboard_post(path, body, db_path, control_context=None, request_hea
             413,
         )
     headers = _lower_headers(request_headers)
+    if route.startswith("/api/proposals/") and route.endswith("/decisions"):
+        return _handle_proposal_post(route, body, db_path, control_context, headers)
     if route == "/api/work-items" or (route.startswith("/api/work-items/") and route.endswith("/commands")):
         return _handle_work_item_post(route, body, db_path, control_context, headers)
     if route.startswith("/api/tasks/") and route.endswith("/retrigger"):
@@ -456,7 +630,12 @@ def handle_dashboard_post(path, body, db_path, control_context=None, request_hea
                 },
                 503,
             )
-    form = parse_qs(body.decode("utf-8"))
+    try:
+        form = parse_qs(body.decode("utf-8"), errors="strict")
+    except UnicodeError:
+        return _json_response(
+            {"ok": False, "status": "failed_validation", "safe_error": "Form must be valid UTF-8."}, 422
+        )
 
     def field(name):
         return (form.get(name) or [""])[0]
@@ -527,11 +706,19 @@ def make_handler(db_path, control_context=None):
             self.send_response(status)
             for name, value in headers.items():
                 self.send_header(name, value)
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
             self.send_header("content-length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
 
         def do_GET(self):
+            context = control_context or build_read_only_control_context(
+                db_path, host=self.server.server_address[0], port=self.server.server_address[1]
+            )
+            if self.headers.get("Host") not in {urlsplit(origin).netloc for origin in context.allowed_origins}:
+                self._send(*_json_response({"ok": False, "status": "forbidden", "safe_error": "invalid Host"}, 403))
+                return
             try:
                 response = build_http_response(
                     self.path,
@@ -617,7 +804,7 @@ def make_handler(db_path, control_context=None):
 
 def _allowed_web_origins(host, port, public_origin=None):
     bind_host = f"[{host}]" if ":" in host else host
-    origins = {f"http://{bind_host}:{port}"}
+    origins = {f"http://{bind_host}" if port == 80 else f"http://{bind_host}:{port}"}
     if public_origin is not None:
         error = "--public-origin must be an HTTP(S) origin without credentials, path, query or fragment"
         try:
@@ -670,6 +857,7 @@ def build_control_context_from_config(
         csrf_token=csrf_token or secrets.token_urlsafe(32),
         writes_enabled=True,
         write_error=None,
+        proposal_enabled=config_result.get("proposer", {}).get("enabled", False),
     )
 
 
@@ -711,6 +899,7 @@ def main(argv=None):
     parser.add_argument("--writable", action="store_true")
     parser.add_argument("--allow-remote", action="store_true")
     parser.add_argument("--json", action="store_true")
+    add_receipt_fx_arguments(parser)
     args = parser.parse_args(argv)
     options = validate_server_options(
         args.host,
@@ -730,6 +919,7 @@ def main(argv=None):
         )
     try:
         _allowed_web_origins(args.host, args.port, args.public_origin)
+        receipt_fx = _receipt_exchange_rate(args.receipt_fx_rate, args.receipt_fx_date)
     except ValueError as exc:
         return emit({"ok": False, "status": "failed_input", "safe_error": str(exc)}, 3)
     if args.config:
@@ -782,9 +972,25 @@ def main(argv=None):
             },
             3,
         )
+    if not args.writable:
+        try:
+            with closing(
+                db_database.connect(Path(db_path).expanduser().resolve().as_uri() + "?mode=ro", uri=True)
+            ) as conn:
+                if workbench.REQUIRED_TABLES - sqlite_master.table_names(conn):
+                    raise ValueError("Database schema is incomplete; initialize Robert first.")
+        except (db_errors.Error, OSError, ValueError):
+            return emit(
+                {
+                    "ok": False,
+                    "status": "failed_input",
+                    "safe_error": "Database is missing, unreadable, or incomplete; initialize Robert first.",
+                },
+                3,
+            )
     if args.json:
         return emit({"ok": True, "status": "ready", "data": dashboard.build_dashboard_data(db_path)})
-    serve(db_path, args.host, args.port, control_context=control_context)
+    serve(db_path, args.host, args.port, control_context=replace(control_context, receipt_fx=receipt_fx))
     return 0
 
 

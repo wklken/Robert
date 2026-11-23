@@ -1,6 +1,9 @@
 """SQLite connection settings and catalog operations, never business policy."""
 
+from pathlib import Path
+
 from robert_agent.persistence import errors
+from robert_agent.foundation.timestamps import timestamp_after
 
 
 def execute_control(conn, sql):
@@ -37,6 +40,10 @@ def database_list(conn):
     return execute_control(conn, "PRAGMA database_list")
 
 
+def main_database_path(conn):
+    return next((Path(row[2]) for row in database_list(conn) if row[1] == "main" and row[2]), None)
+
+
 def page_count(conn):
     return execute_control(conn, "PRAGMA page_count")[0][0]
 
@@ -54,3 +61,10 @@ def register_unicode_lower(conn):
     driver = conn._driver if hasattr(conn, "_driver") else conn
     with errors.translate_driver_errors():
         driver.create_function("python_lower", 1, lambda value: str(value or "").lower(), deterministic=True)
+
+
+def register_timestamp_after(conn):
+    """Retain exact timezone and microsecond comparison for delivery boundaries."""
+    driver = conn._driver if hasattr(conn, "_driver") else conn
+    with errors.translate_driver_errors():
+        driver.create_function("python_timestamp_after", 2, timestamp_after, deterministic=True)

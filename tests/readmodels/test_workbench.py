@@ -270,6 +270,8 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(detail["id"], workstream_id)
         self.assertIsNone(detail["work_item_id"])
 
+        self.assertEqual(len(workbench.list_work_items(self.db_path)["items"]), 1)
+
     def test_exhausted_remediation_episode_is_operator_attention(self):
         from robert_agent.readmodels import workbench
 
@@ -530,6 +532,74 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertEqual(headers["content-type"], "application/json; charset=utf-8")
         self.assertIn("database schema", json.loads(body)["safe_error"])
+
+    def test_cursor_survives_anchor_update_for_every_sort(self):
+        from robert_agent.readmodels import workbench
+
+        for number in range(1, 5):
+            self.seed_workstream(str(number))
+        for sort in ("priority", "updated-asc", "updated-desc"):
+            with self.subTest(sort=sort):
+                first = workbench.list_work_items(self.db_path, sort=sort, limit=2)
+                anchor = first["items"][-1]
+                with closing(sqlite3.connect(self.db_path)) as conn, conn:
+                    conn.execute(
+                        "UPDATE tasks SET updated_at='2027-01-01T00:00:00+00:00' WHERE task_id=?",
+                        (anchor["agent"]["task_id"],),
+                    )
+                second = workbench.list_work_items(self.db_path, sort=sort, limit=2, cursor=first["next_cursor"])
+                self.assertTrue(second["items"])
+                with closing(sqlite3.connect(self.db_path)) as conn, conn:
+                    conn.execute(
+                        "UPDATE tasks SET updated_at=? WHERE task_id=?",
+                        (anchor["updated_at"], anchor["agent"]["task_id"]),
+                    )
+
+    def test_preview_availability_matches_contained_file_policy(self):
+        from robert_agent.readmodels import workbench
+
+        stream, task = self.seed_workstream()
+        with tempfile.TemporaryDirectory() as directory:
+            outside = Path(directory) / "outside.txt"
+            outside.write_text("private")
+            link = self.root / "linked.txt"
+            link.symlink_to(outside)
+            with closing(sqlite3.connect(self.db_path)) as conn, conn:
+                conn.execute(
+                    "INSERT INTO artifacts(artifact_id,task_id,artifact_type,path,created_at) VALUES('linked',?,'worker_stdout',?,'2026-11-08')",
+                    (task, str(link)),
+                )
+            detail = workbench.get_work_item(self.db_path, stream)
+            self.assertFalse(detail["artifacts"][0]["preview_available"])
+
+    def test_list_reads_latest_execution_evidence_without_artifact_history(self):
+        from unittest.mock import patch
+        from robert_agent.readmodels import workbench
+        from robert_agent.persistence.queries.readviews import task_history
+
+        stream, task = self.seed_workstream()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            for number in range(2, 52):
+                attempt = f"attempt-{number}"
+                conn.execute(
+                    "INSERT INTO attempts(attempt_id,task_id,attempt_no,status) VALUES(?,?,?,'completed')",
+                    (attempt, task, number),
+                )
+                conn.execute(
+                    "INSERT INTO worker_phases(phase_id,attempt_id,phase,status,created_at,summary) VALUES(?,?,'verify','completed','2026-11-08','checked')",
+                    (attempt, attempt),
+                )
+                conn.execute(
+                    "INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at) VALUES(?,?,?,'comment','2026-11-08')",
+                    (attempt, task, attempt),
+                )
+        with patch.object(task_history, "artifacts_for_tasks", wraps=task_history.artifacts_for_tasks) as artifacts:
+            page = workbench.list_work_items(self.db_path, limit=1)
+        self.assertEqual(page["items"][0]["agent"]["attempt_no"], 51)
+        self.assertEqual(page["items"][0]["agent"]["phase"], "verify")
+        artifacts.assert_not_called()
+        detail = workbench.get_work_item(self.db_path, stream)
+        self.assertEqual(len(detail["attempts"]), 51)
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ def classify_attempt(
     started_at,
     now=None,
     heartbeat_stale_seconds=1200,
-    global_timeout_seconds=2700,
+    global_timeout_seconds=3600,
     hard_timeout_seconds=None,
 ):
     now = now or datetime.now(timezone.utc)
@@ -63,7 +63,7 @@ def main(argv=None):
     parser.add_argument("--heartbeat-at", required=True)
     parser.add_argument("--started-at", required=True)
     parser.add_argument("--heartbeat-stale-seconds", type=int, default=1200)
-    parser.add_argument("--global-timeout-seconds", type=int, default=2700)
+    parser.add_argument("--global-timeout-seconds", type=int, default=3600)
     args = parser.parse_args(argv)
     return emit(
         classify_attempt(
