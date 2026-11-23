@@ -16,6 +16,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 
 from robert_agent.adapters.services import supervision_model as model
+from robert_agent.foundation import question_choices
 from robert_agent.supervision import decisions
 
 
@@ -74,6 +75,58 @@ class SupervisionModelTests(unittest.TestCase):
         ):
             with self.subTest(blocks=len(blocks)):
                 self.assertEqual(self.call(self.response(blocks=blocks)), self.decision)
+
+    def test_ask_user_choices_survive_the_model_transport(self):
+        self.bundle[question_choices.REQUIRED_FLAG] = True
+        decision = {
+            **self.decision,
+            "action": "ask_user",
+            "message": "如何继续？",
+            "choices": [
+                {"id": "wait", "label": "等待", "tradeoff": "等待维护者处理当前结果。"},
+                {"id": "review", "label": "检查", "tradeoff": "先检查当前结果再继续。"},
+            ],
+        }
+        result = self.call(self.response(decision))
+        self.assertEqual(result, decision)
+        self.assertEqual(decisions.validate(json.dumps(result), self.bundle), decision)
+
+    def test_legacy_ask_user_choices_remain_supported(self):
+        decision = {**self.decision, "action": "ask_user", "message": "如何继续？"}
+        for choices in (None, [], [{"id": "wait", "label": "等待"}]):
+            with self.subTest(choices=choices):
+                output = {**decision, **({"choices": choices} if choices is not None else {})}
+                result = self.call(self.response(output))
+                self.assertEqual(result, output)
+                self.assertEqual(decisions.validate(json.dumps(result), self.bundle), output)
+
+    def test_required_question_choices_are_validated(self):
+        self.bundle[question_choices.REQUIRED_FLAG] = True
+        decision = {**self.decision, "action": "ask_user", "message": "如何继续？"}
+        choices = [
+            {"id": "wait", "label": "等待", "tradeoff": "等待当前结果。"},
+            {"id": "review", "label": "检查", "tradeoff": "检查当前结果。"},
+        ]
+        invalid = (
+            {},
+            {"choices": None},
+            {"choices": []},
+            {"choices": choices[:1]},
+            {"choices": choices * 3},
+            {"choices": [choices[0], {**choices[1], "id": "wait"}]},
+            {"choices": [choices[0], {**choices[1], "label": "等待"}]},
+            {"choices": [choices[0], {**choices[1], "tradeoff": ""}]},
+            {"choices": [choices[0], {**choices[1], "command": "unexpected"}]},
+        )
+        for changes in invalid:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.call(self.response({**decision, **changes}))
+
+    def test_choices_and_unknown_fields_cannot_widen_other_decisions(self):
+        for action in ("wait", "notify_user"):
+            for field in ("choices", "unexpected"):
+                with self.subTest(action=action, field=field), self.assertRaises(ValueError):
+                    self.call(self.response({**self.decision, "action": action, "message": "等待处理。", field: []}))
 
     def test_diagnosis_can_include_thinking(self):
         diagnosis = {

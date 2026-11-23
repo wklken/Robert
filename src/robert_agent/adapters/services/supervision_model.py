@@ -15,6 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+from robert_agent.foundation import question_choices
 from robert_agent.foundation.contracts.supervision import AUTOMATIC_DECISION_ACTIONS, NONEXECUTING_DECISION_ACTIONS
 
 MAX_REQUEST_BYTES = 65536
@@ -95,6 +96,8 @@ def validate_result(result, bundle, kind):
         if kind == "decision"
         else base | {"diagnosis_class", "evidence_ids", "recommended_action", "expected_progress"}
     )
+    if kind == "decision" and isinstance(result, dict) and result.get("action") == "ask_user" and "choices" in result:
+        fields.add("choices")
     if not isinstance(result, dict) or set(result) != fields:
         raise ModelError("invalid model output fields")
     if any(result[name] != bundle[name] for name in base):
@@ -128,6 +131,12 @@ def validate_result(result, bundle, kind):
             raise ModelError("model output needs an observable reason and progress")
         if action in ["ask_user", "notify_user"] and not result["message"].strip():
             raise ModelError("model output needs an operator message")
+        if action == "ask_user":
+            error = question_choices.validation_error(
+                result.get("choices", []), required=bundle.get(question_choices.REQUIRED_FLAG, False)
+            )
+            if error:
+                raise ModelError("invalid model question choices")
     else:
         if result["diagnosis_class"] not in [
             "transient_failure",
