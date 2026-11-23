@@ -8,6 +8,65 @@ from tests.support.review_workspace import ReviewWorkspaceFixture
 
 
 class ReviewWorkspaceTests(ReviewWorkspaceFixture):
+    def test_legacy_frozen_context_can_be_adopted_after_template_update(self):
+        prepared = self.prepare("legacy-freeze")
+        frozen = self.freeze_legacy(prepared)
+        before = Path(frozen["prompt_path"]).read_bytes()
+        self.assertIn(b"preparation summary's documented interpreter", before)
+        self.assertNotIn(b"discovery inventories", before)
+        self.assertEqual(review_workspace.freeze_context(prepared), frozen)
+        self.assertEqual(self.prepare("legacy-freeze"), frozen)
+        self.assertEqual(Path(frozen["prompt_path"]).read_bytes(), before)
+
+    def test_controller_inventory_with_old_version_marker_can_be_adopted(self):
+        prepared = self.prepare("old-marker")
+        prepared["prompt_version"] = 1
+        frozen = self.freeze(prepared)
+        self.assertIn(b"discovery inventories", Path(frozen["prompt_path"]).read_bytes())
+        self.assertEqual(review_workspace.freeze_context(prepared), frozen)
+
+    def test_legacy_adoption_refuses_changed_source_context_and_prompt_hash(self):
+        for changed in ("source", "context", "prompt"):
+            with self.subTest(changed=changed):
+                prepared = self.prepare("legacy-corrupt-" + changed)
+                frozen = self.freeze_legacy(prepared)
+                path = {
+                    "source": Path(frozen["worktree_path"], "source.py"),
+                    "context": Path(frozen["context_dir"], "context-summary.md"),
+                    "prompt": Path(frozen["prompt_path"]),
+                }[changed]
+                path.write_text("changed\n")
+                with self.assertRaises(ValueError):
+                    review_workspace.freeze_context(prepared)
+
+    def test_legacy_adoption_refuses_forged_prompt_even_with_updated_hash(self):
+        prepared = self.prepare("legacy-forged-prompt")
+        frozen = self.freeze_legacy(prepared)
+        prompt = Path(frozen["prompt_path"])
+        prompt.write_text(
+            prompt.read_text().replace("Do not read other reviewer results", "Read other reviewer results")
+        )
+        frozen["prompt_sha256"] = review_workspace.review_files.sha256_file(prompt)
+        review_workspace.review_files.atomic_json(Path(frozen["context_dir"], "manifest.json"), frozen)
+        with self.assertRaisesRegex(ValueError, "built-in template"):
+            review_workspace.freeze_context(prepared)
+
+    def test_legacy_adoption_refuses_changed_identity_and_prepared_hashes(self):
+        for changed in ("decision_owner", "prepared_hash", "unexpected_file"):
+            with self.subTest(changed=changed):
+                prepared = self.prepare("legacy-identity-" + changed)
+                frozen = self.freeze_legacy(prepared)
+                if changed == "decision_owner":
+                    prepared["decision_owner"] = {"login": "original"}
+                    frozen["decision_owner"] = {"login": "replacement"}
+                elif changed == "prepared_hash":
+                    frozen["files"][str(Path(frozen["context_dir"], "pr-info.json"))] = "0" * 64
+                else:
+                    frozen["files"][str(Path(frozen["context_dir"], "unregistered.md"))] = "0" * 64
+                review_workspace.review_files.atomic_json(Path(frozen["context_dir"], "manifest.json"), frozen)
+                with self.assertRaises(ValueError):
+                    review_workspace.freeze_context(prepared)
+
     def test_candidate_snapshot_through_root_alias_can_freeze_and_resume(self):
         alias = self.root / "alias"
         alias.symlink_to(self.root, target_is_directory=True)

@@ -17,3 +17,6 @@ These rules apply to this directory and its descendants. Follow the
   `prompts` renderer with fixed stage profiles. Stage input builders supply
   facts, references and existing output contracts, not free-form instruction tails.
   Preserve helper, atomic-file and stdout completion semantics separately.
+- Historical stage versions select fixed packaged prompt resources through the
+  renderer. Workflow owners decide which frozen versions may be adopted; callers
+  cannot supply template paths or replacement instruction text.

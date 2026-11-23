@@ -6,10 +6,35 @@ from dataclasses import replace
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from robert_agent.context import prompts as render_prompt
 from robert_agent.context.prompt_contract import ContextItem, OutputContract, PromptInput
+from robert_agent.context.native_prompts import review_evaluate_input
+from robert_agent.workflows.review import files as review_files
 from robert_agent.workflows import routes as route
 
 
 class PromptScopeTests(unittest.TestCase):
+    def test_review_template_versions_use_fixed_resources_and_reject_unknown_versions(self):
+        manifest = {
+            "schema_version": 1,
+            "round_id": "round-1",
+            "snapshot_id": "snapshot-1",
+            "head_sha": "a" * 40,
+            "context_dir": "/context",
+            "worktree_path": "/tree",
+            "artifact_root": "/artifacts",
+        }
+        request = review_evaluate_input(
+            manifest, severities=review_files.SEVERITIES, recommendations=review_files.RECOMMENDATIONS
+        )
+        current = render_prompt.render_prompt(request)
+        self.assertEqual(render_prompt.render_prompt(request, stage_version=2).text, current.text)
+        legacy = render_prompt.render_prompt(request, stage_version=1)
+        self.assertIn("preparation summary's documented interpreter", legacy.text)
+        self.assertNotIn("discovery inventories", legacy.text)
+        self.assertIn("stages/review-evaluate-model-preparation-v1.md", legacy.metadata["resources"])
+        for invalid in (0, 3, True, "../review-boundary.md"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "unsupported prompt stage version"):
+                render_prompt.render_prompt(request, stage_version=invalid)
+
     def render(self, route_id, **kwargs):
         return render_prompt.render_prompt(
             worker_prompt_input(

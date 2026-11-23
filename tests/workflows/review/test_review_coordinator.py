@@ -35,6 +35,53 @@ from tests.support.review_coordinator import ReviewCoordinatorFixture
 
 
 class ReviewCoordinatorTests(ReviewCoordinatorFixture):
+    def test_tab_git_path_does_not_block_either_reviewer(self):
+        (self.git_fixture.upstream / "tab\tfile.py").write_text("value = 1\n")
+        self.git_fixture.git(self.git_fixture.upstream, "add", ".")
+        self.git_fixture.commit("value = 3\n")
+        self.cycle([self.event()])
+        driver = self.coordinator()
+        driver.prepare()
+        driver.review()
+        self.assertEqual(Counter(call[1] for call in self.calls), {"codex": 1, "claude": 1})
+        self.assertEqual(self.calls[0][2], self.calls[1][2])
+
+    def test_legacy_freeze_before_database_registration_resumes_reviewers(self):
+        self.cycle([self.event()])
+        driver = self.coordinator()
+        with patch.object(driver, "prepare_context"):
+            driver.prepare()
+        frozen = self.git_fixture.freeze_legacy(driver.manifest)
+        driver.save_manifest()  # The database still has the unfrozen snapshot.
+        before = Path(frozen["prompt_path"]).read_bytes()
+        recovered = self.coordinator()
+        recovered.prepare()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(recovered.manifest, frozen)
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(review_store.session(conn, task_id=driver.task_id)["manifest"], frozen)
+        recovered.review()
+        self.assertEqual(Counter(call[1] for call in self.calls), {"codex": 1, "claude": 1})
+        self.assertTrue(all(call[2] == before for call in self.calls))
+
+    def test_fresh_preparation_freezes_context_without_models_or_slots(self):
+        self.cycle([self.event()])
+        driver = self.coordinator()
+        driver.prepare()
+        self.assertEqual(self.calls, [])
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(review_store.runs(conn, driver.round_id), [])
+            self.assertEqual(review_store.process_pool_status(conn)["in_use"], 0)
+        self.assertTrue(driver.manifest["frozen"])
+        context = Path(driver.manifest["context_dir"])
+        summary = (context / "context-summary.md").read_text()
+        self.assertIn(driver.manifest["head_sha"], summary)
+        self.assertIn("review this PR", summary)
+        index = json.loads((context / "source-index.json").read_text())
+        self.assertIn("source.py", [entry["path"] for entry in index["files"]])
+        self.assertEqual(index["preparation_mode"], "controller-inventory")
+        self.assertIn("not read", index["reading_notes"])
+
     def test_later_review_request_keeps_original_owner_in_native_prompts(self):
         self.cycle([self.event()])
         first = self.coordinator()
@@ -94,7 +141,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         self.fail_worker = None
         self.coordinator().run()
         counts = Counter((call[0], call[1]) for call in self.calls)
-        self.assertEqual(counts[("prepare", "codex")], 1)
+        self.assertEqual(counts[("prepare", "codex")], 0)
         self.assertEqual(counts[("review", "codex")], 1)
         self.assertEqual(counts[("review", "claude")], 2)
         self.assertEqual(counts[("synthesis", "codex")], 1)
@@ -608,8 +655,10 @@ if stage_id=='review.prepare':
     save('source-index.json',{'files':[{'path':'source.py','reason':'changed source'}],'reading_notes':source})
 elif stage_id=='review.evaluate':
     stage='review'
-    assert (context/'context-summary.md').read_text()==source
-    assert json.loads((context/'source-index.json').read_text())['reading_notes']==source
+    index=json.loads((context/'source-index.json').read_text())
+    assert index['preparation_mode']=='controller-inventory'
+    assert 'source.py' in [entry['path'] for entry in index['files']]
+    assert 'not read' in index['reading_notes']
     save('result.json',dict(identity,schema_version=1,findings=[],dismissed_findings=[],
         coverage={'reviewed_paths':['source.py'],'unreviewed_paths':[],'notes':source},merge_recommendation='ready to merge'))
 else:

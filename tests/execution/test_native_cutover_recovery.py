@@ -104,7 +104,8 @@ class NativeCutoverRecoveryTests(unittest.TestCase):
                         results = [tuple(row) for row in conn.execute("SELECT * FROM worker_results")]
                         before_runs = driver.store.runs(conn, driver.round_id)
                         before_session = driver.store.session(conn, task_id=driver.task_id)
-                        self.assertEqual(len(before_runs), 4)
+                        expected_runs = 3 if fixture_type is review_fixture.ReviewCoordinatorFixture else 4
+                        self.assertEqual(len(before_runs), expected_runs)
                         self.assertTrue(
                             all(run["status"] == "succeeded" and not run["slot_reserved"] for run in before_runs)
                         )
