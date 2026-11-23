@@ -54,6 +54,25 @@ class ReviewRecoveryTests(unittest.TestCase):
 
     def signal_during_stage(self, stage):
         driver = self.fixture.coordinator()
+        if stage == "prepare":
+            # An already-recorded model preparation keeps legacy dispatch/recovery.
+            with patch.object(driver, "prepare_context"):
+                driver.prepare()
+            prompt = driver.prompt(
+                "prepare-prompt.md",
+                review_coordinator.render_prompt(review_coordinator.review_prepare_input(driver.manifest)).text,
+                stage="prepare",
+            )
+            with fixture_database.connect(self.fixture.db) as conn:
+                review_store.new_run(
+                    conn,
+                    driver.round_id,
+                    "prepare",
+                    "codex",
+                    driver.attempt_id,
+                    driver.manifest["artifact_root"],
+                    review_store.digest(prompt),
+                )
 
         def launch(**kwargs):
             result = self.fixture.launcher(**kwargs)
@@ -73,9 +92,76 @@ class ReviewRecoveryTests(unittest.TestCase):
             signal.signal(signal.SIGTERM, previous)
         self.assertTrue(driver.stopping.is_set())
         with fixture_database.connect(self.fixture.db) as conn:
-            run = next(run for run in review_store.runs(conn, driver.round_id) if run["stage"] == stage)
+            run = next(
+                run for run in review_store.runs(conn, driver.round_id) if run["stage"] == stage and run["dispatch"]
+            )
             self.assertTrue(run["dispatch"])
             self.assertEqual(review_store.process_pool_status(conn)["in_use"], 0)
+
+    def test_controller_preparation_cancellation_retries_without_models(self):
+        driver = self.fixture.coordinator()
+        original = review_coordinator.review_preparation.write_context
+
+        def stop_after_write(manifest):
+            original(manifest)
+            driver.stopping.set()
+
+        with patch.object(review_coordinator.review_preparation, "write_context", side_effect=stop_after_write):
+            with self.assertRaises(review_coordinator.StageStopped):
+                driver.prepare()
+        self.assertFalse(driver.manifest["frozen"])
+        self.assertEqual(self.fixture.calls, [])
+        driver.stopping.clear()
+        driver.prepare()
+        self.assertTrue(driver.manifest["frozen"])
+        self.assertEqual(self.fixture.calls, [])
+
+    def test_legacy_successful_preparation_reuses_sealed_output_after_interrupted_freeze(self):
+        driver = self.fixture.coordinator()
+        with patch.object(driver, "prepare_context"):
+            driver.prepare()
+        prompt = driver.prompt(
+            "prepare-prompt.md",
+            review_coordinator.render_prompt(review_coordinator.review_prepare_input(driver.manifest)).text,
+            stage="prepare",
+        )
+        with fixture_database.connect(self.fixture.db) as conn:
+            review_store.new_run(
+                conn,
+                driver.round_id,
+                "prepare",
+                "codex",
+                driver.attempt_id,
+                driver.manifest["artifact_root"],
+                review_store.digest(prompt),
+            )
+        with patch.object(review_coordinator.review_workspace, "freeze_context", side_effect=OSError("interrupted")):
+            with self.assertRaisesRegex(OSError, "interrupted"):
+                driver.prepare_context()
+        calls = list(self.fixture.calls)
+        driver.prepare_context()
+        self.assertEqual(self.fixture.calls, calls)
+        self.assertEqual([call[0] for call in calls], ["prepare"])
+        summary = Path(driver.manifest["context_dir"], "context-summary.md").read_text()
+        self.assertIn("Read source.py", summary)
+        self.assertTrue(driver.manifest["frozen"])
+
+    def test_controller_freeze_before_registration_is_adopted_without_rewriting(self):
+        driver = self.fixture.coordinator()
+        with patch.object(driver, "prepare_context"):
+            driver.prepare()
+        with patch.object(driver, "save_manifest", side_effect=OSError("registration interrupted")):
+            with self.assertRaisesRegex(OSError, "registration interrupted"):
+                driver.prepare_context()
+        frozen = dict(driver.manifest)
+        restarted = self.fixture.coordinator()
+        self.assertFalse(restarted.manifest["frozen"])
+        with patch.object(
+            review_coordinator.review_preparation, "write_context", side_effect=AssertionError("rewritten")
+        ):
+            restarted.prepare_context()
+        self.assertEqual(restarted.manifest, frozen)
+        self.assertEqual(self.fixture.calls, [])
 
     def test_confirmed_abandon_cancels_round_releases_slot_and_allows_new_trigger(self):
         driver, run, item, context = self.unknown_start()

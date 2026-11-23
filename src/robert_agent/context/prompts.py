@@ -18,6 +18,9 @@ from robert_agent.resource_files import resource
 
 _SECTIONS = ("Stage", "Task", "Boundaries", "Context", "Work", "Verification", "Delivery", "Ending")
 _CONTRACT_VERSION = "robert.prompt.v1"
+_STAGE_VERSIONS = {
+    "review.evaluate": {1: "review-evaluate-model-preparation-v1.md", 2: "review-evaluate.md"},
+}
 
 
 def _json(value):
@@ -84,7 +87,7 @@ def _context_text(item: ContextItem):
     return "\n".join(parts)
 
 
-def render_prompt(request: PromptInput) -> RenderedPrompt:
+def render_prompt(request: PromptInput, *, stage_version: int | None = None) -> RenderedPrompt:
     """Compose the one supported prompt format without resolving external inputs."""
     profile = STAGES.get(request.stage)
     if not profile:
@@ -122,7 +125,12 @@ def render_prompt(request: PromptInput) -> RenderedPrompt:
 
     template_values = dict(request.values)
     sections: dict[str, list[str]] = {name: [] for name in _SECTIONS}
-    stage = _split_sections(load(f"stages/{request.stage.replace('.', '-').replace('_', '-')}.md"))
+    stage_name = f"{request.stage.replace('.', '-').replace('_', '-')}.md"
+    if stage_version is not None:
+        if type(stage_version) is not int or stage_version not in _STAGE_VERSIONS.get(request.stage, {}):
+            raise ValueError(f"unsupported prompt stage version: {request.stage}")
+        stage_name = _STAGE_VERSIONS[request.stage][stage_version]
+    stage = _split_sections(load(f"stages/{stage_name}"))
     if not {"Task", "Work"} <= stage.keys() or stage.keys() - set(_SECTIONS[1:]):
         raise ValueError(f"invalid stage resource: {request.stage}")
     for section, content in stage.items():
