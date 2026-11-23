@@ -45,6 +45,22 @@ function questionCard(params) {
     button_list: buttonList, card_action: { type: 0 } };
 }
 
+async function sendQuestionCard(connection, target, card) {
+  if (!connection?.isConnected || typeof connection.sendMessage !== "function")
+    return { status: "failed" }; // No send was attempted; retry is safe.
+  try {
+    const result = await connection.sendMessage(target, { msgtype: "template_card", template_card: card });
+    if (Number.isInteger(result?.errcode) && result.errcode !== 0) return { status: "failed" };
+    const messageId = result?.headers?.req_id;
+    return typeof messageId === "string" && messageId.length > 0 && messageId.length <= 256
+      ? { status: "sent", messageId } : { status: "unknown" };
+  } catch (error) {
+    // A protocol rejection proves failure. A timeout/disconnect does not prove
+    // that the remote card was absent, so it cannot authorize a duplicate.
+    return { status: Number.isInteger(error?.errcode) && error.errcode !== 0 ? "failed" : "unknown" };
+  }
+}
+
 export function registerWeComQuestionTransport(api) {
   api.registerGatewayMethod?.("robert.question.send", async ({ params, respond }) => {
     let dispatched = false;
@@ -52,30 +68,38 @@ export function registerWeComQuestionTransport(api) {
       if (!params || params.channel !== "wecom" || typeof params.account !== "string" || !params.account
           || typeof params.target !== "string" || !params.target || typeof params.text !== "string"
           || !params.text || params.preview !== undefined && typeof params.preview !== "boolean"
+          || params.phase !== undefined && !["text", "card"].includes(params.phase)
+          || params.phase === "card" && (typeof params.messageId !== "string"
+            || !params.messageId || params.messageId.length > 256)
           || Buffer.byteLength(JSON.stringify(params), "utf8") > 65536)
         throw new Error("Invalid Robert question delivery.");
       const card = questionCard(params);
       const text = params.preview ? `【交互测试】点击仅回显测试提示，不提交业务答复。\n\n${params.text}` : params.text;
+      const connection = globalThis[sharedStateKey]?.wsClientInstances?.get(params.account);
+      const target = params.target.replace(/^wecom:/i, "").replace(/^group:/i, "");
+      if (params.phase === "card") {
+        const result = await sendQuestionCard(connection, target, card);
+        respond(true, { ok: true, mode: "card", messageId: params.messageId, card: result });
+        return;
+      }
       const adapter = await api.runtime.channel.outbound.loadAdapter("wecom");
       if (!adapter?.sendText) throw new Error("WeCom message transport is unavailable.");
-      const connection = globalThis[sharedStateKey]?.wsClientInstances?.get(params.account);
       if (!connection?.isConnected || typeof connection.sendMessage !== "function") {
         dispatched = true;
         const result = await adapter.sendText({ cfg: api.config, accountId: params.account,
           to: params.target, threadId: params.thread || undefined, text });
         if (!result?.messageId) throw new Error("WeCom did not return a delivery receipt.");
-        respond(true, { ok: true, mode: "text", messageId: result.messageId });
+        respond(true, { ok: true, mode: "text", messageId: result.messageId, card: { status: "skipped" } });
         return;
       }
-      const target = params.target.replace(/^wecom:/i, "").replace(/^group:/i, "");
       dispatched = true;
       const notice = await adapter.sendText({ cfg: api.config, accountId: params.account,
         to: params.target, threadId: params.thread || undefined, text });
       if (!notice?.messageId) throw new Error("WeCom did not return a delivery receipt.");
-      const result = await connection.sendMessage(target, { msgtype: "template_card",
-        template_card: card });
-      if (!result?.headers?.req_id) throw new Error("WeCom did not return a delivery receipt.");
-      respond(true, { ok: true, mode: "card", messageId: result.headers.req_id });
+      const result = params.phase === "text" ? { status: "pending" }
+        : await sendQuestionCard(connection, target, card);
+      respond(true, { ok: true, mode: params.phase === "text" ? "text" : "card",
+        messageId: notice.messageId, card: result });
     } catch {
       respond(false, undefined, { code: "UNAVAILABLE",
         message: dispatched ? "Robert question delivery failed; inspect local delivery diagnostics."

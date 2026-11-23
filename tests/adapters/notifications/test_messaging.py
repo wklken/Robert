@@ -18,7 +18,14 @@ class MessagePresentationTests(unittest.TestCase):
             actions=["reply"],
             choices=[{"id": "close", "label": "Close supervision", "tradeoff": "Ends monitoring"}],
         )
-        runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"ok":true,"messageId":"card-1"}', ""))
+        runner = Mock(
+            return_value=subprocess.CompletedProcess(
+                [],
+                0,
+                '{"ok":true,"messageId":"text-1","card":{"status":"pending"}}',
+                "",
+            )
+        )
         receipt = {}
         self.assertTrue(
             send(
@@ -44,7 +51,60 @@ class MessagePresentationTests(unittest.TestCase):
         self.assertEqual(params["target"], "operator")
         self.assertIn("Close supervision", params["text"])
         self.assertEqual(params["presentation"]["blocks"][0]["buttons"][0]["action"]["type"], "command")
-        self.assertEqual(receipt, {"message_id": "card-1"})
+        self.assertEqual(params["phase"], "text")
+        self.assertEqual(receipt, {"message_id": "text-1", "card": {"status": "pending"}})
+
+    def test_wecom_card_receipt_validation_preserves_unknown_outcomes(self):
+        payload = self.payload(
+            notification_id="decision-" + "ab" * 16,
+            selectable_choices=True,
+            choices=[{"id": "close", "label": "Close", "tradeoff": "Ends monitoring"}],
+        )
+        config = {
+            "messaging": {
+                "enabled": True,
+                "provider": "openclaw",
+                "channel": "wecom",
+                "account": "default",
+                "target": "operator",
+            }
+        }
+        for response, expected in (
+            (
+                {"ok": True, "messageId": "text-1", "card": {"status": "sent", "messageId": "card-1"}},
+                {"status": "sent", "message_id": "card-1"},
+            ),
+            ({"payload": {"ok": True, "messageId": "text-1", "card": {"status": "failed"}}}, {"status": "failed"}),
+            ({"ok": True, "messageId": "text-1", "card": {"status": "sent"}}, {"status": "unknown"}),
+            ({"ok": True, "messageId": "text-1", "card": {"status": "pending"}}, {"status": "unknown"}),
+            ({"ok": True, "messageId": "text-1", "card": {"status": ["sent"]}}, {"status": "unknown"}),
+            (
+                {"ok": True, "messageId": "other-body", "card": {"status": "sent", "messageId": "card-1"}},
+                {"status": "unknown"},
+            ),
+            (
+                {"payload": {"ok": False, "messageId": "text-1", "card": {"status": "sent", "messageId": "card-1"}}},
+                {"status": "unknown"},
+            ),
+        ):
+            with self.subTest(response=response):
+                runner = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(response), ""))
+                receipt = {}
+                self.assertEqual(
+                    send(
+                        payload,
+                        config=config,
+                        runner=runner,
+                        receipt=receipt,
+                        question_phase="card",
+                        message_id="text-1",
+                    ),
+                    expected["status"] == "sent",
+                )
+                self.assertEqual(receipt, {"card": expected})
+                params = json.loads(runner.call_args.args[0][runner.call_args.args[0].index("--params") + 1])
+                self.assertEqual(params["phase"], "card")
+                self.assertEqual(params["messageId"], "text-1")
 
     def payload(self, **values):
         return {

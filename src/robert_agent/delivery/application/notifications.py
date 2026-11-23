@@ -56,6 +56,63 @@ def main(argv=None):
     )
 
 
+def _deliver_question_card(db_path, notification_id, payload, state, *, config, runner, now):
+    """The body receipt is durable before any independently retried card effect."""
+    previous = state.get("card", {})
+    if previous.get("status") == "sending":
+        # A previous process stopped without recording an outcome. Withhold a
+        # repeat effect until it can be reconciled; text remains answerable.
+        state["card"] = {**previous, "status": "unknown", "retryable": False, "next_retry_at": None}
+    elif previous.get("status") in {"pending", "failed"}:
+        if previous.get("next_retry_at") and retry_policy.timestamp(previous["next_retry_at"]) > retry_policy.timestamp(
+            now
+        ):
+            return
+        settings = (config or {}).get("messaging", {})
+        if state.get("endpoint") != {
+            field: settings.get(field, "") for field in ("provider", "channel", "account", "conversation", "thread")
+        }:
+            return
+        if int(previous.get("attempt_count", 0)) >= retry_policy.MAX_ATTEMPTS or (
+            previous.get("first_failed_at")
+            and (retry_policy.timestamp(now) - retry_policy.timestamp(previous["first_failed_at"])).total_seconds()
+            >= retry_policy.MAX_ELAPSED_SECONDS
+        ):
+            state["card"] = {**previous, "status": "exhausted", "retryable": False, "next_retry_at": None}
+            with closing(db_database.connect(db_path)) as conn, conn:
+                db_write_notifications.set_delivery_state(conn, notification_id, json.dumps(state))
+            return
+        card = retry_policy.failure_state(previous, "card delivery unavailable", now)
+        card["status"] = "sending"
+        state["card"] = card
+        with closing(db_database.connect(db_path)) as conn, conn:
+            db_write_notifications.set_delivery_state(conn, notification_id, json.dumps(state))
+        with closing(db_database.connect(db_path)) as conn:
+            # Recheck resolution, repository scope and the current question before effects.
+            if messages.envelope(conn, notification_id, config=config) is None:
+                return
+        receipt = {}
+        transport.send(
+            payload,
+            config=config,
+            runner=runner,
+            receipt=receipt,
+            question_phase="card",
+            message_id=state["message_id"],
+        )
+        card.update(receipt.get("card", {"status": "unknown"}))
+        if card["status"] == "failed" and not card["retryable"]:
+            card["status"] = "exhausted"
+        if card["status"] in {"sent", "unknown", "skipped"}:
+            card.update(retryable=False, next_retry_at=None)
+        if card["status"] == "sent":
+            card["sent_at"] = now
+    else:
+        return
+    with closing(db_database.connect(db_path)) as conn, conn:
+        db_write_notifications.set_delivery_state(conn, notification_id, json.dumps(state))
+
+
 def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, limit=100, repo_ids=None, config=None):
     """At-least-once operator delivery; receiver dedupes the stable delivery_id.
 
@@ -113,15 +170,26 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
             previous = metadata.get("delivery", {})
             if previous.get("delivery_id") != delivery_id:
                 previous = {}
-            if previous.get("status") in {"sent", "exhausted"} or (
-                previous.get("next_retry_at")
-                and retry_policy.timestamp(previous["next_retry_at"]) > retry_policy.timestamp(now)
+            body_sent = previous.get("status") == "sent"
+            if (
+                previous.get("status") == "exhausted"
+                or (body_sent and (command or not previous.get("card")))
+                or (
+                    not body_sent
+                    and previous.get("next_retry_at")
+                    and retry_policy.timestamp(previous["next_retry_at"]) > retry_policy.timestamp(now)
+                )
             ):
                 continue
-            if int(previous.get("attempt_count", 0)) >= retry_policy.MAX_ATTEMPTS or (
-                previous.get("first_failed_at")
-                and (retry_policy.timestamp(now) - retry_policy.timestamp(previous["first_failed_at"])).total_seconds()
-                >= retry_policy.MAX_ELAPSED_SECONDS
+            if not body_sent and (
+                int(previous.get("attempt_count", 0)) >= retry_policy.MAX_ATTEMPTS
+                or (
+                    previous.get("first_failed_at")
+                    and (
+                        retry_policy.timestamp(now) - retry_policy.timestamp(previous["first_failed_at"])
+                    ).total_seconds()
+                    >= retry_policy.MAX_ELAPSED_SECONDS
+                )
             ):
                 previous.update(status="exhausted", retryable=False, next_retry_at=None)
                 with closing(db_database.connect(db_path)) as conn, conn:
@@ -135,6 +203,17 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
                 continue
             payload["delivery_id"] = delivery_id
             processed += 1
+            if body_sent:
+                _deliver_question_card(
+                    db_path,
+                    notification_id,
+                    payload,
+                    previous,
+                    config=config,
+                    runner=runner,
+                    now=now,
+                )
+                continue
             state = retry_policy.failure_state(previous, "delivery unavailable", now)
             state.update(delivery_id=delivery_id, status="sending")
             if not command and (config or {}).get("messaging", {}).get("enabled"):
@@ -162,6 +241,16 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
             with closing(db_database.connect(db_path)) as conn, conn:
                 db_write_notifications.set_delivery_state(conn, notification_id, json.dumps(state))
             counts["sent" if sent else "failed"] += 1
+            if sent and not command:
+                _deliver_question_card(
+                    db_path,
+                    notification_id,
+                    payload,
+                    state,
+                    config=config,
+                    runner=runner,
+                    now=now,
+                )
     return counts
 
 

@@ -213,8 +213,14 @@ click and never invokes the Robert business response command.
 The WeCom bridge is verified with OpenClaw `2026.10.3-t.8` and its bundled
 `wecom-openclaw-plugin`. The native card transport reads that channel’s internal
 connected Bot interface; it is a version-specific integration boundary. Without
-that connection it uses the channel’s normal text transport. A failed card send
-is reported as a delivery failure; no second transport is tried after that send.
+that connection it uses the channel’s normal text transport. The queue saves the
+body's message ID and delivery receipt before sending the card; quoted replies
+use that body ID. Card receipts and retry state are stored separately. A confirmed
+card rejection retries only the card under the existing attempt and time budgets.
+A timeout, missing acknowledgement or interrupted card send remains `unknown`
+and withholds automatic card retries until the remote effect can be reconciled.
+The delivered body stays answerable in all these cases. No second transport is
+tried after a card send.
 `robert openclaw install --force` replaces both generated files and the
 OpenClaw-managed installed copy before restarting the gateway.
 

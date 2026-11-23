@@ -12,6 +12,42 @@ from tests.support.work_items import WorkItemCommandFixture
 
 
 class MessagingPersistenceTests(WorkItemCommandFixture):
+    def test_body_and_card_candidates_share_scope_filtering_and_queue_limit(self):
+        now = "2026-11-20T03:16:48Z"
+        with closing(database.connect(self.db_path)) as conn, conn:
+            for identifier, created, delivery in (
+                ("denied-card", "2026-11-20T03:00:00Z", {"status": "sent", "card": {"status": "pending"}}),
+                ("unknown-card", "2026-11-20T03:01:00Z", {"status": "sent", "card": {"status": "unknown"}}),
+                ("card", "2026-11-20T03:02:00Z", {"status": "sent", "card": {"status": "failed"}}),
+                ("body", "2026-11-20T03:03:00Z", {}),
+            ):
+                notification_store.record_notification(
+                    conn,
+                    identifier,
+                    None,
+                    "worker_stale",
+                    "local",
+                    "recorded",
+                    created,
+                    json.dumps(
+                        {"delivery": delivery, "repo_id": "denied" if identifier == "denied-card" else "repo-1"}
+                    ),
+                )
+            self.assertEqual(
+                [row[0] for row in notifications.find_for_deliver_pending(conn, now, 1, messaging_repo_ids={"repo-1"})],
+                ["card"],
+            )
+            self.assertEqual(
+                [row[0] for row in notifications.find_for_deliver_pending(conn, now, 2, messaging_repo_ids={"repo-1"})],
+                ["card", "body"],
+            )
+            self.assertTrue(
+                notifications.has_pending_local_delivery_filtered(conn, None, now, messaging_repo_ids={"repo-1"})
+            )
+            self.assertFalse(
+                notifications.has_pending_local_delivery_filtered(conn, None, now, messaging_repo_ids=set())
+            )
+
     def test_canceled_repair_is_filtered_before_queue_limit_and_readiness(self):
         item = self._create(start=True)["item"]
         now = "2026-11-20T03:16:48Z"
