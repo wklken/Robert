@@ -29,7 +29,9 @@ class OpenClawMessagingTests(unittest.TestCase):
             executable = binary / "robert"
             executable.write_text(
                 f"#!{sys.executable}\n"
-                + 'import json, sys\nr=json.loads(sys.stdin.read() or "{}")\nif "choice" in r or r.get("action") == "custom_reply": print(json.dumps({"ok":True,"status":"awaiting_custom_reply","message":json.dumps(r)})); sys.exit(0)\nprint(json.dumps({"ok":True,"request":r,"args":sys.argv[1:]}))\n'
+                + 'import json, os, sys\nr=json.loads(sys.stdin.read() or "{}")\n'
+                + 'with open(os.environ["CALLS"], "a") as f: f.write(json.dumps({"request":r,"args":sys.argv[1:]})+"\\n")\n'
+                + 'if "choice" in r or r.get("action") == "custom_reply": print(json.dumps({"ok":True,"status":"awaiting_custom_reply","message":json.dumps(r)})); sys.exit(0)\nprint(json.dumps({"ok":True,"request":r,"args":sys.argv[1:]}))\n'
             )
             executable.chmod(0o755)
             script = root / "plugin/check.mjs"
@@ -41,7 +43,7 @@ const context = { isAuthorizedSender: true, channel: 'chat', channelId: 'telegra
   accountId: 'personal', from: 'telegram:42', senderId: '42', messageThreadId: 7,
   args: 'notice-1 3 reply Use SQLite.\\nKeep $(touch never) literal.' };
 const response = await commands['robert-respond'].handler(context);
-const status = await commands['robert-status'].handler(context);
+const status = await commands['robert-status'].handler({ ...context, args: '--json' });
 const encoded = Buffer.from('ad'.repeat(16), 'hex').toString('base64url');
 const clicks = [];
 for (const args of [`a${encoded}:3:2`, `d${encoded}:0:x`, 'notice-1 3 pick 1']) {
@@ -58,7 +60,9 @@ for (const args of ['', 'new example/repo Research $(touch never)\\nSecond line'
 const deniedDispatch = await commands['robert-inbox'].handler({ ...context, args: 'new example/repo Research', isAuthorizedSender: false });
 const reads = [];
 for (const name of ['robert-status', 'robert-task', 'robert-run', 'robert-artifact']) {
-  const readContext = { isAuthorizedSender: true, args: 'some-id report' };
+  const readArgs = name === 'robert-status' ? '--json'
+    : name === 'robert-artifact' ? 'some-id report --json' : 'some-id --json';
+  const readContext = { isAuthorizedSender: true, args: readArgs };
   reads.push({ name, auth: commands[name].requireAuth,
     allowed: await commands[name].handler(readContext),
     denied: await commands[name].handler({ ...readContext, isAuthorizedSender: false }) });
@@ -67,14 +71,16 @@ console.log(JSON.stringify({ response, status, denied, malformed, reads, dispatc
 """)
             result = subprocess.run(
                 ["node", str(script)],
-                env={**os.environ, "PATH": str(binary) + os.pathsep + os.environ["PATH"]},
+                env={**os.environ, "PATH": str(binary) + os.pathsep + os.environ["PATH"], "CALLS": str(root / "calls")},
                 capture_output=True,
                 text=True,
                 check=True,
                 timeout=10,
             )
             value = json.loads(result.stdout)
-            data = json.loads(value["response"]["text"])
+            calls = [json.loads(line) for line in (root / "calls").read_text().splitlines()]
+            data = calls[0]
+            self.assertIn("已收到", value["response"]["text"])
             self.assertEqual(
                 data["args"], ["messages", "respond", "--output", "json", "--config", "/configuration with spaces.yml"]
             )
@@ -106,14 +112,18 @@ console.log(JSON.stringify({ response, status, denied, malformed, reads, dispatc
                 self.assertEqual(json.loads(read["allowed"]["text"])["request"], {})
             self.assertTrue(value["deniedDispatch"]["isError"])
             for action in ("new", "submit", "status", "retry"):
-                dispatch = json.loads(value["dispatch"][action]["text"])
+                dispatch = next(
+                    call
+                    for call in calls
+                    if call["request"].get("action") == action and call["args"][:2] == ["messages", "dispatch"]
+                )
                 self.assertEqual(dispatch["args"][:2], ["messages", "dispatch"])
                 self.assertEqual(dispatch["request"]["action"], action)
                 self.assertEqual(dispatch["request"]["sender_id"], "42")
-            draft = json.loads(value["dispatch"]["new"]["text"])["request"]
+            draft = next(call["request"] for call in calls if call["request"].get("action") == "new")
             self.assertEqual(draft["body"], "Research $(touch never)\nSecond line")
             self.assertEqual(draft["repo"], "example/repo")
-            self.assertEqual(json.loads(value["dispatch"][""]["text"])["args"][:2], ["messages", "inbox"])
+            self.assertTrue(any(call["args"][:2] == ["messages", "inbox"] for call in calls))
             self.assertTrue(value["auth"])
             self.assertTrue(value["denied"]["isError"])
             self.assertTrue(value["malformed"]["isError"])
