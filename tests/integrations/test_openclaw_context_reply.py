@@ -69,7 +69,7 @@ console.log(JSON.stringify({ defaultHooks, plain, quoted, slash, unauthorized, t
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             value = json.loads(result.stdout)
-            self.assertEqual(value["defaultHooks"], [])
+            self.assertEqual(value["defaultHooks"], ["reply_dispatch"])
             self.assertTrue(value["plain"]["handled"])
             self.assertTrue(value["quoted"]["handled"])
             self.assertNotIn("slash", value)

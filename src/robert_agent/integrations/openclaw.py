@@ -78,10 +78,11 @@ def _plugin_source():
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { formatReply } from "./replies.js";
+import { handleWeComQuestionCallback, registerWeComQuestionTransport } from "./wecom.js";
 
 const execFileAsync = promisify(execFile);
 
-async function runRobert(args, input, rawResult = false, presentation = {}) {
+async function runRobert(args, input, rawResult = false, presentation = {}, executable = "robert") {
   try {
     const serialized = input === undefined ? "" : JSON.stringify(input);
     if (Buffer.byteLength(serialized, "utf8") > 65536) {
@@ -89,7 +90,7 @@ async function runRobert(args, input, rawResult = false, presentation = {}) {
       return { text: "Message exceeds the input limit.", isError: true };
     }
     const pending = execFileAsync(
-      "robert",
+      executable,
       args,
       {
         timeout: 30000,
@@ -140,10 +141,14 @@ export default definePluginEntry({
     }
     function runConfigured(args, input, rawResult = false, presentation = {}) {
       if (api.pluginConfig?.robertConfig) args.push("--config", api.pluginConfig.robertConfig);
-      return runRobert(args, input, rawResult, presentation);
+      return runRobert(args, input, rawResult, presentation, api.pluginConfig?.robertExecutable ?? "robert");
     }
-    if (api.pluginConfig?.contextualReplies === true) {
+    registerWeComQuestionTransport(api);
+    if (typeof api.on === "function") {
       api.on("reply_dispatch", async (event, host) => {
+        const callback = await handleWeComQuestionCallback(event, host, respondCommand.handler);
+        if (callback) return callback;
+        if (api.pluginConfig?.contextualReplies !== true) return;
         const ctx = event.ctx;
         if (event.isTailDispatch || !ctx || ctx.CommandAuthorized !== true) return;
         const body = String(ctx.RawBody ?? ctx.CommandBody ?? "").trim();
@@ -203,7 +208,7 @@ export default definePluginEntry({
         return { text: "Usage: /robert-inbox new <owner/repo> <request>, or /robert-inbox <submit|status|retry> <request-id>", isError: true };
       },
     });
-    api.registerCommand({
+    const respondCommand = {
       name: "robert-respond",
       description: "回复、批准、重试或取消；先用 /robert-inbox 查看允许的操作。",
       acceptsArgs: true, requireAuth: true,
@@ -242,7 +247,8 @@ export default definePluginEntry({
         if (result.ok) return { text: "Robert 已收到你的选择。" };
         return { text: result.safe_error ?? "Robert 未提交答复。", isError: true };
       },
-    });
+    };
+    api.registerCommand(respondCommand);
     api.registerCommand({
       name: "robert-status",
       description: "查看 Robert 运行摘要、告警和下一步；--json 查看诊断。",
@@ -365,6 +371,7 @@ def write_plugin(plugin_dir, force=False, dry_run=False):
             "additionalProperties": False,
             "properties": {
                 "robertConfig": {"type": "string", "minLength": 1},
+                "robertExecutable": {"type": "string", "minLength": 1},
                 "contextualReplies": {"type": "boolean", "default": False},
             },
         },
@@ -386,6 +393,7 @@ def write_plugin(plugin_dir, force=False, dry_run=False):
         + "\n",
         "index.js": _plugin_source(),
         "replies.js": resource("openclaw", "replies.js").read_text(encoding="utf-8"),
+        "wecom.js": resource("openclaw", "wecom.js").read_text(encoding="utf-8"),
     }
     if dry_run:
         return {
@@ -415,8 +423,10 @@ def write_plugin(plugin_dir, force=False, dry_run=False):
     }
 
 
-def install_plugin(plugin_dir, dry_run=False):
+def install_plugin(plugin_dir, dry_run=False, force=False):
     command = ["openclaw", "plugins", "install", str(plugin_dir)]
+    if force:
+        command.append("--force")
     if dry_run:
         return {
             "ok": True,

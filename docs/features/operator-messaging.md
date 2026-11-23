@@ -107,6 +107,8 @@ Robert service must share the same configuration/database and run on a trusted
 host. For a non-default Robert configuration, set the generated plugin's
 `robertConfig` option to the absolute configuration path. OpenClaw's plugin entry
 configuration is `plugins.entries.robert-openclaw.config.robertConfig`.
+`robertExecutable` optionally selects the local Robert executable; it defaults to
+`robert` on the gateway process PATH.
 
 Credentials remain in OpenClaw's own channel configuration. Do not put tokens in
 Robert configuration or messages. Validate Robert's configuration, then restart
@@ -195,6 +197,20 @@ contextual replies, quote that prompt and reply with your own text.
 Robert sends native command buttons through OpenClaw message presentation for
 Telegram, Discord and Slack. Telegram requires inline buttons on the configured
 account and destination. Reload the generated Robert plugin after upgrading.
+For WeCom Bot accounts, Robert sends the complete notification followed by a
+template card with full option labels, numbered buttons and a custom-answer button. Clicking
+a button uses the authenticated channel callback and the existing versioned
+response command, including sender, conversation and repository checks. Custom
+answers display the command bound to that question.
+
+The WeCom bridge is verified with OpenClaw `2026.10.3-t.8` and its bundled
+`wecom-openclaw-plugin`. The native card transport reads that channel’s internal
+connected Bot interface; it is a version-specific integration boundary. Without
+that connection it uses the channel’s normal text transport. A failed card send
+is reported as a delivery failure; no second transport is tried after that send.
+`robert openclaw install --force` replaces both generated files and the
+OpenClaw-managed installed copy before restarting the gateway.
+
 Other channels can use the displayed `/robert-respond <message-id> <version> pick <number>`
 or `reply` command. Older saved questions retain their text reply path.
 

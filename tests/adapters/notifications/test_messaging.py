@@ -10,6 +10,42 @@ from robert_agent.adapters.notifications.messaging import render_message, send
 
 
 class MessagePresentationTests(unittest.TestCase):
+    def test_wecom_choices_use_the_robert_gateway_card_transport(self):
+        payload = self.payload(
+            notification_id="decision-" + "ab" * 16,
+            delivery_id="decision-example:receipt",
+            selectable_choices=True,
+            actions=["reply"],
+            choices=[{"id": "close", "label": "Close supervision", "tradeoff": "Ends monitoring"}],
+        )
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"ok":true,"messageId":"card-1"}', ""))
+        receipt = {}
+        self.assertTrue(
+            send(
+                payload,
+                config={
+                    "messaging": {
+                        "enabled": True,
+                        "provider": "openclaw",
+                        "channel": "wecom",
+                        "account": "default",
+                        "target": "operator",
+                    }
+                },
+                runner=runner,
+                receipt=receipt,
+            )
+        )
+        argv = runner.call_args.args[0]
+        self.assertEqual(argv[:4], ["openclaw", "gateway", "call", "robert.question.send"])
+        self.assertGreater(int(argv[argv.index("--timeout") + 1]), 20000)
+        self.assertGreater(runner.call_args.kwargs["timeout"] * 1000, int(argv[-1]))
+        params = json.loads(argv[argv.index("--params") + 1])
+        self.assertEqual(params["target"], "operator")
+        self.assertIn("Close supervision", params["text"])
+        self.assertEqual(params["presentation"]["blocks"][0]["buttons"][0]["action"]["type"], "command")
+        self.assertEqual(receipt, {"message_id": "card-1"})
+
     def payload(self, **values):
         return {
             "type": "worker_resume_prepared",

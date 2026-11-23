@@ -253,6 +253,7 @@ def render_message(payload, *, contextual_replies=False):
 def send(payload, *, config=None, command=None, runner=subprocess.run, receipt=None, media_paths=()):
     command = command or os.environ.get("ROBERT_NOTIFICATION_COMMAND")
     presentation = None
+    transport_timeout = 30
     if command:
         if media_paths:
             return False
@@ -284,7 +285,35 @@ def send(payload, *, config=None, command=None, runner=subprocess.run, receipt=N
             presentation = _choice_presentation(payload)
             if presentation:
                 argv += ["--presentation", json.dumps(presentation, ensure_ascii=False)]
-        kwargs = {"timeout": 30}
+        if payload.get("selectable_choices") and settings["channel"] == "wecom":
+            card = _choice_presentation(payload)
+            if card and not media_paths:
+                argv = [
+                    "openclaw",
+                    "gateway",
+                    "call",
+                    "robert.question.send",
+                    "--params",
+                    json.dumps(
+                        {
+                            "channel": "wecom",
+                            "account": settings["account"],
+                            "target": settings["target"],
+                            "thread": settings.get("thread", ""),
+                            "text": render_message(
+                                payload, contextual_replies=settings.get("contextual_replies", False)
+                            ),
+                            "presentation": card,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "--json",
+                    "--timeout",
+                    "60000",
+                ]
+                # Complete the notification and card acknowledgements before the CLI wait expires.
+                transport_timeout = 90
+        kwargs = {"timeout": transport_timeout}
     try:
         result = runner(argv, text=True, capture_output=True, check=False, **kwargs)
         if presentation and result.returncode and result.stderr.strip() == "error: unknown option '--presentation'":

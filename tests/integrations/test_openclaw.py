@@ -10,6 +10,13 @@ from robert_agent.integrations.openclaw import write_plugin
 
 
 class OpenClawTests(unittest.TestCase):
+    def test_force_install_replaces_the_openclaw_managed_copy(self):
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch("robert_agent.integrations.openclaw._run", return_value=completed) as runner:
+            result = openclaw.install_plugin("/plugin", force=True)
+        self.assertTrue(result["ok"])
+        self.assertEqual(runner.call_args.args[0], ["openclaw", "plugins", "install", "/plugin", "--force"])
+
     def test_generated_plugin_uses_robert_cli_and_has_no_scheduler(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin_dir = Path(tmp) / "robert-openclaw"
