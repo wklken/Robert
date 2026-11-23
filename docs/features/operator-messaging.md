@@ -292,6 +292,45 @@ Robert's command authority is introduced in this change. The existing command
 transport can forward envelopes to other systems today; inbound providers remain
 explicitly supported and fail closed until their adapter is implemented.
 
+### Chat command output
+
+The chat entrypoint presents Chinese summaries instead of the CLI's response
+envelope. The CLI retains its JSON contract. Commands in the OpenClaw command
+menu describe their purpose and supported arguments.
+
+| Command | Default reply |
+| --- | --- |
+| `/robert-status` | Service record and heartbeat when available, recent task state counts, alerts and inspection commands |
+| `/robert-task <task-id>` | Lifecycle, source, latest execution, failure, result and artifact commands |
+| `/robert-run <run-id\|latest>` | Run status, timestamps and failed steps with reasons |
+| `/robert-artifact <task-id> <artifact-type>` | Registered artifact content or a missing-file notice |
+| `/robert-inbox [page <number>]` | Pending questions, choices and currently permitted versioned response commands |
+| `/robert-inbox new <owner/repo> <request>` | Draft title, request ID and explicit submit command |
+| `/robert-inbox <submit\|status\|retry> <request-id>` | Current dispatch state, Issue link, task command and applicable next action |
+| `/robert-respond <message-id> <version> <action> [answer]` | Receipt and a command to inspect subsequent progress |
+
+Append `--json` to status, task, run or artifact queries, or use
+`/robert-inbox --json`, to request diagnostic JSON. Replies are limited to 3,500
+UTF-16 code units to fit chat transports. Oversized JSON and artifact previews
+identify truncation. Diagnostic JSON provides a local CLI command for the full
+JSON output. Artifact queries, including local `robert artifact show ... --output json`,
+read at most the last 65,536 bytes. When that preview is truncated, the reply
+points to the registered file to open on the Robert host for complete content;
+the JSON `data.path` field also identifies that file. If a local command or file
+hint is too long to fit, the reply replaces the entire hint with a short notice;
+use the configured path on the Robert host for local diagnostics and artifact lookup.
+Service status is a persisted record, not a live process probe; missing status
+is shown as unknown. Recent task counts describe the read model's recent tasks,
+not the complete historical task population.
+
+Inbox pages show up to three messages. Each question uses its current notification
+ID, version, choices and allowed actions. Copy a displayed `pick` command to
+select an option, or replace `<你的答案>` in the `reply` command. Acknowledgement
+records receipt only; it does not resolve faults or authorize a retry. Accepted
+responses and dispatch requests are receipts, not proof of execution or delivery.
+`/robert-messaging-context` continues to return the exact JSON identity needed
+for configuration.
+
 ### Query visibility in OpenClaw
 
 `robert-status`, `robert-task`, `robert-run`, and `robert-artifact` require
