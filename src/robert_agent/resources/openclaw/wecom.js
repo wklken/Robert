@@ -23,18 +23,24 @@ function questionCard(params) {
   const buttons = blocks[0].buttons;
   if (!Array.isArray(buttons) || buttons.length < 2 || buttons.length > 6)
     throw new Error("Invalid Robert question options.");
+  const previewId = params.preview === true ? randomUUID().replaceAll("-", "") : undefined;
   let taskId;
   const buttonList = buttons.map((button, index) => {
+    if (typeof button.label !== "string" || !button.label.trim())
+      throw new Error("Invalid Robert question label.");
     const binding = button.action?.type === "command" && questionCommand(button.action.command);
-    if (!binding || binding.selected !== (index === buttons.length - 1 ? "x" : String(index + 1))
-        || taskId && taskId !== binding.taskId || typeof button.label !== "string" || !button.label.trim())
+    if (!previewId && (!binding || binding.selected !== (index === buttons.length - 1 ? "x" : String(index + 1))
+        || taskId && taskId !== binding.taskId))
       throw new Error("Invalid Robert question reference.");
-    taskId = binding.taskId;
+    taskId = previewId ? `robert_test_${previewId}` : binding.taskId;
     return { text: index === buttons.length - 1 ? "自行填写" : `方案 ${index + 1}${index === 0 ? "（推荐）" : ""}`,
-      style: index === 0 ? 1 : 4, key: button.action.command };
+      style: index === 0 ? 1 : 4, key: previewId
+        ? `robert-test:${previewId}:${index === buttons.length - 1 ? "x" : index + 1}` : button.action.command };
   });
-  return { card_type: "button_interaction", task_id: `${taskId}_${randomUUID().replaceAll("-", "").slice(0, 12)}`,
-    main_title: { title: "Robert：请选择方案", desc: "完整说明与选项见通知正文" },
+  return { card_type: "button_interaction", task_id: previewId ? taskId
+      : `${taskId}_${randomUUID().replaceAll("-", "").slice(0, 12)}`,
+    main_title: { title: previewId ? "Robert：交互测试" : "Robert：请选择方案",
+      desc: previewId ? "点击仅回显测试提示，不提交业务答复" : "完整说明与选项见通知正文" },
     sub_title_text: buttons.slice(0, -1).map((button, index) => `${index + 1}. ${button.label}`).join("\n"),
     button_list: buttonList, card_action: { type: 0 } };
 }
@@ -45,16 +51,18 @@ export function registerWeComQuestionTransport(api) {
     try {
       if (!params || params.channel !== "wecom" || typeof params.account !== "string" || !params.account
           || typeof params.target !== "string" || !params.target || typeof params.text !== "string"
-          || !params.text || Buffer.byteLength(JSON.stringify(params), "utf8") > 65536)
+          || !params.text || params.preview !== undefined && typeof params.preview !== "boolean"
+          || Buffer.byteLength(JSON.stringify(params), "utf8") > 65536)
         throw new Error("Invalid Robert question delivery.");
       const card = questionCard(params);
+      const text = params.preview ? `【交互测试】点击仅回显测试提示，不提交业务答复。\n\n${params.text}` : params.text;
       const adapter = await api.runtime.channel.outbound.loadAdapter("wecom");
       if (!adapter?.sendText) throw new Error("WeCom message transport is unavailable.");
       const connection = globalThis[sharedStateKey]?.wsClientInstances?.get(params.account);
       if (!connection?.isConnected || typeof connection.sendMessage !== "function") {
         dispatched = true;
         const result = await adapter.sendText({ cfg: api.config, accountId: params.account,
-          to: params.target, threadId: params.thread || undefined, text: params.text });
+          to: params.target, threadId: params.thread || undefined, text });
         if (!result?.messageId) throw new Error("WeCom did not return a delivery receipt.");
         respond(true, { ok: true, mode: "text", messageId: result.messageId });
         return;
@@ -62,7 +70,7 @@ export function registerWeComQuestionTransport(api) {
       const target = params.target.replace(/^wecom:/i, "").replace(/^group:/i, "");
       dispatched = true;
       const notice = await adapter.sendText({ cfg: api.config, accountId: params.account,
-        to: params.target, threadId: params.thread || undefined, text: params.text });
+        to: params.target, threadId: params.thread || undefined, text });
       if (!notice?.messageId) throw new Error("WeCom did not return a delivery receipt.");
       const result = await connection.sendMessage(target, { msgtype: "template_card",
         template_card: card });
@@ -84,13 +92,21 @@ export async function handleWeComQuestionCallback(event, host, handler) {
   const frame = ctx.WeComFrame?.body;
   if (frame?.msgtype !== "event" || frame.event?.eventtype !== "template_card_event") return;
   const callback = frame.event.template_card_event;
-  const binding = questionCommand(callback?.event_key);
-  if (!binding || typeof callback.task_id !== "string"
-      || !callback.task_id.startsWith(binding.taskId + "_")
-      || !/^[a-f0-9]{12}$/.test(callback.task_id.slice(binding.taskId.length + 1))) return;
-  const reply = await handler({ isAuthorizedSender: true, channelId: "wecom",
-    accountId: ctx.AccountId ?? "", from: ctx.From ?? "", senderId: ctx.SenderId ?? "",
-    messageThreadId: ctx.MessageThreadId, args: binding.args });
+  const preview = typeof callback?.event_key === "string"
+    && callback.event_key.match(/^robert-test:([a-f0-9]{32}):([1-5x])$/);
+  let reply;
+  if (preview) {
+    if (callback.task_id !== `robert_test_${preview[1]}`) return;
+    reply = { text: `测试点击已收到：${preview[2] === "x" ? "自行填写" : `方案 ${preview[2]}`}。未提交业务答复。` };
+  } else {
+    const binding = questionCommand(callback?.event_key);
+    if (!binding || typeof callback.task_id !== "string"
+        || !callback.task_id.startsWith(binding.taskId + "_")
+        || !/^[a-f0-9]{12}$/.test(callback.task_id.slice(binding.taskId.length + 1))) return;
+    reply = await handler({ isAuthorizedSender: true, channelId: "wecom",
+      accountId: ctx.AccountId ?? "", from: ctx.From ?? "", senderId: ctx.SenderId ?? "",
+      messageThreadId: ctx.MessageThreadId, args: binding.args });
+  }
   const queuedFinal = host.dispatcher.sendFinalReply(reply);
   host.recordProcessed("completed", { reason: "robert_question_callback" });
   host.markIdle("message_completed");

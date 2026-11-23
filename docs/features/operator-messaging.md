@@ -203,6 +203,13 @@ a button uses the authenticated channel callback and the existing versioned
 response command, including sender, conversation and repository checks. Custom
 answers display the command bound to that question.
 
+For a display test, call the authenticated `robert.question.send` gateway method
+with `preview: true` and option labels in `presentation.blocks[0].buttons`.
+Preview buttons use independent test identifiers and do not require response
+commands or real notification IDs. The text and card are marked as a test;
+clicking any button, including the custom-answer button, only confirms the test
+click and never invokes the Robert business response command.
+
 The WeCom bridge is verified with OpenClaw `2026.10.3-t.8` and its bundled
 `wecom-openclaw-plugin`. The native card transport reads that channel’s internal
 connected Bot interface; it is a version-specific integration boundary. Without

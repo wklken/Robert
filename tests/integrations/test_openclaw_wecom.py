@@ -91,6 +91,28 @@ await method.handler({ params: wrongOption, respond: (...args) => invalid.push(a
 const custom = await hooks.reply_dispatch({ ctx: { ...ctx, WeComFrame: { body: {
   ...ctx.WeComFrame.body, event: { ...ctx.WeComFrame.body.event, template_card_event: {
     ...ctx.WeComFrame.body.event.template_card_event, event_key: '/robert-respond ' + compact + 'x' } } } } } }, host);
+const previewParams = structuredClone(params);
+previewParams.preview = true;
+for (const button of previewParams.presentation.blocks[0].buttons) delete button.action;
+const previewAnswers = [];
+await method.handler({ params: previewParams, respond: (...args) => previewAnswers.push(args) });
+const invalidPreview = [];
+await method.handler({ params: { ...params, preview: 'true' }, respond: (...args) => invalidPreview.push(args) });
+const previewCard = cards[1]?.payload.template_card;
+let previewClick, previewCustom, previewDenied, previewMismatch;
+if (previewCard) {
+  const previewCtx = { ...ctx, WeComFrame: { body: { ...ctx.WeComFrame.body,
+    event: { ...ctx.WeComFrame.body.event, template_card_event: {
+      task_id: previewCard.task_id, event_key: previewCard.button_list[0].key } } } } };
+  previewClick = await hooks.reply_dispatch({ ctx: previewCtx }, host);
+  previewCustom = await hooks.reply_dispatch({ ctx: { ...previewCtx, WeComFrame: { body: {
+    ...previewCtx.WeComFrame.body, event: { ...previewCtx.WeComFrame.body.event, template_card_event: {
+      task_id: previewCard.task_id, event_key: previewCard.button_list.at(-1).key } } } } } }, host);
+  previewDenied = await hooks.reply_dispatch({ ctx: { ...previewCtx, CommandAuthorized: false } }, host);
+  previewMismatch = await hooks.reply_dispatch({ ctx: { ...previewCtx, WeComFrame: { body: {
+    ...previewCtx.WeComFrame.body, event: { ...previewCtx.WeComFrame.body.event, template_card_event: {
+      task_id: 'another-test-card', event_key: previewCard.button_list[0].key } } } } } }, host);
+}
 globalThis[Symbol.for('wecom-openclaw-plugin:shared-state:v1')].wsClientInstances.set('default', {
   isConnected: true, sendMessage: async () => { throw new Error('unknown delivery outcome'); }
 });
@@ -98,7 +120,8 @@ await method.handler({ params, respond: (...args) => answers.push(args) });
 globalThis[Symbol.for('wecom-openclaw-plugin:shared-state:v1')].wsClientInstances.clear();
 await method.handler({ params, respond: (...args) => answers.push(args) });
 console.log(JSON.stringify({ scope: method.options.scope, cards, answers, sent, click, typed,
-  denied, forgedText, mismatch, unknown, custom, invalid, replies }));
+  denied, forgedText, mismatch, unknown, custom, invalid, replies,
+  previewAnswers, previewClick, previewCustom, previewDenied, previewMismatch, invalidPreview }));
 """)
             result = subprocess.run(
                 ["node", str(script)],
@@ -130,12 +153,26 @@ console.log(JSON.stringify({ scope: method.options.scope, cards, answers, sent, 
             self.assertNotIn("forgedText", value)
             self.assertNotIn("mismatch", value)
             self.assertNotIn("unknown", value)
-            self.assertEqual(len(value["replies"]), 2)
+            self.assertTrue(value["previewAnswers"][0][0])
+            self.assertFalse(value["invalidPreview"][0][0])
+            preview_card = value["cards"][1]["payload"]["template_card"]
+            self.assertEqual(preview_card["main_title"]["title"], "Robert：交互测试")
+            self.assertEqual(preview_card["sub_title_text"], card["sub_title_text"])
+            self.assertNotIn("robert-respond", json.dumps(preview_card))
+            self.assertNotIn("ab" * 16, json.dumps(preview_card))
+            self.assertTrue(value["previewClick"]["handled"])
+            self.assertTrue(value["previewCustom"]["handled"])
+            self.assertNotIn("previewDenied", value)
+            self.assertNotIn("previewMismatch", value)
+            self.assertEqual(value["replies"][-2]["text"], "测试点击已收到：方案 1。未提交业务答复。")
+            self.assertEqual(value["replies"][-1]["text"], "测试点击已收到：自行填写。未提交业务答复。")
+            self.assertEqual(len(value["replies"]), 4)
             self.assertEqual(value["answers"][0][1]["messageId"], "card-1")
             self.assertFalse(value["answers"][1][0])
             self.assertEqual(value["answers"][2][1]["mode"], "text")
-            self.assertEqual(len(value["sent"]), 3)
+            self.assertEqual(len(value["sent"]), 4)
             self.assertEqual(value["sent"][0]["text"], "Robert question with full context" * 20)
+            self.assertTrue(value["sent"][1]["text"].startswith("【交互测试】"))
             requests = [json.loads(line) for line in (root / "requests.jsonl").read_text().splitlines()]
             self.assertEqual(len(requests), 3)
             self.assertEqual(
