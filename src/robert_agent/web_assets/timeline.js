@@ -102,7 +102,7 @@ function readLocation() {
   const view = params.get("view");
   const date = params.get("date");
   return {
-    view: ["day", "week", "month"].includes(view) ? view : "week",
+    view: ["day", "week", "month"].includes(view) ? view : "month",
     date: datePattern.test(date || "") ? date : localToday(),
     repo: params.get("repo") || "",
   };
