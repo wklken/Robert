@@ -11,7 +11,7 @@ import re
 import socket
 import subprocess
 import time
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 from uuid import uuid4
 
 if __package__:
@@ -139,6 +139,8 @@ def _endpoint(path, method):
         if operation := operations.get((category, tail, method)):
             return operation, entity
     if method == "GET":
+        if match := re.fullmatch(r"git/ref/heads/(.+)", remainder):
+            return "branch_ref", {**entity, "branch": unquote(match[1])}
         reads = (
             (r"collaborators/([^/]+)/permission", "permission", "login"),
             (r"issues/comments/(\d+)", "issue_comment", "comment_id"),
@@ -206,6 +208,8 @@ def _parse_api(argv):
         "review_comments",
         "reviews",
         "timeline",
+        "workflow_runs",
+        "check_runs",
     }:
         raise ValueError("unsupported gh pagination")
     expected = {
@@ -304,12 +308,13 @@ def _pages(items, size):
     return [items[index : index + size] for index in range(0, len(items), size)] or [[]]
 
 
-def _page_payload(call, items, size=None):
+def _page_payload(call, items, size=None, *, field=None):
     pages = _pages(items, size or call.params.get("per_page", 30))
     if call.options.get("--paginate"):
-        return pages
+        return [{field: page} for page in pages] if field else pages
     index = call.params.get("page", 1) - 1
-    return pages[index] if index < len(pages) else []
+    page = pages[index] if index < len(pages) else []
+    return {field: page} if field else page
 
 
 def _base_source(world, repo, number, raw, pull=False):
@@ -345,7 +350,7 @@ def _ref(git_root, repo, branch):
     if not path.is_relative_to(git_root) or not path.is_dir():
         return None
     completed = subprocess.run(
-        ["git", "--git-dir", str(path), "rev-parse", "--verify", "--end-of-options", "refs/heads/" + branch],
+        ["git", "--git-dir", str(path), "show-ref", "--verify", "--hash", "--", "refs/heads/" + branch],
         capture_output=True,
         text=True,
         timeout=5,
@@ -524,14 +529,20 @@ def _read_repository(call, world, repository, git_root):
     if op == "permission":
         permission = repository.get("permissions", {}).get(entity["login"], "none")
         return _http(call, 200, {"permission": permission, "user": {"login": entity["login"]}})
+    if op == "branch_ref":
+        branch = entity["branch"]
+        sha = _ref(git_root, repo, branch)
+        if sha is None:
+            return _http(call, 404)
+        return _http(call, 200, {"ref": f"refs/heads/{branch}", "object": {"type": "commit", "sha": sha}})
     if op == "workflow_runs":
         runs = repository.get("workflow_runs", [])
         if call.params.get("head_sha"):
             runs = [run for run in runs if run.get("head_sha") == call.params["head_sha"]]
-        return _http(call, 200, {"workflow_runs": _page_payload(call, runs)})
+        return _http(call, 200, _page_payload(call, runs, field="workflow_runs"))
     if op == "check_runs":
         checks = repository.get("check_runs", {}).get(entity["sha"], [])
-        return _http(call, 200, {"check_runs": _page_payload(call, checks)})
+        return _http(call, 200, _page_payload(call, checks, field="check_runs"))
     if op in {"jobs", "annotations"}:
         items = _page_payload(call, repository.get(op, {}).get(entity["id"], []))
         return _http(call, 200, {"jobs": items} if op == "jobs" else items)

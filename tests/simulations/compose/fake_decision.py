@@ -40,20 +40,22 @@ def main():
     if action == "invent":
         action, candidate_id = "retry_worker", "nonexistent-candidate"
     message = {"ask_user": "Should the fixture keep the API?", "notify_user": "Fixture progress is pending."}
-    print(
-        json.dumps(
-            {
-                **identity,
-                "action": action,
-                "candidate_id": candidate_id,
-                "reason": "Follow the synthetic task objective.",
-                "evidence_ids": ["tasks"],
-                "expected_progress": "The task produces a result",
-                "recheck_seconds": 2,
-                "message": message.get(action, ""),
-            }
-        )
-    )
+    output = {
+        **identity,
+        "action": action,
+        "candidate_id": candidate_id,
+        "reason": "Follow the synthetic task objective.",
+        "evidence_ids": ["tasks"],
+        "expected_progress": "The task produces a result",
+        "recheck_seconds": 30,
+        "message": message.get(action, ""),
+    }
+    if action == "ask_user":
+        output["choices"] = [
+            {"id": "keep", "label": "Keep the API", "tradeoff": "Existing callers can continue using the current API."},
+            {"id": "change", "label": "Change the API", "tradeoff": "Callers must migrate to the revised interface."},
+        ]
+    print(json.dumps(output))
     return 0
 
 

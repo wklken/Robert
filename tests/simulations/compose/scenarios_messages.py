@@ -76,6 +76,7 @@ def _setup(w, *, repo=REPO, observer=False):
             "enabled": True,
             **{key: _IDENTITY[key] for key in ("provider", "channel", "account", "conversation", "thread")},
             "target": "42",
+            "send_after": "2000-01-01T00:00:00+00:00",
             "allowed_senders": ["42"],
             "repos": [REPO],
         }

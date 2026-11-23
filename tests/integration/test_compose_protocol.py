@@ -148,6 +148,29 @@ class ComposeProtocolTest(unittest.TestCase):
         permission = self.gh("api", f"repos/{_REPO}/collaborators/maintainer/permission")
         self.assertEqual(json.loads(permission["stdout"])["permission"], "write")
 
+    def test_ci_queries_slurp_object_pages_and_keep_the_single_page_shape(self):
+        sha = "a" * 40
+        runs = [{"id": 1, "head_sha": sha}, {"id": 2, "head_sha": sha}]
+        checks = [{"id": 3}, {"id": 4}]
+        self.request(
+            "/seed-events",
+            {
+                "scenario_id": self.scenario_id,
+                "patch": {"repositories": {_REPO: {"workflow_runs": runs, "check_runs": {sha: checks}}}},
+            },
+        )
+        endpoints = (
+            (f"repos/{_REPO}/actions/runs?head_sha={sha}&per_page=1", "workflow_runs", runs),
+            (f"repos/{_REPO}/commits/{sha}/check-runs?per_page=1", "check_runs", checks),
+        )
+        for endpoint, field, records in endpoints:
+            with self.subTest(endpoint=endpoint):
+                slurped = self.gh("api", endpoint, "--paginate", "--slurp")
+                self.assertEqual(slurped["exit_code"], 0, slurped["stderr"])
+                self.assertEqual(json.loads(slurped["stdout"]), [{field: [record]} for record in records])
+                second = self.gh("api", endpoint + "&page=2")
+                self.assertEqual(json.loads(second["stdout"]), {field: records[1:]})
+
     def test_persisted_effect_is_visible_while_response_is_held(self):
         rule = self.arm("comment", "after_effect_commit", entity={"repo": _REPO, "number": 1})
         with ThreadPoolExecutor(2) as pool:
@@ -221,6 +244,17 @@ class ComposeProtocolTest(unittest.TestCase):
         )
         git("--git-dir", str(bare), "update-ref", "refs/heads/main", sha)
         git("--git-dir", str(bare), "update-ref", "refs/heads/feature", sha)
+        git("--git-dir", str(bare), "update-ref", "refs/heads/codex/example", sha)
+        for branch, ref in (("main", "main"), ("codex%2Fexample", "codex/example")):
+            with self.subTest(branch=branch):
+                lookup = self.gh("api", f"repos/{_REPO}/git/ref/heads/{branch}", "--hostname", "github.com")
+                self.assertEqual(lookup["exit_code"], 0, lookup["stderr"])
+                self.assertEqual(
+                    json.loads(lookup["stdout"]),
+                    {"ref": f"refs/heads/{ref}", "object": {"type": "commit", "sha": sha}},
+                )
+        missing = self.gh("api", f"repos/{_REPO}/git/ref/heads/missing")
+        self.assertIn("HTTP 404", missing["stderr"])
         create = [
             "pr",
             "create",

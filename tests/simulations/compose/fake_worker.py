@@ -148,8 +148,16 @@ def result(root, identity, policy):
             "kind": "clarification",
             "summary": "Should the fixture preserve the existing API?",
             "choices": [
-                {"id": "preserve", "label": "Preserve the API"},
-                {"id": "change", "label": "Change the API"},
+                {
+                    "id": "preserve",
+                    "label": "Preserve the API",
+                    "tradeoff": "Existing callers keep working with their current inputs.",
+                },
+                {
+                    "id": "change",
+                    "label": "Change the API",
+                    "tradeoff": "Callers must migrate to the revised interface.",
+                },
             ],
         }
         if not web:
