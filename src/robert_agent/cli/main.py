@@ -1,5 +1,6 @@
 from robert_agent.supervision.application import checks as supervision_checks
 from robert_agent.supervision import health as supervision_health
+from robert_agent.interfaces.web import auth as web_auth
 import argparse
 from collections.abc import Sequence
 from contextlib import redirect_stdout
@@ -263,10 +264,15 @@ def build_parser() -> argparse.ArgumentParser:
         "web",
         help="Run the local Robert web UI.",
     )
-    web_run = web_parser.add_subparsers(
+    web_commands = web_parser.add_subparsers(
         dest="web_command",
         required=True,
-    ).add_parser("run")
+    )
+    web_auth_init = web_commands.add_parser("auth-init", help="Create a private HTTP Basic password verifier.")
+    web_auth_init.add_argument("--file", required=True)
+    web_auth_init.add_argument("--username", required=True)
+    _add_output_argument(web_auth_init)
+    web_run = web_commands.add_parser("run")
     _add_config_argument(web_run)
     web_run.add_argument("--db")
     web_run.add_argument("--host", default="127.0.0.1")
@@ -276,6 +282,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Browser-facing HTTP(S) origin for an authenticated reverse proxy.",
     )
     web_run.add_argument("--operator", default="local-operator")
+    web_run.add_argument("--basic-auth-file", help="Private JSON password verifier for HTTP Basic authentication.")
     web_run.add_argument("--writable", action="store_true")
     web_run.add_argument("--allow-remote", action="store_true")
     web_run.add_argument("--json", action="store_true")
@@ -542,6 +549,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             emit_result(result, output="text")
             return exit_codes.SUCCESS if result.get("ok") else exit_codes.STATE_FAILURE
+        if args.command == "web" and args.web_command == "auth-init":
+            return _emit_and_code(web_auth.initialize_basic_auth_file(args.file, args.username), args.output)
         if args.command == "web" and args.web_command == "run":
             web_argv = [
                 "--host",
@@ -557,6 +566,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 web_argv.extend(["--config", args.config])
             if args.public_origin is not None:
                 web_argv.extend(["--public-origin", args.public_origin])
+            if args.basic_auth_file is not None:
+                web_argv.extend(["--basic-auth-file", args.basic_auth_file])
             if args.receipt_fx_rate is not None:
                 web_argv.extend(["--receipt-fx-rate", args.receipt_fx_rate])
             if args.receipt_fx_date is not None:

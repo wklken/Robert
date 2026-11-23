@@ -1,5 +1,6 @@
 from robert_agent.persistence import errors as db_errors
 from robert_agent.interfaces.web.shell import render_shell
+from robert_agent.interfaces.web import auth
 from robert_agent.interfaces.web.templates import render_dashboard_html
 from robert_agent.context.application import knowledge_review
 from robert_agent.work.application import web_setup
@@ -700,8 +701,26 @@ def handle_dashboard_post(path, body, db_path, control_context=None, request_hea
     )
 
 
-def make_handler(db_path, control_context=None):
+def make_handler(db_path, control_context=None, *, basic_auth=None):
     class Handler(BaseHTTPRequestHandler):
+        def _authenticated(self):
+            if basic_auth is None:
+                return True
+            values = self.headers.get_all("Authorization", [])
+            if len(values) == 1 and basic_auth.authorized(values[0]):
+                return True
+            self.close_connection = True
+            self._send(
+                401,
+                {
+                    "content-type": "application/json",
+                    "WWW-Authenticate": 'Basic realm="Robert", charset="UTF-8"',
+                    "Cache-Control": "no-store",
+                },
+                b'{"ok":false,"status":"authentication_required"}\n',
+            )
+            return False
+
         def _send(self, status, headers, payload):
             self.send_response(status)
             for name, value in headers.items():
@@ -713,6 +732,8 @@ def make_handler(db_path, control_context=None):
             self.wfile.write(payload)
 
         def do_GET(self):
+            if not self._authenticated():
+                return
             context = control_context or build_read_only_control_context(
                 db_path, host=self.server.server_address[0], port=self.server.server_address[1]
             )
@@ -737,6 +758,8 @@ def make_handler(db_path, control_context=None):
             self._send(*response)
 
         def do_POST(self):
+            if not self._authenticated():
+                return
             try:
                 length = int(self.headers.get("content-length") or "0")
             except ValueError:
@@ -874,12 +897,12 @@ def build_read_only_control_context(db_path, *, host, port, public_origin=None):
     )
 
 
-def serve(db_path, host="127.0.0.1", port=8765, control_context=None):
+def serve(db_path, host="127.0.0.1", port=8765, control_context=None, *, basic_auth=None):
     if control_context is None:
         control_context = build_read_only_control_context(db_path, host=host, port=port)
     server = ThreadingHTTPServer(
         (host, port),
-        make_handler(db_path, control_context),
+        make_handler(db_path, control_context, basic_auth=basic_auth),
     )
     server.serve_forever()
 
@@ -896,6 +919,7 @@ def main(argv=None):
         help="Browser-facing HTTP(S) origin for an authenticated reverse proxy.",
     )
     parser.add_argument("--operator", default="local-operator")
+    parser.add_argument("--basic-auth-file", help="Private JSON password verifier for HTTP Basic authentication.")
     parser.add_argument("--writable", action="store_true")
     parser.add_argument("--allow-remote", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -920,6 +944,7 @@ def main(argv=None):
     try:
         _allowed_web_origins(args.host, args.port, args.public_origin)
         receipt_fx = _receipt_exchange_rate(args.receipt_fx_rate, args.receipt_fx_date)
+        basic_auth = auth.load_basic_auth_file(args.basic_auth_file) if args.basic_auth_file else None
     except ValueError as exc:
         return emit({"ok": False, "status": "failed_input", "safe_error": str(exc)}, 3)
     if args.config:
@@ -990,7 +1015,13 @@ def main(argv=None):
             )
     if args.json:
         return emit({"ok": True, "status": "ready", "data": dashboard.build_dashboard_data(db_path)})
-    serve(db_path, args.host, args.port, control_context=replace(control_context, receipt_fx=receipt_fx))
+    serve(
+        db_path,
+        args.host,
+        args.port,
+        control_context=replace(control_context, receipt_fx=receipt_fx),
+        basic_auth=basic_auth,
+    )
     return 0
 
 
