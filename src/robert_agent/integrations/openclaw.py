@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 
 from robert_agent.paths import default_data_dir
+from robert_agent.resource_files import resource
 
 
 PLUGIN_ID = "robert-openclaw"
@@ -76,10 +77,11 @@ def _plugin_source():
     return """import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { formatReply } from "./replies.js";
 
 const execFileAsync = promisify(execFile);
 
-async function runRobert(args, input, rawResult = false) {
+async function runRobert(args, input, rawResult = false, presentation = {}) {
   try {
     const serialized = input === undefined ? "" : JSON.stringify(input);
     if (Buffer.byteLength(serialized, "utf8") > 65536) {
@@ -98,21 +100,18 @@ async function runRobert(args, input, rawResult = false) {
     pending.child.stdin.on("error", (error) => { inputError = error; });
     pending.child.stdin.end(serialized);
     const { stdout } = await pending;
-    if (inputError) return { text: "Robert could not receive the request.", isError: true };
+    if (inputError) {
+      const failure = { ok: false, safe_error: "Robert could not receive the request." };
+      return rawResult ? failure : formatReply(args, failure);
+    }
     const parsed = JSON.parse(stdout);
     if (rawResult) return parsed;
-    if (parsed?.ok === true) {
-      return { text: JSON.stringify(parsed, null, 2) };
-    }
-    return {
-      text: String(parsed?.safe_error ?? "Robert command failed."),
-      isError: true,
-    };
+    return formatReply(args, parsed, input, presentation);
   } catch (error) {
     try {
       const parsed = JSON.parse(error.stdout);
       if (rawResult && typeof parsed?.safe_error === "string") return parsed;
-      if (typeof parsed?.safe_error === "string") return { text: parsed.safe_error, isError: true };
+      if (typeof parsed?.safe_error === "string") return formatReply(args, parsed);
     } catch {}
     if (rawResult) return { ok: false, safe_error: "Robert command failed; inspect local diagnostics." };
     return {
@@ -139,9 +138,9 @@ export default definePluginEntry({
         thread: String(ctx.messageThreadId ?? ""), sender_id: ctx.senderId ?? "",
       };
     }
-    function runConfigured(args, input, rawResult = false) {
+    function runConfigured(args, input, rawResult = false, presentation = {}) {
       if (api.pluginConfig?.robertConfig) args.push("--config", api.pluginConfig.robertConfig);
-      return runRobert(args, input, rawResult);
+      return runRobert(args, input, rawResult, presentation);
     }
     if (api.pluginConfig?.contextualReplies === true) {
       api.on("reply_dispatch", async (event, host) => {
@@ -184,12 +183,17 @@ export default definePluginEntry({
     });
     api.registerCommand({
       name: "robert-inbox",
-      description: "Show pending messages or draft and submit an Issue request.",
+      description: "查看待办、回复问题或发起 Issue 任务；page <页码> 翻页。",
       acceptsArgs: true, requireAuth: true,
       handler: async (ctx) => {
         if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
         const args = String(ctx.args ?? "").trim();
         if (!args) return runConfigured(["messages", "inbox", "--output", "json"], identity(ctx));
+        const page = args.match(/^page\\s+([1-9]\\d*)$/);
+        if (args === "--json" || (page && Number.isSafeInteger(Number(page[1])))) {
+          return runConfigured(["messages", "inbox", "--output", "json"], identity(ctx), false,
+            { jsonOutput: args === "--json", page: page ? Number(page[1]) : 1 });
+        }
         const draft = args.match(/^new\\s+(\\S+)\\s+([\\s\\S]+)$/);
         const command = args.match(/^(submit|status|retry)\\s+(dispatch-[a-f0-9]{32})$/);
         if (draft) return runConfigured(["messages", "dispatch", "--output", "json"],
@@ -201,7 +205,7 @@ export default definePluginEntry({
     });
     api.registerCommand({
       name: "robert-respond",
-      description: "Respond to a specific Robert question or notification.",
+      description: "回复、批准、重试或取消；先用 /robert-inbox 查看允许的操作。",
       acceptsArgs: true, requireAuth: true,
       handler: async (ctx) => {
         if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
@@ -241,52 +245,57 @@ export default definePluginEntry({
     });
     api.registerCommand({
       name: "robert-status",
-      description: "Show Robert status.",
-      acceptsArgs: false,
-      requireAuth: true,
-      handler: async (ctx) => ctx.isAuthorizedSender
-        ? runConfigured(["status", "--output", "json"])
-        : { text: "Unauthorized sender.", isError: true },
-    });
-    api.registerCommand({
-      name: "robert-task",
-      description: "Show Robert task details.",
+      description: "查看 Robert 运行摘要、告警和下一步；--json 查看诊断。",
       acceptsArgs: true,
       requireAuth: true,
       handler: async (ctx) => {
         if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
-        const [taskId] = splitArgs(ctx.args);
-        if (!taskId) {
-          return { text: "Usage: /robert-task <task-id>", isError: true };
+        const args = splitArgs(ctx.args);
+        if (args.length && (args.length !== 1 || args[0] !== "--json"))
+          return { text: "用法：/robert-status [--json]", isError: true };
+        return runConfigured(["status", "--output", "json"], undefined, false, { jsonOutput: args[0] === "--json" });
+      },
+    });
+    api.registerCommand({
+      name: "robert-task",
+      description: "查看任务状态、失败原因和结果；--json 查看诊断。",
+      acceptsArgs: true,
+      requireAuth: true,
+      handler: async (ctx) => {
+        if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
+        const [taskId, option, ...extra] = splitArgs(ctx.args);
+        if (!taskId || taskId.startsWith("--") || (option && option !== "--json") || extra.length) {
+          return { text: "用法：/robert-task <task-id> [--json]", isError: true };
         }
-        return runConfigured(["task", "show", taskId, "--output", "json"]);
+        return runConfigured(["task", "show", taskId, "--output", "json"], undefined, false, { jsonOutput: option === "--json" });
       },
     });
     api.registerCommand({
       name: "robert-run",
-      description: "Show Robert run details.",
+      description: "查看运行结果和异常步骤；latest 查看最近运行，--json 查看诊断。",
       acceptsArgs: true,
       requireAuth: true,
       handler: async (ctx) => {
         if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
-        const [runId] = splitArgs(ctx.args);
-        if (!runId) {
-          return { text: "Usage: /robert-run <run-id>", isError: true };
+        const [runId, option, ...extra] = splitArgs(ctx.args);
+        if (!runId || runId.startsWith("--") || (option && option !== "--json") || extra.length) {
+          return { text: "用法：/robert-run <run-id|latest> [--json]", isError: true };
         }
-        return runConfigured(["run", "show", runId, "--output", "json"]);
+        return runConfigured(["run", "show", runId, "--output", "json"], undefined, false, { jsonOutput: option === "--json" });
       },
     });
     api.registerCommand({
       name: "robert-artifact",
-      description: "Show one registered Robert artifact.",
+      description: "查看已登记的产物内容；--json 查看诊断。",
       acceptsArgs: true,
       requireAuth: true,
       handler: async (ctx) => {
         if (!ctx.isAuthorizedSender) return { text: "Unauthorized sender.", isError: true };
-        const [taskId, artifactType] = splitArgs(ctx.args);
-        if (!taskId || !artifactType) {
+        const [taskId, artifactType, option, ...extra] = splitArgs(ctx.args);
+        if (!taskId || !artifactType || taskId.startsWith("--") || artifactType.startsWith("--")
+            || (option && option !== "--json") || extra.length) {
           return {
-            text: "Usage: /robert-artifact <task-id> <artifact-type>",
+            text: "用法：/robert-artifact <task-id> <artifact-type> [--json]",
             isError: true,
           };
         }
@@ -297,7 +306,7 @@ export default definePluginEntry({
           artifactType,
           "--output",
           "json",
-        ]);
+        ], undefined, false, { jsonOutput: option === "--json" });
       },
     });
   },
@@ -376,6 +385,7 @@ def write_plugin(plugin_dir, force=False, dry_run=False):
         )
         + "\n",
         "index.js": _plugin_source(),
+        "replies.js": resource("openclaw", "replies.js").read_text(encoding="utf-8"),
     }
     if dry_run:
         return {

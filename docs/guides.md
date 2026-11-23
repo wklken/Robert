@@ -443,6 +443,17 @@ and `/robert-messaging-context`. See [operator messaging](features/operator-mess
 for sender/session authorization, worker questions and supervisor notifications.
 The plugin never starts the Robert service or installs a scheduler.
 
+Chat commands reply with short Chinese summaries. Start with `/robert-status`
+for service records, recent task states, alerts and commands to inspect problems.
+Use `/robert-task <task-id>` for a task's failure or result, `/robert-run latest`
+for the latest run, and `/robert-artifact <task-id> <artifact-type>` for the
+registered artifact's content. Add `--json` to a read command for diagnostics;
+long replies are truncated with a local CLI command for full output.
+`/robert-inbox` shows current questions and permitted commands; use
+`/robert-inbox page 2` to continue. See the
+[chat command reference](features/operator-messaging.md#chat-command-output)
+for dispatch and response examples.
+
 ```bash
 robert openclaw uninstall --dry-run
 robert openclaw uninstall
