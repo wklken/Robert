@@ -671,6 +671,8 @@ class Coordinator(ReviewStages):
                 json.dumps([self.original_request, self.final_feedback], sort_keys=True).encode()
             ).hexdigest()
             input_hash += "-" + generation
+        if self.verification_retry:
+            input_hash = report_sha + "-" + hashlib.sha256(input_hash.encode()).hexdigest()
         prompt = self.prompt(
             "address-" + input_hash + ".md",
             render_prompt(

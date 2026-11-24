@@ -26,6 +26,14 @@ def check(*, required=True, status="passed", purpose="Verify the final repaired 
 
 
 class FinalVerificationTests(ReviewWorkspaceFixture):
+    def test_retry_prompt_name_is_bounded_with_original_request_and_operator_reply(self):
+        self.driver.request["operator_reply"] = {"decision": {"stage": "address_findings"}}
+        self.driver.original_request = {"path": "/original.md", "sha256": "a" * 64}
+        with patch.object(coordinator.verification_retry, "inputs", return_value={"input_sha256": "b" * 64}):
+            artifact = self.address()
+        self.assertEqual(artifact["head"], self.head)
+        self.assertTrue(all(len(path.name.encode()) <= 255 for path in self.root.iterdir()))
+
     def setUp(self):
         super().setUp()
         self.output = self.root / "address-output"
