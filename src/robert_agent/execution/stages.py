@@ -406,8 +406,10 @@ class StageCoordinator:
 
     def release_slot(self, run, launched):
         store = self.store
+        # Callers release only after the group is gone or spawn failed without a PID.
+        observed = {**launched, "group_exit_confirmed": True} if launched.get("pid") else launched
         with store.connect(self.db_path) as conn:
-            record_dispatch_usage(conn, self.data_dir, "stage", run["run_id"], self.task_id, launched, terminal=True)
+            record_dispatch_usage(conn, self.data_dir, "stage", run["run_id"], self.task_id, observed, terminal=True)
             store.release_slot(conn, run["run_id"])
 
     def reclaim_finished_slots(self):
@@ -892,7 +894,32 @@ class StageCoordinator:
         """Workflow hook for a durable limit on stage launches."""
 
     def validate_output(self, run, validate, model):
-        return validate(self.sealed_output(run), model)
+        output = self.sealed_output(run)
+        if artifact_available(run):
+            return validate(output, model)
+        ready_at = self.store.now()
+        validated_at = None
+        try:
+            artifact = validate(output, model)
+            validated_at = self.store.now()
+            return artifact
+        finally:
+            with self.store.connect(self.db_path) as conn:
+                db_transactions.begin(conn, immediate=True)
+                if attempt_is_active(conn, self.task_id, self.attempt_id):
+                    facts = {"source": "controller", "precision": "observed"}
+                    for event, at in (("artifact_ready", ready_at), ("artifact_validated", validated_at)):
+                        if at:
+                            record_call_event(
+                                conn,
+                                "stage",
+                                run["run_id"],
+                                self.task_id,
+                                event,
+                                at=at,
+                                stage=run["stage"],
+                                metadata=facts,
+                            )
 
     def run_phase(self, stage, worker, prompt_path, validate, *, input_hash=None):
         """Adopt a complete unregistered file, or run only this failed stage."""

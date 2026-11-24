@@ -87,6 +87,10 @@ def record_dispatch_usage(
     terminal = (
         bool(dispatch.get("process_exited") or dispatch.get("group_exit_confirmed")) if terminal is None else terminal
     )
+    launch_failed = (
+        dispatch.get("ok") is False and dispatch.get("status") == "failed_dispatch" and not dispatch.get("pid")
+    )
+    terminal = terminal and not launch_failed
     if observed is None:
         observed = model_usage.read_dispatch(root, dispatch)
         if (
@@ -110,9 +114,6 @@ def record_dispatch_usage(
                 elif native.get("events"):
                     observed = {**observed, "events": {**native["events"], **observed.get("events", {})}}
     observed = dict(observed) if isinstance(observed, dict) else {}
-    launch_failed = (
-        dispatch.get("ok") is False and dispatch.get("status") == "failed_dispatch" and not dispatch.get("pid")
-    )
     if not observed.get("usage_available") and not terminal and not launch_failed:
         return 0
     status = observed.get("measurement_status")
@@ -120,6 +121,7 @@ def record_dispatch_usage(
         status = (
             ("partial" if observed.get("partial") else "complete") if observed.get("usage_available") else "unavailable"
         )
+    observed_at = {"at": at, "observed_at": at, "source": "controller", "precision": "observed"}
     segment = {
         **_metadata(dispatch, stage),
         **observed,
@@ -129,12 +131,10 @@ def record_dispatch_usage(
         "launched": not launch_failed,
         "events": {
             **{key: {**value, "observed_at": at} for key, value in observed.get("events", {}).items()},
-            "process_exit_observed" if terminal else "launch_failed" if launch_failed else "activity_observed": {
-                "at": at,
-                "observed_at": at,
-                "source": "controller",
-                "precision": "observed",
-            },
+            ("process_exit_observed" if terminal else "launch_failed" if launch_failed else "activity_observed"): (
+                observed_at
+            ),
+            **({"group_exit_observed": observed_at} if terminal and dispatch.get("group_exit_confirmed") else {}),
         },
     }
     if not segment["usage_available"]:
@@ -156,6 +156,8 @@ def record_call_event(conn, kind, call_id, task_id, event, *, at=None, stage=Non
         "queued",
         "registered",
         "artifact_adopted",
+        "artifact_ready",
+        "artifact_validated",
         "result_saved",
         "delivered",
         "model_completed",

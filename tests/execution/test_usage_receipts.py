@@ -115,6 +115,15 @@ class UsageReceiptTests(TemporaryWorkspace):
         self.assertTrue(after["launched"])
         self.assertIn("started", after["events"])
 
+    def test_failed_spawn_records_launch_failure_without_inventing_exit(self):
+        dispatch = {"worker_agent": "codex", "ok": False, "status": "failed_dispatch"}
+        usage.start_call(self.conn, self.root, "stage", "call", "task", dispatch, confirmed=False)
+        usage.record_dispatch_usage(self.conn, self.root, "stage", "call", "task", dispatch, terminal=True)
+        segment = self.saved()["segments"]["call"]
+        self.assertFalse(segment["launched"])
+        self.assertIn("launch_failed", segment["events"])
+        self.assertNotIn("process_exit_observed", segment["events"])
+
     def test_bound_native_resume_is_one_receipt_even_after_history_grows_or_stdout_arrives(self):
         history = self.root / "native.jsonl"
 
