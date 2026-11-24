@@ -749,7 +749,7 @@ class Coordinator(ReviewStages):
             draft = self.candidate_submission()
             draft["verification"] = final_verification_checks(value["verification"])
             open_pr = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
-            open_pr["body"] = value["body"]
+            open_pr["body"] = self.public_body(value["body"])
             self.validate_submission(draft)
             return {
                 "dispositions_path": str(disposition),
@@ -792,6 +792,13 @@ class Coordinator(ReviewStages):
             )
             raise ValueError(reason)
         return normalized
+
+    @staticmethod
+    def public_body(body):
+        safe = redaction.redact_text(body)
+        if not safe.get("ok"):
+            raise StageStopped("review PR body did not pass public content redaction")
+        return safe["text"]
 
     def finalize(self, report, report_sha, disposition):
         head, final = self.manifest["head_sha"], disposition["head"]
@@ -913,7 +920,7 @@ class Coordinator(ReviewStages):
             )
         except report_checkpoint.RedactionBlocked as exc:
             raise StageStopped("review dispositions did not pass public content redaction") from exc
-        action["body"] = response["body"] + "\n\n" + appendix["path"].read_text(encoding="utf-8")
+        action["body"] = self.public_body(response["body"]) + "\n\n" + appendix["path"].read_text(encoding="utf-8")
         normalized = self.validate_submission(draft)
         normalized_pr = next(action for action in normalized["planned_github_actions"] if action["type"] == "open_pr")
         envelope = self.envelope(draft)

@@ -92,6 +92,7 @@ class FinalVerificationTests(ReviewWorkspaceFixture):
             address_workspace=Mock(return_value=self.repo),
             prompt=self.prompt,
             run_phase=self.run_phase,
+            public_body=coordinator.Coordinator.public_body,
         )
         for name in ("candidate_submission", "validate_submission", "envelope"):
             setattr(self.driver, name, MethodType(getattr(coordinator.Coordinator, name), self.driver))

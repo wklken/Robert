@@ -15,6 +15,7 @@ from robert_agent.persistence.rounds.records import artifact_available
 GATE_ERRORS = {
     "final verification requires every required check to pass",
     "final verification contains an unsuccessful check",
+    "Public text requires redaction before submission.",
 }
 
 
