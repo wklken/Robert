@@ -272,3 +272,18 @@ class BaseMergeRecoveryTests(ReviewWorkspaceFixture):
         self.driver.prepare()
         self.assertEqual(self.entry()["request"]["base_refresh_count"], 1)
         self.assertNotIn("base_merge", self.entry()["request"])
+
+    def test_missing_merge_identity_does_not_charge_refresh_or_change_writer(self):
+        before = self.entry()
+        head = self.git(self.tree, "rev-parse", "HEAD")
+        with patch.object(
+            module,
+            "check_merge_environment",
+            side_effect=module.MergePreflightError("merge Git committer identity unavailable"),
+        ):
+            with self.assertRaisesRegex(StageStopped, "committer identity unavailable"):
+                self.driver.merge_current_base(self.candidate, self.current_base)
+        after = self.entry()
+        self.assertEqual(after["request"], before["request"])
+        self.assertEqual(after["proof"], before["proof"])
+        self.assertEqual(self.git(self.tree, "rev-parse", "HEAD"), head)

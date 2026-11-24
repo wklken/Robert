@@ -10,6 +10,7 @@ import subprocess
 
 from robert_agent.adapters.git.review_revision import clean_head, git, remote_branch_sha
 from robert_agent.adapters.git.workspace import check_worktree_reuse
+from robert_agent.adapters.git.merge_preflight import check_merge_environment, MergePreflightError
 from robert_agent.context.native_prompts import address_findings_input
 from robert_agent.context.prompts import render_prompt
 from robert_agent.delivery import contract
@@ -20,7 +21,6 @@ from robert_agent.execution import retry
 from robert_agent.execution.budgets import pipeline_timeout
 from robert_agent.execution.stages import StageStopped, StageSuperseded, attempt_is_active, terminate_children
 from robert_agent.foundation import question_choices
-from robert_agent.foundation.contracts.delivery import VerificationStatus
 from robert_agent.foundation.contracts.execution import ModelRunStatus
 from robert_agent.persistence import transactions
 from robert_agent.persistence.stores import artifacts as db_write_artifacts
@@ -31,12 +31,15 @@ from robert_agent.security import redaction
 from robert_agent.workflows.review import files, workspace, report_checkpoint
 from robert_agent.workflows.review.coordinator import ReviewStages
 from robert_agent.workflows.pre_pr_review import base_impact, final_verification, handoff_repair, final_repair
+from robert_agent.workflows.pre_pr_review.verification import final_verification_checks
+from robert_agent.workflows.pre_pr_review import decisions
 
 
 class ReviewDecisionRequired(StageStopped):
-    def __init__(self, path, question):
-        super().__init__("a review finding requires an operator decision")
+    def __init__(self, path, question, *, artifact=None, stage="address_findings"):
+        super().__init__("the task requires an operator decision")
         self.path, self.question = path, question
+        self.artifact, self.stage = artifact, stage
 
 
 class BaseRefreshRequired(StageSuperseded):
@@ -95,6 +98,8 @@ class Coordinator(ReviewStages):
         self.final_feedback = self.request.get("final_feedback")
         self.final_decision_feedback = None
         self.handoff_source_run_id = None
+        if reply and reply["decision"].get("stage") == "implement" and not self.manifest.get("candidate"):
+            decisions.verify_implementation_source(self, reply["decision"])
 
     def check_active(self):
         super().check_active()
@@ -142,10 +147,15 @@ class Coordinator(ReviewStages):
             raise StageStopped(f"{stage} retry budget exhausted")
 
     def phase_input_changed(self, stage):
-        return stage != "implement" or super().phase_input_changed(stage)
+        reply = self.request.get("operator_reply", {}).get("decision", {})
+        return stage != "implement" or reply.get("stage") == "implement" or super().phase_input_changed(stage)
 
     def preserve_phase_artifact(self, run):
-        return artifact_available(run) and run["stage"] in {"address_findings", "verify_final"}
+        return artifact_available(run) and (
+            run["stage"] in {"address_findings", "verify_final"}
+            or run["stage"] == "implement"
+            and run["artifact"].get("output_type") == "waiting_for_user"
+        )
 
     def stage_environment(self, run):
         environment = super().stage_environment(run)
@@ -208,13 +218,19 @@ class Coordinator(ReviewStages):
 
     def validate_candidate(self, output, _model):
         path = output / "candidate.json"
-        candidate = json.loads(path.read_text(encoding="utf-8"))
-        self.validate_submission(candidate)
-        return {
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        output_type, candidate = decisions.candidate_payload(self, saved, source_path=path)
+        self.validate_submission(candidate, output_type=output_type)
+        artifact = {
             "candidate_path": str(path),
             "candidate_sha256": store.digest(path),
-            "head": clean_head(self.assigned_path, self.branch),
+            "head": git(self.assigned_path, "rev-parse", "HEAD"),
         }
+        if output_type == "waiting_for_user":
+            artifact.update(output_type=output_type, operator_question=candidate["operator_question"])
+        else:
+            artifact["head"] = clean_head(self.assigned_path, self.branch)
+        return artifact
 
     def envelope(self, payload):
         return {
@@ -254,6 +270,13 @@ class Coordinator(ReviewStages):
             }
             self.stage = "implement"
             candidate = self.run_phase("implement", self.implementer, prompt_path, self.validate_candidate)
+            if candidate.get("output_type") == "waiting_for_user":
+                raise ReviewDecisionRequired(
+                    Path(candidate["candidate_path"]),
+                    candidate["operator_question"],
+                    artifact=candidate,
+                    stage="implement",
+                )
         self.stage = "snapshot"
         base_impact.verify_original(self)
         base_impact.verify_saved(self, self.request.get("base_compatibility"))
@@ -326,7 +349,7 @@ class Coordinator(ReviewStages):
                 or value.get("report_sha256") != entry["report_sha256"]
             ):
                 continue
-            final = artifact["head"]
+            final = artifact.get("head") or value.get("final_sha")
             if value.get("final_sha") != final or clean_head(self.address_workspace(run["run_id"])) != final:
                 raise StageStopped("completed repair worktree changed")
             git(self.assigned_path, "merge-base", "--is-ancestor", candidate["head"], final)
@@ -350,6 +373,14 @@ class Coordinator(ReviewStages):
             raise StageStopped(error)
         final = candidate["head"]
         current = clean_head(self.assigned_path, self.branch)
+        if (
+            current in {self.manifest["head_sha"], final}
+            and git(self.assigned_path, "merge-base", final, current_base) != current_base
+        ):
+            try:
+                check_merge_environment(self.assigned_path)
+            except MergePreflightError as exc:
+                raise StageStopped(str(exc)) from exc
         # A validated address commit may still need its original fast-forward.
         if current == self.manifest["head_sha"] and current != final:
             git(self.assigned_path, "merge", "--ff-only", final)
@@ -665,7 +696,11 @@ class Coordinator(ReviewStages):
                     validation.require_answerable_question(question)
                 elif error := question_choices.validation_error(choices):
                     raise ValueError(error)
-                raise ReviewDecisionRequired(disposition, question)
+                return {
+                    "dispositions_path": str(disposition),
+                    "dispositions_sha256": store.digest(disposition),
+                    "operator_question": question,
+                }
             tree = self.address_workspace(self.handoff_source_run_id or output.name)
             final = clean_head(tree)
             if final != value.get("final_sha"):
@@ -673,13 +708,8 @@ class Coordinator(ReviewStages):
             git(tree, "merge-base", "--is-ancestor", head, final)
             if final == head and any(item["status"] == "fixed" for item in value["dispositions"]):
                 raise ValueError("a finding marked fixed requires a new commit")
-            if any(
-                isinstance(check, dict) and check.get("status") == VerificationStatus.FAILED
-                for check in value["verification"]
-            ):
-                raise ValueError("final verification contains an unsuccessful check")
             draft = self.candidate_submission()
-            draft["verification"] = value["verification"]
+            draft["verification"] = final_verification_checks(value["verification"])
             open_pr = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
             open_pr["body"] = value["body"]
             self.validate_submission(draft)
@@ -689,68 +719,40 @@ class Coordinator(ReviewStages):
                 "head": final,
             }
 
-        return self.run_phase(self.stage, self.implementer, prompt, validate, input_hash=input_hash)
+        artifact = self.run_phase(self.stage, self.implementer, prompt, validate, input_hash=input_hash)
+        if artifact.get("operator_question"):
+            raise ReviewDecisionRequired(
+                Path(artifact["dispositions_path"]), artifact["operator_question"], artifact=artifact
+            )
+        return artifact
 
-    def wait_for_decision(self, decision, report_sha):
-        self.check_active()
-        self.check_base()
-        question = decision.question
-        binding = {
-            "round_id": self.round_id,
-            "snapshot_id": self.manifest["snapshot_id"],
-            "candidate_sha": self.manifest["head_sha"],
-            "report_sha256": report_sha,
-            "dispositions_path": str(decision.path),
-            "dispositions_sha256": store.digest(decision.path),
-            **({"final_feedback": self.final_decision_feedback} if self.final_decision_feedback else {}),
-        }
-        comment = "\n\n".join(
-            [question["summary"], "\n".join(question_choices.option_lines(question["choices"], recommended="（推荐）"))]
-        ).strip()
-        draft = self.candidate_submission()
-        draft.update(
-            planned_github_actions=[] if self.origin_type == "web" else [{"type": "comment", "body": comment}],
-            operator_question=question,
-            handoff="Waiting for an authenticated reply within the original task scope.",
-        )
-        envelope = {**self.envelope(draft), "output_type": "waiting_for_user"}
-        scope_keys = ("repo", "github_account", "base_branch", "worktree_path", "branch_name", "remote", "sources")
-        proof = {
-            "attempt_id": self.attempt_id,
-            "snapshot_id": self.manifest["snapshot_id"],
-            "report_sha256": report_sha,
-            "head_sha": "",
-            "decision": binding,
-            "scope": {key: self.scope[key] for key in scope_keys},
-            "fingerprint": contract.semantic_fingerprint(envelope),
-        }
-        with store.connect(self.db_path) as conn:
-            transactions.begin(conn, immediate=True)
-            if not attempt_is_active(conn, self.task_id, self.attempt_id):
-                raise StageStopped("review owner changed before question handoff")
-            if any(run["slot_reserved"] for run in store.runs(conn, self.round_id)):
-                raise StageStopped("review processes must exit before requesting a reply")
-            store.update(conn, self.round_id, status="waiting_for_user", proof_json=json.dumps(proof, sort_keys=True))
-        result = submission.record_result(self.db_path, envelope)
-        if not result.get("ok"):
-            raise StageStopped("review question submission blocked: " + result.get("reason_code", result["status"]))
-        return result
+    def wait_for_decision(self, decision, report_sha=None):
+        return decisions.submit(self, decision, report_sha)
 
     def candidate_submission(self):
         candidate = self.manifest["candidate"]
         if store.digest(candidate["candidate_path"]) != candidate["candidate_sha256"]:
             raise StageStopped("candidate handoff changed")
-        return json.loads(Path(candidate["candidate_path"]).read_text(encoding="utf-8"))
+        return decisions.candidate_payload(
+            self,
+            json.loads(Path(candidate["candidate_path"]).read_text(encoding="utf-8")),
+            source_path=Path(candidate["candidate_path"]),
+        )[1]
 
-    def validate_submission(self, submission_payload):
+    def validate_submission(self, submission_payload, *, output_type="new_pr"):
         with store.connect(self.db_path) as conn:
             settings, rejected = validation.context(conn, self.task_id, self.attempt_id)
         if rejected:
             raise StageStopped("candidate attempt is no longer current")
-        normalized = contract.normalize(self.envelope(submission_payload), settings)
+        normalized = contract.normalize({**self.envelope(submission_payload), "output_type": output_type}, settings)
+        if output_type == "waiting_for_user":
+            validation.require_answerable_question(submission_payload["operator_question"])
         checked = audit.audit_result(normalized, final=False, **settings)
         if not checked["ok"]:
-            raise ValueError("handoff failed the new PR result contract")
+            reason = redact_and_truncate(checked.get("safe_error", "handoff audit failed"), 1000).get(
+                "text", "handoff audit failed"
+            )
+            raise ValueError(reason)
         return normalized
 
     def finalize(self, report, report_sha, disposition):
@@ -1000,7 +1002,7 @@ class Coordinator(ReviewStages):
             disposition = self.address(report, sha, ids)
             return self.finalize(report, sha, disposition)
         except ReviewDecisionRequired as exc:
-            return self.wait_for_decision(exc, sha)
+            return self.wait_for_decision(exc, locals().get("sha"))
         except final_verification.FinalReviewBlocked as exc:
             decision = final_repair.handle(self, exc)
             if decision:

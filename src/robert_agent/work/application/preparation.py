@@ -435,11 +435,17 @@ def bind_pre_pr_review(
             previous_review
             and not (worktree_result and not worktree_result.get("ok", True))
             and (not previous_review["final_result_id"] or reply_continuation)
-            and previous_review["manifest"].get("candidate")
+            and (previous_review["manifest"].get("candidate") or previous.get("implementation_question"))
             and all(request[key] == previous.get(key) for key in ("repo", "branch"))
             and (request["input_sha256"] == previous.get("input_sha256") or reply_continuation)
         ):
             pre_pr_review.rebind_for_retry(conn, previous_review, task_id, attempt_id)
+            if previous.get("implementation_question") and reply_continuation:
+                updated = pre_pr_review.session(conn, task_id=task_id)["request"]
+                updated.update({key: request[key] for key in ("prompt_path", "prompt_sha256", "event", "input_sha256")})
+                pre_pr_review.update(
+                    conn, previous_review["round_id"], request_json=json.dumps(updated, sort_keys=True)
+                )
         else:
             pre_pr_review.create(conn, task_id, request)
 

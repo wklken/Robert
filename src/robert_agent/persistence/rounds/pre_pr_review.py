@@ -60,7 +60,11 @@ def session(conn, *, round_id=None, task_id=None):
     entry["feedback_runs"] = feedback_runs(conn, entry["round_id"], feedback_ids)
     reply_binding = entry["request"].get("operator_reply", {}).get("decision")
     entry["reply_context_checkpoint"] = None
-    if isinstance(reply_binding, dict) and reply_binding.get("snapshot_id") != entry["snapshot_id"]:
+    if (
+        isinstance(reply_binding, dict)
+        and reply_binding.get("stage") != "implement"
+        and reply_binding.get("snapshot_id") != entry["snapshot_id"]
+    ):
         entry["reply_context_checkpoint"] = reply_context_checkpoint(conn, entry["round_id"], reply_binding)
     verification = entry["proof"].get("final_verification")
     entry["final_verification_run"] = None
@@ -95,6 +99,12 @@ def session(conn, *, round_id=None, task_id=None):
                 "submission_head_sha"
             ) == legacy.get("head_sha"):
                 entry["legacy_result_binding"] = legacy
+    binding = entry["proof"].get("decision") or entry["request"].get("operator_reply", {}).get("decision")
+    entry["question_run"] = None
+    if isinstance(binding, dict) and binding.get("source_run_id"):
+        entry["question_run"] = feedback_runs(conn, entry["round_id"], {binding["source_run_id"]}).get(
+            binding["source_run_id"]
+        )
     return entry
 
 
@@ -413,6 +423,24 @@ def matches_submission(entry, attempt_id, fingerprint, *, head=None, result_id=N
 
 def validate_reply_checkpoint(entry, binding):
     """Recheck the saved candidate and artifacts before accepting or using a reply."""
+    if binding.get("stage") == "implement":
+        error = "The implementation question checkpoint changed. Refresh before replying."
+        run = entry.get("question_run")
+        if (
+            entry["round_id"] != binding.get("round_id")
+            or not run
+            or run["stage"] != "implement"
+            or not round_records.artifact_available(run)
+            or run["slot_reserved"]
+            or run["artifact"].get("candidate_path") != binding.get("candidate_path")
+            or run["artifact"].get("candidate_sha256") != binding.get("candidate_sha256")
+            or run["dispatch"].get("result_checkpoint") != binding.get("source_checkpoint")
+            or digest(binding["candidate_path"]) != binding["candidate_sha256"]
+            or not binding.get("original_request")
+            or digest(binding["original_request"]["path"]) != binding["original_request"]["sha256"]
+        ):
+            raise ValueError(error)
+        return
     manifest = entry["manifest"]
     if (
         entry["round_id"] != binding["round_id"]
@@ -424,6 +452,16 @@ def validate_reply_checkpoint(entry, binding):
         or digest(binding["dispositions_path"]) != binding["dispositions_sha256"]
     ):
         raise ValueError("The review checkpoint changed. Refresh before replying.")
+    if "source_run_id" in binding:
+        run = entry.get("question_run")
+        if (
+            not run
+            or not round_records.artifact_available(run)
+            or run["slot_reserved"]
+            or run["stage"] != "address_findings"
+            or run["artifact"].get("dispositions_sha256") != binding["dispositions_sha256"]
+        ):
+            raise ValueError("The registered question source changed.")
     if "final_feedback" in binding:
         feedback = binding["final_feedback"]
         validate_final_feedback(entry, feedback)
@@ -478,7 +516,7 @@ def validate_reply_context(entry, binding):
     reply = entry["request"].get("operator_reply")
     if not isinstance(reply, dict) or reply.get("decision") != binding or not isinstance(binding, dict):
         raise ValueError("The reply is not bound to the authenticated review request.")
-    if binding.get("snapshot_id") == entry["snapshot_id"]:
+    if binding.get("stage") == "implement" or binding.get("snapshot_id") == entry["snapshot_id"]:
         validate_reply_checkpoint(entry, binding)
         return
     historical = entry.get("reply_context_checkpoint")

@@ -553,7 +553,9 @@ def _audit_verification_contract(result, verification_policy, actual_types):
         entry_error = _audit_verification_entry(entry, allow_skipped)
         if entry_error:
             return _verification_policy_error(entry_error)
-    if not _verification_required(verification_policy, actual_types):
+    if result.get("output_type") == OutputType.WAITING_FOR_USER or not _verification_required(
+        verification_policy, actual_types
+    ):
         return None
     required_statuses = set(verification_policy.get("required_statuses") or ["passed"])
     required_entries = [entry for entry in verification if entry.get("required") is True]

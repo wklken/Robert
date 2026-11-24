@@ -33,7 +33,17 @@ def main(argv=None):
     if output_dir := os.environ.get("ROBERT_PRE_PR_CANDIDATE_DIR"):
         target = Path(output_dir) / "candidate.json"
         temporary = target.with_suffix(".tmp")
-        temporary.write_text(json.dumps(submission), encoding="utf-8")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "task_id": args.task_id,
+                    "attempt_id": args.attempt_id,
+                    "output_type": args.output_type,
+                    "submission": submission,
+                }
+            ),
+            encoding="utf-8",
+        )
         temporary.replace(target)
         return emit({"ok": True, "status": "candidate_saved"})
     return emit(

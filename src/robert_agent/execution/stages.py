@@ -21,6 +21,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import threading
 import time
 from typing import Any, ContextManager, Protocol
@@ -153,11 +154,38 @@ def attempt_is_active(conn, task_id, attempt_id):
     )
 
 
+def _stopped_dispatch(run, *, observe_source):
+    """Record proven group exit without replacing original launch/source pins."""
+    recorded = dict(run["dispatch"])
+    recorded.update(process_exited=True, group_exit_confirmed=True)
+    if run["status"] in {ModelRunStatus.STARTING, ModelRunStatus.RUNNING}:
+        recorded["interrupted"] = True
+        recorded.setdefault("failure_kind", "interrupted")
+    launch = recorded.get("launch_checkpoint")
+    if observe_source and launch:
+        try:
+            path = launch["worktree_path"]
+            if recorded.get("worktree_path", path) != path:
+                raise ValueError("stopped source worktree changed")
+            manifest = {key: launch.get(key) for key in ("snapshot_id", "head_sha", "base_sha")}
+            manifest["implementing"] = run["stage"] == "implement"
+            manifest["files"] = launch.get("context_files", {})
+            checkpoint = stage_evidence.observe_source(run, manifest, path)
+            saved = recorded.get("result_checkpoint")
+            if saved and saved != checkpoint:
+                raise ValueError("stopped source checkpoint changed")
+            recorded["result_checkpoint"] = checkpoint
+        except (OSError, ValueError, subprocess.SubprocessError):
+            recorded["resume_fallback_reason"] = "stopped_source_unavailable"
+    return recorded
+
+
 def terminate_children(conn, task_id, *, store: StageStore):
     """Cancel all model process groups before allowing another attempt to start."""
     review = store.session(conn, task_id=task_id)
     if not review:
         return "already_dead"
+    binding = execution_store.get_binding(conn, "task", task_id)
     outcomes = []
     updates: list[tuple[str, dict[str, Any]]] = []
     finished = {}
@@ -175,7 +203,12 @@ def terminate_children(conn, task_id, *, store: StageStore):
             continue
         recorded = run["dispatch"]
         if _launch_failed_without_process(recorded):
-            updates.append((run["run_id"], {"slot_reserved": 0}))
+            fields: dict[str, Any] = {"slot_reserved": 0}
+            if run["status"] in {ModelRunStatus.STARTING, ModelRunStatus.RUNNING}:
+                fields.update(
+                    status=ModelRunStatus.FAILED.value, error=recorded.get("safe_error", "review launch failed")
+                )
+            updates.append((run["run_id"], fields))
             outcomes.append("already_dead")
             continue
         if run["status"] == ModelRunStatus.FAILED and not recorded.get("pid"):
@@ -184,7 +217,6 @@ def terminate_children(conn, task_id, *, store: StageStore):
             continue
         if _group_finished(recorded):
             finished[run["run_id"]] = recorded
-            updates.append((run["run_id"], {"slot_reserved": 0}))
             outcomes.append("already_dead")
             continue
         if recorded.get("process_exited") or (
@@ -193,7 +225,6 @@ def terminate_children(conn, task_id, *, store: StageStore):
             exited = _wait_for_group_exit(recorded)
             if exited:
                 finished[run["run_id"]] = recorded
-                updates.append((run["run_id"], {"slot_reserved": 0}))
             outcomes.append("already_dead" if exited else "attention")
             continue
         if not recorded:
@@ -205,45 +236,31 @@ def terminate_children(conn, task_id, *, store: StageStore):
         outcomes.append(result["status"])
         if result["status"] != "attention":
             finished[run["run_id"]] = recorded
-            updates.append(
-                (
-                    run["run_id"],
-                    {"status": ModelRunStatus.INTERRUPTED.value, "slot_reserved": 0, "error": "coordinator stopped"},
-                )
-            )
     # Observe/stop every child before opening our write transaction. In
     # particular, stopping the second child must not hold the first's update.
     # A canceled command already holds its writer and is terminal. Recovery
     # callers observe stopped writer progress before beginning any writes.
-    stopped_updates = {}
-    if finished and not conn.in_transaction:
-        for run in runs:
-            if run["run_id"] not in finished:
-                continue
-            recorded = dict(finished[run["run_id"]])
-            launch = recorded.get("launch_checkpoint")
-            if launch and not recorded.get("result_checkpoint"):
-                try:
-                    manifest = {key: launch.get(key) for key in ("snapshot_id", "head_sha", "base_sha")}
-                    manifest["implementing"] = run["stage"] == "implement"
-                    manifest["files"] = launch.get("context_files", {})
-                    recorded["result_checkpoint"] = stage_evidence.observe_source(
-                        run, manifest, launch["worktree_path"]
-                    )
-                    recorded.setdefault("failure_kind", "interrupted")
-                except (OSError, ValueError):
-                    recorded["resume_fallback_reason"] = "stopped_source_unavailable"
-                stopped_updates[run["run_id"]] = {"dispatch_json": json.dumps(recorded)}
-                finished[run["run_id"]] = recorded
-    if stopped_updates:
-        db_transactions.begin(conn, immediate=True)
-        if store.session(conn, task_id=task_id) != review or store.runs(conn, review["round_id"]) != runs:
+    for run in runs:
+        if run["run_id"] not in finished:
+            continue
+        recorded = _stopped_dispatch(run, observe_source=not conn.in_transaction)
+        finished[run["run_id"]] = recorded
+        fields = {"dispatch_json": json.dumps(recorded), "slot_reserved": 0}
+        if run["status"] in {ModelRunStatus.STARTING, ModelRunStatus.RUNNING}:
+            fields.update(status=ModelRunStatus.INTERRUPTED.value, error="coordinator stopped")
+        updates.append((run["run_id"], fields))
+    if updates:
+        if not conn.in_transaction:
+            db_transactions.begin(conn, immediate=True)
+        if (
+            store.session(conn, task_id=task_id) != review
+            or store.runs(conn, review["round_id"]) != runs
+            or execution_store.get_binding(conn, "task", task_id) != binding
+        ):
             return "attention"
     if finished and (database := db_sqlite.main_database_path(conn)):
         for run_id, recorded in finished.items():
             record_dispatch_usage(conn, database.parent, "stage", run_id, task_id, recorded, terminal=True)
-    for run_id, fields in stopped_updates.items():
-        store.update_run(conn, run_id, **fields)
     for run_id, fields in updates:
         store.update_run(conn, run_id, **fields)
     return "attention" if "attention" in outcomes else "terminated"
@@ -353,7 +370,8 @@ class StageCoordinator:
         def reconcile(run):
             try:
                 self._wait(run, run["dispatch"], workers[run["worker_id"]]["timeout_seconds"])
-            except StageStopped:
+            except StageStopped as exc:
+                self.checkpoint_stopped_run(run, exc)
                 raise
             except RuntimeError as exc:
                 with store.connect(self.db_path) as conn:
@@ -578,6 +596,41 @@ class StageCoordinator:
             self.store.update_run(conn, run["run_id"], dispatch_json=json.dumps(recorded))
             record_call_event(conn, "stage", run["run_id"], self.task_id, "result_saved", stage=run["stage"])
         run["dispatch"] = recorded
+
+    def checkpoint_stopped_run(self, run, error):
+        """Account for a stopped stage only after exit and unchanged ownership."""
+        with self.store.connect(self.db_path) as conn:
+            session = self.store.session(conn, task_id=self.task_id)
+            original = next((r for r in self.store.runs(conn, self.round_id) if r["run_id"] == run["run_id"]), None)
+            binding = execution_store.get_binding(conn, "task", self.task_id)
+            active = attempt_is_active(conn, self.task_id, self.attempt_id)
+        if not active or not original or original["status"] not in {ModelRunStatus.STARTING, ModelRunStatus.RUNNING}:
+            return
+        if not _group_finished(original["dispatch"]):
+            return
+        recorded = _stopped_dispatch(original, observe_source=True)
+        with self.store.connect(self.db_path) as conn:
+            db_transactions.begin(conn, immediate=True)
+            current = next((r for r in self.store.runs(conn, self.round_id) if r["run_id"] == run["run_id"]), None)
+            if (
+                current != original
+                or self.store.session(conn, task_id=self.task_id) != session
+                or execution_store.get_binding(conn, "task", self.task_id) != binding
+                or not attempt_is_active(conn, self.task_id, self.attempt_id)
+            ):
+                return
+            self.store.update_run(
+                conn,
+                run["run_id"],
+                status=ModelRunStatus.INTERRUPTED.value,
+                error=str(error),
+                dispatch_json=json.dumps(recorded),
+                slot_reserved=0,
+            )
+            record_dispatch_usage(conn, self.data_dir, "stage", run["run_id"], self.task_id, recorded, terminal=True)
+            if recorded.get("result_checkpoint"):
+                record_call_event(conn, "stage", run["run_id"], self.task_id, "result_saved", stage=run["stage"])
+        run.update(status=ModelRunStatus.INTERRUPTED.value, error=str(error), dispatch=recorded, slot_reserved=0)
 
     def bind_native_session(self, run, recorded, worker, prompt_path):
         """Bind native provider history to the registered frozen launch."""
@@ -852,7 +905,8 @@ class StageCoordinator:
                     raise ValueError("registered review artifact changed")
                 self.workspace.verify_snapshot(self.manifest)
                 return self.register(run, artifact)
-            except StageStopped:
+            except StageStopped as exc:
+                self.checkpoint_stopped_run(run, exc)
                 raise
             except (ValueError, OSError, RuntimeError) as exc:
                 if adopting:
@@ -976,7 +1030,8 @@ class StageCoordinator:
                 artifact["input_sha256"] = input_hash
             failure_kind = "registration"
             return self.register(run, artifact)
-        except StageStopped:
+        except StageStopped as exc:
+            self.checkpoint_stopped_run(run, exc)
             raise
         except Exception as exc:
             with store.connect(self.db_path) as conn:

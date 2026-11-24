@@ -139,25 +139,23 @@ class QuestionRecoveryBoundaryTests(unittest.TestCase):
         outcome = {"ok": True, "status": "waiting_for_user"}
         driver.refresh_base = Mock()
 
-        def wait_for_decision(*args):
-            if driver.refresh_base.called:
-                return outcome
-            return coordinator.Coordinator.wait_for_decision(driver, *args)
-
-        driver.wait_for_decision = Mock(side_effect=wait_for_decision)
+        driver.wait_for_decision = MethodType(coordinator.Coordinator.wait_for_decision, driver)
         driver.advance_stages = MethodType(coordinator.Coordinator.advance_stages, driver)
         return driver, outcome, decision
 
-    def test_base_change_during_primary_or_final_question_is_refreshed(self):
+    def test_primary_or_final_question_does_not_require_base_refresh(self):
         for final_blocker in (False, True):
             with self.subTest(final_blocker=final_blocker):
                 driver, outcome, decision = self.driver(final_blocker=final_blocker)
-                with patch.object(coordinator.final_repair, "handle", return_value=(decision.path, decision.question)):
+                with (
+                    patch.object(coordinator.final_repair, "handle", return_value=(decision.path, decision.question)),
+                    patch.object(coordinator.decisions, "submit", return_value=outcome) as submit,
+                ):
                     self.assertEqual(coordinator.Coordinator.run_stages(driver), outcome)
-                driver.refresh_base.assert_called_once()
-                self.assertEqual(driver.refresh_base.call_args.args[0].current, "new-base")
-                self.assertEqual(driver.wait_for_decision.call_count, 2)
-                self.assertEqual(driver.address.call_count, 2)
+                submit.assert_called_once()
+                driver.check_base.assert_not_called()
+                driver.refresh_base.assert_not_called()
+                self.assertEqual(driver.address.call_count, 1)
 
     def assert_attention(self, driver, reason):
         with (
@@ -168,24 +166,23 @@ class QuestionRecoveryBoundaryTests(unittest.TestCase):
             patch.object(coordinator, "attempt_is_active", return_value=True),
             patch.object(coordinator, "terminate_children", return_value="stopped"),
         ):
-            with self.assertRaisesRegex(StageStopped, reason):
+            with self.assertRaisesRegex((StageStopped, ValueError), reason):
                 coordinator.Coordinator.run_stages(driver)
         update.assert_called_once()
         self.assertEqual(update.call_args.kwargs["status"], "attention")
         self.assertIn(reason, update.call_args.kwargs["error"])
-        self.assertEqual(driver.wait_for_decision.call_count, 1)
 
-    def test_question_base_check_failure_is_recorded_as_attention(self):
+    def test_question_source_failure_is_recorded_as_attention(self):
         driver, _, _ = self.driver()
-        driver.check_base.side_effect = StageStopped("base observation unavailable")
-        self.assert_attention(driver, "base observation unavailable")
+        with patch.object(coordinator.decisions, "submit", side_effect=StageStopped("question source changed")):
+            self.assert_attention(driver, "question source changed")
         driver.refresh_base.assert_not_called()
 
-    def test_refresh_failure_after_question_is_recorded_as_attention(self):
+    def test_question_validation_failure_is_recorded_as_attention(self):
         driver, _, _ = self.driver()
-        driver.refresh_base.side_effect = StageStopped("base refresh budget exhausted")
-        self.assert_attention(driver, "base refresh budget exhausted")
-        driver.refresh_base.assert_called_once()
+        with patch.object(coordinator.decisions, "submit", side_effect=ValueError("question not deliverable")):
+            self.assert_attention(driver, "question not deliverable")
+        driver.refresh_base.assert_not_called()
 
 
 class UnchangedFindingProofTests(unittest.TestCase):

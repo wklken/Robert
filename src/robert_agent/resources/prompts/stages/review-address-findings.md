@@ -10,6 +10,8 @@ Read the pinned original-request for the complete ticket and discussion before r
 
 Verify the final commit with the checks required by the repository. Return its full Git SHA and the verification entries for that commit. Supply an updated PR body with the change summary, verification, assumptions and decisions. Robert adds the Review and dispositions to the PR body.
 
+Keep the worker-declared required policy honest: every required final gate must pass, and at least one required check must verify the final commit. Preserve historical RED tests and mutation negative controls unchanged, including their command, purpose, status, exit code, required flag and evidence source. For optional historical failures, explain in the PR body's verification section the concrete revision or mutation tested, the expected failure and why it does not establish a blocker in the final source; cite existing purpose evidence without rewriting the entry. Record fresh required checks separately. An optional flag alone does not prove a failure is obsolete; assess its relevance against the final code and retain unresolved blockers. Never relabel a failed required check as optional, passed or skipped to obtain acceptance, delete failed evidence, invent execution evidence or change a CI URL. Follow the existing verification schema without adding fields.
+
 ## Delivery
 
 If any disposition is needs_decision, include a top-level choices list. Frame each option as a complete answer to the pending finding IDs and their reason.

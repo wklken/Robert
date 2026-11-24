@@ -192,6 +192,7 @@ class FinalRepairTests(unittest.TestCase):
         driver.voter_stage = "review"
         driver.sealed_output = lambda run: self.root
         driver.validate_output = MethodType(StageCoordinator.validate_output, driver)
+        driver.checkpoint_stopped_run = MethodType(StageCoordinator.checkpoint_stopped_run, driver)
         registered = []
         driver.register = lambda run, artifact: registered.append(run["run_id"]) or artifact
 

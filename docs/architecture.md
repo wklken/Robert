@@ -744,3 +744,12 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 和 `persistence/stores/notifications.py`；问题和通知使用调用方事务原子提交，
 收件箱、发送队列和就绪检测在限额前应用相同的未解决问题和仓库筛选。
 通知确认不会改变 Supervisor 事件或执行所有权。未来渠道复用同一版本化协议。
+
+
+发布前提问由 `workflows/pre_pr_review/decisions.py` 绑定登记的阶段输出、原请求及已停止
+writer 的源码，再通过原审计提交流程发布。`persistence/rounds/pre_pr_review.py` 核验可信回复
+来源。`delivery/mixed_base_dependencies.py` 保存完整声明式混合组件的源码、构建及 CI
+依赖证书；未知动态影响仍需重新审查。`adapters/git/merge_preflight.py` 在写入新合并检查点
+之前，只读检查 Git 身份和已识别 hook 的运行条件。
+分析交付证明位于 `persistence/queries/readviews/board_delivery.py`，看板依据已接纳结果和
+完整发布回执展示方案已交付，无需 PR 或工作项完成时间戳，且不修改生命周期状态。

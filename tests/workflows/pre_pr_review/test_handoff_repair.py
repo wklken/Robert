@@ -143,7 +143,7 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
         name = self.driver.handoff_files[self.run["stage"]][0]
         value = json.loads((output / name).read_text())
         if self.run["stage"] == "implement":
-            contract.validate_submission(value, "new_pr", "github")
+            contract.validate_submission(value.get("submission", value), value.get("output_type", "new_pr"), "github")
         return {
             "result_path": str(output / name),
             "result_sha256": store.digest(output / name),
@@ -178,6 +178,39 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
         self.driver.repaired["verification"][0]["url"] = "https://ci.invalid/forged"
         with self.assertRaises(StageStopped):
             self.repair()
+
+    def test_worker_envelope_is_preserved_during_nested_submission_repair(self):
+        original = {
+            "task_id": self.task,
+            "attempt_id": self.attempt,
+            "output_type": "new_pr",
+            "submission": deepcopy(self.value),
+        }
+        self.run = self.make_run("implement", original)
+        self.driver.repaired = deepcopy(original)
+        del self.driver.repaired["submission"]["unsupported"]
+        result = self.repair()
+        self.assertEqual(json.loads(Path(result["result_path"]).read_text()), self.driver.repaired)
+        self.assertEqual(self.driver.launches, ["repair_handoff"])
+
+    def test_worker_envelope_identity_and_nested_evidence_cannot_be_rewritten(self):
+        original = {
+            "task_id": self.task,
+            "attempt_id": self.attempt,
+            "output_type": "new_pr",
+            "submission": deepcopy(self.value),
+        }
+        self.run = self.make_run("implement", original)
+        for field in ("task_id", "attempt_id", "output_type", "ci_url"):
+            with self.subTest(field=field):
+                self.driver.repaired = deepcopy(original)
+                del self.driver.repaired["submission"]["unsupported"]
+                if field == "ci_url":
+                    self.driver.repaired["submission"]["verification"][0]["url"] = "https://ci.invalid/forged"
+                else:
+                    self.driver.repaired[field] = "forged"
+                with self.assertRaises(StageStopped):
+                    self.repair()
 
     def test_supported_fields_and_verification_provenance_are_preserved(self):
         changes = [

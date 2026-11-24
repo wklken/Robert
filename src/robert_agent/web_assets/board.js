@@ -120,6 +120,17 @@ const translations = {
     causeUnknown: "Cause not identified yet. Open “Execution history” below to read the error log.",
     causeFromAttempt: "From the error of attempt {number}",
     causeFromReview: "From the review record",
+    causeFromPrePrReview: "From the pre-publication review record",
+    causeFromVote: "From the voting record",
+    processObservation: "Process observation",
+    deliveryReceipts: "Publication proof",
+    openDeliveredReport: "Open delivered report",
+    analysisNextStep: "Send your next instruction on the source ticket to request implementation or more analysis. End tracking if no further work is needed; the published report is retained.",
+    ownerAnalysisDelivered: "The requester chooses the next step; no automatic run is pending.",
+    endAnalysisTracking: "End tracking",
+    headline_analysis_delivered: "Analysis delivered; awaiting your next instruction",
+    what_analysis_delivered: "The analysis report was accepted and published. You can request implementation or more analysis on the source ticket.",
+    chip_analysis_delivered: "Analysis delivered",
     causeFromAttention: "From the Agent's message",
     causeFromPublication: "From the publication record",
     causeFromWorkflow: "From execution control",
@@ -547,6 +558,17 @@ const translations = {
     causeUnknown: "原因待定位。展开下方「执行历史」查看错误日志。",
     causeFromAttempt: "来自第 {number} 次执行的错误信息",
     causeFromReview: "来自评审记录",
+    causeFromPrePrReview: "来自发布前评审记录",
+    causeFromVote: "来自投票记录",
+    processObservation: "进程观测",
+    deliveryReceipts: "发布凭证",
+    openDeliveredReport: "打开已交付报告",
+    analysisNextStep: "在来源单据上发送下一步指令，要求实施或继续分析。不需要后续工作时可结束跟踪；已发布报告会保留。",
+    ownerAnalysisDelivered: "由发起人决定下一步；当前没有等待自动执行的任务。",
+    endAnalysisTracking: "结束跟踪",
+    headline_analysis_delivered: "方案已交付，等待下一步指令",
+    what_analysis_delivered: "分析报告已通过审核并发布。可在来源单据上要求实施或继续分析。",
+    chip_analysis_delivered: "方案已交付",
     causeFromAttention: "来自 Agent 的消息",
     causeFromPublication: "来自发布记录",
     causeFromWorkflow: "来自执行控制",
@@ -1211,6 +1233,7 @@ function statusChip(item) {
 function ownerShort(item) {
   const summary = summaryOf(item);
   if (summary.state === "draft") return t("ownerShort_draft");
+  if (summary.state === "analysis_delivered") return t("chip_analysis_delivered");
   return t(`ownerShort_${summary.owner}`);
 }
 function ownerLabel(item) {
@@ -1433,6 +1456,8 @@ function causeFact(detail, summary) {
   const origin = {
     attempt: t("causeFromAttempt", { number: summary.cause.attempt_no || summary.attempts?.total || 1 }),
     review: t("causeFromReview"),
+    pre_pr_review: t("causeFromPrePrReview"),
+    vote: t("causeFromVote"),
     attention: t("causeFromAttention"),
     publication: t("causeFromPublication"),
     workflow: t("causeFromWorkflow"),
@@ -1444,9 +1469,12 @@ function causeFact(detail, summary) {
     raw.append(node("span", "", `${t("rawText")}${state.language === "zh" ? "：" : ": "}`), node("code", "", cause.raw));
     value.append(raw);
   }
+  if (summary.cause.process_observation)
+    value.append(node("span", "fact-source", `${t("processObservation")}: ${summary.cause.process_observation}`));
   return value;
 }
 function ownerFact(detail, summary) {
+  if (summary.state === "analysis_delivered") return t("ownerAnalysisDelivered");
   if (summary.owner === "initiator") {
     const identity = summary.owner_identity || detail.created_by;
     return identity && identity === state.session?.operator_identity
@@ -1500,6 +1528,17 @@ function renderLive(detail) {
     add(t("factProblem"), t("noProblem"));
   }
   add(t("factOwner"), ownerFact(detail, summary));
+  if (summary.state === "analysis_delivered") {
+    const receipts = node("dd");
+    for (const receipt of detail.publication?.delivery?.receipts || []) {
+      const entry = node("p");
+      const link = externalLink(receipt.url, t("openDeliveredReport"), "link-button");
+      if (link) entry.append(link);
+      entry.append(node("span", "fact-source", `${receipt.action_id}${receipt.published_at ? ` · ${formatTime(receipt.published_at)}` : ""}`));
+      receipts.append(entry);
+    }
+    add(t("deliveryReceipts"), receipts);
+  }
   section.append(facts);
   if (detail.publication?.blocked_reason)
     section.append(node("p", "notice", detail.publication.blocked_reason));
@@ -1513,6 +1552,7 @@ function renderLive(detail) {
 /* Next step: one primary action, the result it has, and quieter alternatives. */
 function actionLabel(command, detail) {
   const summary = summaryOf(detail);
+  if (command === "cancel" && summary.state === "analysis_delivered") return t("endAnalysisTracking");
   if (["retrigger", "retry"].includes(command) && summary.stage?.task)
     return t("action_rerun", { stage: stageName(detail) });
   if (command === "reopen" && summary.state === "failed") return t("action_reopen_run");
@@ -1559,6 +1599,7 @@ function renderActions(detail) {
   const section = node("section", "detail-block");
   section.id = "detail-actions";
   section.append(node("h3", "", t("nextStep")));
+  if (summary.state === "analysis_delivered") section.append(node("p", "", t("analysisNextStep")));
   const commands = detail.valid_commands || [];
   const primary = primaryCommand(detail);
   const question = primary === "reply"
@@ -1576,6 +1617,11 @@ function renderActions(detail) {
   };
   if (summary.primary === "open_pr") {
     const link = externalLink(detail.pr?.url, t("action_open_pr", { pr: prLabel(detail) }), "primary-button");
+    if (link) row.append(link);
+  }
+  if (summary.primary === "open_source") {
+    const source = sourceInfo(detail);
+    const link = externalLink(source.url, source.open, "primary-button");
     if (link) row.append(link);
   }
   const composing = state.composer?.command;
@@ -1606,7 +1652,7 @@ function renderActions(detail) {
   commands.filter((command) => command !== primary && command !== composing).forEach((command) =>
     secondary.append(commandButton(command, command === "cancel" ? "command-button danger" : "command-button")));
   const source = sourceInfo(detail);
-  const sourceUrl = summary.primary === "open_pr" && detail.pr?.url === source.url ? null : source.url;
+  const sourceUrl = summary.primary === "open_source" || (summary.primary === "open_pr" && detail.pr?.url === source.url) ? null : source.url;
   const github = externalLink(sourceUrl, source.open, "link-button");
   if (github) secondary.append(github);
   if (secondary.children.length) section.append(secondary);

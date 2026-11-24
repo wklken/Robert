@@ -248,3 +248,30 @@ class VerificationAuditTests(WorkerProtocolFixture):
                         {"command": "check", "purpose": "verify behavior", "required": True, **entry}, True
                     )
                 )
+
+    def test_scoped_question_does_not_require_code_delivery_checks(self):
+        from robert_agent.delivery.application import audit as audit_result
+
+        payload = internal_result(
+            task_id="task-1",
+            attempt_id="attempt-1",
+            output_type="waiting_for_user",
+            planned_github_actions=[
+                {
+                    "type": "comment",
+                    "target_url": "https://github.com/x/y/issues/1",
+                    "body": "Choose a scoped compatibility option.\n\n<!-- robert-comment task_id=task-1 attempt_id=attempt-1 action_index=0 -->",
+                }
+            ],
+            consumed_event_fingerprints=["comment:1"],
+            verification=[],
+            used_skills=[],
+            operator_question={"kind": "scope_decision", "summary": "Choose compatibility.", "choices": []},
+            handoff="Await the scoped reply; no code delivery yet.",
+        )
+        audit = audit_result.audit_result(
+            payload,
+            allowed_github_actions=["push_existing_pr", "open_pr", "comment"],
+            verification_policy={"mode": "required", "required_statuses": ["passed"], "allow_skipped": False},
+        )
+        self.assertEqual(audit["status"], "accepted", audit)

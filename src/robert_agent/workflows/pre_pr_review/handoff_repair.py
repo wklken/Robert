@@ -51,6 +51,12 @@ def _read(content):
 def _preserved(value, stage):
     """Remove only fields declared unsupported by the submission contract."""
     value = deepcopy(value)
+    if stage == "implement" and "output_type" in value and "submission" in value:
+        if set(value) != {"task_id", "attempt_id", "output_type", "submission"} or not isinstance(
+            value["submission"], dict
+        ):
+            raise StageStopped("invalid candidate result envelope")
+        return {**value, "submission": _preserved(value["submission"], stage)}
     if stage == "implement":
         value = {key: item for key, item in value.items() if key in contract.FIELDS}
     for action in value.get("planned_github_actions", []):
@@ -78,7 +84,9 @@ def _preserved(value, stage):
 def _check_preserved(original, repaired, stage):
     expected = _preserved(original, stage)
     actual = deepcopy(repaired)
-    before_checks, after_checks = expected.get("verification"), actual.get("verification")
+    expected_payload = expected.get("submission", expected) if stage == "implement" else expected
+    actual_payload = actual.get("submission", actual) if stage == "implement" else actual
+    before_checks, after_checks = expected_payload.get("verification"), actual_payload.get("verification")
     if isinstance(before_checks, list) and isinstance(after_checks, list):
         for before, after in zip(before_checks, after_checks):
             if (
