@@ -1,4 +1,4 @@
-"""Exact stopped-stage source observations, independent of workflow selection."""
+"""Exact source observations and explicit incomplete deep-pin provenance."""
 
 import hashlib
 from pathlib import Path
@@ -6,6 +6,14 @@ import os
 import stat
 
 from robert_agent.adapters.git.review_revision import git
+
+
+class SourcePinUnavailable(ValueError):
+    """Basic source identity is known, but cannot authorize recovery reuse."""
+
+    def __init__(self, checkpoint, reason):
+        super().__init__(reason)
+        self.checkpoint = {**checkpoint, "source_pin_error": reason}
 
 
 def observe_source(run, manifest, worktree):
@@ -35,19 +43,22 @@ def observe_source(run, manifest, worktree):
     # Include it in the same bounded pin rather than treating Gitignore as trust.
     untracked = git(path, "ls-files", "--others", "-z").split("\0")
     if len(untracked) > 1001:
-        raise ValueError("stage source has too many untracked files to pin")
+        raise SourcePinUnavailable(checkpoint, "stage source has too many untracked files to pin")
     hashes = {}
-    for name in filter(None, untracked):
-        file = path / name
-        if file.resolve() != file or not file.is_relative_to(path):
-            raise ValueError("stage source contains an untracked symlink")
-        fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, "rb") as stream:
-            if (
-                not stat.S_ISREG(os.fstat(stream.fileno()).st_mode)
-                or os.fstat(stream.fileno()).st_size > 16 * 1024 * 1024
-            ):
-                raise ValueError("stage source untracked file cannot be pinned")
-            hashes[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+    try:
+        for name in filter(None, untracked):
+            file = path / name
+            if file.resolve() != file or not file.is_relative_to(path):
+                raise SourcePinUnavailable(checkpoint, "stage source contains an untracked symlink")
+            fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as stream:
+                if (
+                    not stat.S_ISREG(os.fstat(stream.fileno()).st_mode)
+                    or os.fstat(stream.fileno()).st_size > 16 * 1024 * 1024
+                ):
+                    raise SourcePinUnavailable(checkpoint, "stage source untracked file cannot be pinned")
+                hashes[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+    except OSError as exc:
+        raise SourcePinUnavailable(checkpoint, "stage source untracked file could not be read") from exc
     checkpoint["untracked_sha256"] = hashes
     return checkpoint

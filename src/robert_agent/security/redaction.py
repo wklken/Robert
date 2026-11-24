@@ -3,12 +3,9 @@
 import re
 from bisect import bisect_right
 
+MASKED_VALUE_PATTERN = r"(?:<redacted>|\[redacted\]|\.\.\.)"
 
 SECRET_PATTERNS = [
-    re.compile(
-        r"Authorization\s*:(?![ \t]*<redacted>[ \t]*(?:\r?\n|$))\s*(?!(?:none|null|\.\.\.)(?:$|[\s,;]))[^\s,;]+",
-        re.I,
-    ),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"\btoken\s*:\s*(?:ghp|github_pat|gho|ghu|ghs|ghr)_[A-Za-z0-9_]+", re.I),
     re.compile(r"\b(?:ghp|github_pat|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{12,}\b"),
@@ -25,12 +22,15 @@ _SECRET_ASSIGNMENT_PREFIX = (
     r"(?<![A-Za-z0-9_])(?<![A-Za-z0-9]-)\b(?P<name>(?:[A-Za-z0-9]+[_-])*(?:token|password|passwd|api[_-]?key|secret(?:[_-](?:access[_-])?key)?|private[_-]key|accessToken|refreshToken))\b[\"']?"
     r"\s*[:=](?!=)\s*(?:[\"'](?P<quoted>[^\"'\r\n]+)[\"']|"
 )
-SECRET_ASSIGNMENT = re.compile(_SECRET_ASSIGNMENT_PREFIX + r"(?P<bare>[A-Za-z0-9_./+=$-]+))", re.I)
+_MASKED_ASSIGNMENT = rf"(?P<masked>{MASKED_VALUE_PATTERN})(?=$|[\s`,;&)\]}}])|"
+SECRET_ASSIGNMENT = re.compile(
+    _SECRET_ASSIGNMENT_PREFIX + _MASKED_ASSIGNMENT + r"(?P<bare>(?:<redacted>|\[redacted\])?[A-Za-z0-9_./+=$-]+))", re.I
+)
 # Diagnostics are not source snippets: accept punctuation/Unicode in bare
 # values, stopping at surrounding prose/URL delimiters rather than matching
 # a harmless-looking prefix such as `none` in `password=none!`.
 DIAGNOSTIC_SECRET_ASSIGNMENT = re.compile(
-    _SECRET_ASSIGNMENT_PREFIX + r"(?P<bare>[^\s\"'`,;&][^\s\"'`,;&)\]}]*))",
+    _SECRET_ASSIGNMENT_PREFIX + _MASKED_ASSIGNMENT + r"(?P<bare>[^\s\"'`,;&][^\s\"'`,;&)\]}]*))",
     re.I,
 )
 PLACEHOLDER_VALUES = {
@@ -43,10 +43,12 @@ PLACEHOLDER_VALUES = {
     "placeholder",
     "redacted",
     "<redacted>",
+    "[redacted]",
 }
 
 COOKIE_HEADER = re.compile(r"(?:Set-)?Cookie\s*:", re.I)
-_COOKIE_PLACEHOLDER = r"(?:<redacted>|\[redacted\]|\.\.\.)"
+_AUTHORIZATION_HEADER = re.compile(r"Authorization\s*:", re.I)
+_COOKIE_PLACEHOLDER = MASKED_VALUE_PATTERN
 _COOKIE_VALUE = rf"(?:{_COOKIE_PLACEHOLDER}|\"{_COOKIE_PLACEHOLDER}\"|'{_COOKIE_PLACEHOLDER}')"
 _COOKIE_PAIR = re.compile(rf"[A-Za-z0-9_.-]+[ \t]*=[ \t]*{_COOKIE_VALUE}", re.I)
 _SET_COOKIE_ATTRIBUTE = re.compile(
@@ -79,9 +81,13 @@ def _header_end(text, value_start):
 
 
 def _redacted_cookie_header(text, match, end):
-    value = re.sub(r"\r?\n[ \t]*", " ", text[match.end() : end]).strip()
+    raw_value = text[match.end() : end]
+    value = re.sub(r"\r?\n[ \t]*", " ", raw_value).strip()
     prose = _COOKIE_PROSE.fullmatch(value)
     if prose:
+        # Inline explanation cannot turn a folded credential into prose.
+        if "\n" in raw_value:
+            return False
         value = prose["header"].rstrip()
     # A report may quote a complete example. Require the closing delimiter;
     # never discard arbitrary text appended after it.
@@ -108,7 +114,7 @@ def _finding(text, start, rule):
 
 
 def _synthetic_password(text, match):
-    if match["name"].lower() != "password" or (match["quoted"] or match["bare"]).lower() != "secret":
+    if match["name"].lower() != "password" or (match["quoted"] or match["masked"] or match["bare"]).lower() != "secret":
         return False
     # A partial bare match (e.g. secret!suffix) must remain blocked.
     return bool(match["quoted"] or match.end() == len(text) or text[match.end()] in " \t\r\n&,;`)]}")
@@ -141,7 +147,7 @@ def _scan_secrets(text, *, strict_assignments):
     replacements = []
     assignment_pattern = DIAGNOSTIC_SECRET_ASSIGNMENT if strict_assignments else SECRET_ASSIGNMENT
     for match in assignment_pattern.finditer(text):
-        value = match["quoted"] or match["bare"]
+        value = match["quoted"] or match["masked"] or match["bare"]
         if _synthetic_password(text, match):
             replacements.append(match.span("quoted" if match["quoted"] else "bare"))
         elif (
@@ -154,13 +160,25 @@ def _scan_secrets(text, *, strict_assignments):
         end = _header_end(text, match.end())
         if not _redacted_cookie_header(text, match, end):
             spans.append((match.start(), end, "high_risk_secret"))
+    for match in _AUTHORIZATION_HEADER.finditer(text):
+        end = _header_end(text, match.end())
+        value = re.sub(r"\r?\n[ \t]*", " ", text[match.end() : end]).strip()
+        wrapper = text[match.start() - 1] if match.start() else ""
+        if wrapper in ("`", '"', "'") and value.endswith(wrapper):
+            value = value[:-1].rstrip()
+        if not re.fullmatch(
+            rf"(?:none|null|{MASKED_VALUE_PATTERN}|[A-Za-z][A-Za-z0-9_-]*[ \t]+{MASKED_VALUE_PATTERN})",
+            value,
+            re.I,
+        ):
+            spans.append((match.start(), end, "high_risk_secret"))
     for pattern in SECRET_PATTERNS:
         spans.extend((*match.span(), "high_risk_secret") for match in pattern.finditer(text))
     spans.extend((*match.span(), "url_userinfo") for match in URL_USERINFO.finditer(text))
     return spans, replacements
 
 
-def redact_text(text, *, strict_assignments=False):
+def _redact_text(text, *, strict_assignments):
     spans, replacements = _scan_secrets(text, strict_assignments=strict_assignments)
     if spans:
         return {
@@ -186,13 +204,18 @@ def redact_text(text, *, strict_assignments=False):
     }
 
 
+def redact_text(text, *, strict_assignments=False):
+    return _redact_text(text, strict_assignments=strict_assignments)
+
+
 def redact_report(text):
     """Create a publication-safe report copy; keep sealed evidence separately.
 
     Remove complete physical lines touched by secrets, including folded header
     values and entire private-key blocks. Other scanners still inspect the
     original structures; a redacted cookie never exempts an unrelated secret.
-    The resulting copy must pass strict redaction before it can be returned.
+    Complete cookie placeholder examples share the global masked-value policy,
+    including the strict final scan of the publication copy.
     """
     spans, _ = _scan_secrets(text, strict_assignments=True)
     lines = text.splitlines(keepends=True)
@@ -215,7 +238,7 @@ def redact_report(text):
         line = lines[index]
         ending = line[len(line.rstrip("\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029")) :]
         lines[index] = "[redacted sensitive report line]" + ending
-    return redact_text("".join(lines), strict_assignments=True)
+    return _redact_text("".join(lines), strict_assignments=True)
 
 
 def redact_and_truncate(text, max_chars, *, strict_assignments=False):

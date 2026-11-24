@@ -11,6 +11,8 @@ from robert_agent.foundation.contracts.work import (
 )
 
 from robert_agent.persistence import transactions as db_transactions
+from robert_agent.persistence import execution_control
+from robert_agent.work import review_identity
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
@@ -1107,18 +1109,82 @@ def _restart_changed_review(
     config_result,
 ):
     previous_round = review_store.session(conn, task_id=task_id)
+    binding = execution_control.get_binding(conn, "task", task_id)
+    latest = db_records.first(db_read_attempts.find_for_latest_attempt_for_task(conn, task_id))
+    owner = db_records.first(db_read_workstreams.find_active_task_id_by_workstream_id(conn, workstream_id))
+    source = recovery_context.get("review_source") or {}
+    stop = previous_round.get("stop_reason") or {} if previous_round else {}
+    anchor = values.json_object(binding["metadata_json"] if binding else None).get("review_revision_recovery")
     if (
         not previous_round
         or previous_round["round_id"] != recovery_context.get("round_id")
         or previous_round["status"] != RoundStatus.SUPERSEDED
-        or previous_round.get("error") != "PR head/base changed after context preparation"
+        or recovery_context.get("status") != "recoverable_progress"
+        or recovery_context.get("task_id") != task_id
+        or recovery_context.get("previous_attempt_id") != previous_attempt_id
+        or not conn.in_transaction
+        or not binding
+        or binding["binding_status"] != "active"
+        or binding["recovery_attempts"] != 1
+        or binding["updated_at"] != run_now
+        or not latest
+        or latest["attempt_id"] != previous_attempt_id
+        or latest["status"] not in {AttemptStatus.RUNNING, AttemptStatus.STALE, AttemptStatus.FAILED}
+        or (owner and owner[0] not in {None, task_id})
+        or anchor
+        != {
+            "round_id": recovery_context.get("round_id"),
+            "task_id": task_id,
+            "attempt_id": previous_attempt_id,
+            "review_source_sha256": hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest(),
+        }
+        or source.get("stop_reason") != stop
+        or source.get("original_request_sha256")
+        != hashlib.sha256(json.dumps(previous_round["request"], sort_keys=True).encode()).hexdigest()
+        or (
+            stop.get("reason_code") != "review_revision_changed"
+            and previous_round.get("error") != "PR head/base changed after context preparation"
+        )
         or not execution_ownership.claim_task(conn, task_id, run_now)
         or config_result is None
     ):
         return None
+    pr = source.get("pr")
+    if (
+        not review_identity.revision(pr)
+        or pr.get("number") != previous_round["pr_number"]
+        or source.get("pr_sha256") != hashlib.sha256(json.dumps(pr, sort_keys=True).encode()).hexdigest()
+    ):
+        return None
+    canonical = previous_round["request"].get("canonical_identity")
+    if canonical and (
+        stop.get("canonical_sha256") != hashlib.sha256(review_identity.encoded(canonical).encode()).hexdigest()
+        or stop.get("attempt_id") != previous_attempt_id
+        or stop.get("round_id") != previous_round["round_id"]
+        or stop.get("task_id") != task_id
+    ):
+        return None
     event = source_policy.reauthorize_saved_request(previous_round["request"]["event"], repo)
+    expected_author = event.get("pr_author_login", "")
+    if (pr.get("user") or {}).get("login", "").casefold() != expected_author.casefold():
+        return None
+    # Preserve the original trigger text/authority and refresh only observed PR
+    # source facts. Review-request bodies can contain the old PR description.
+    if event.get("event_type") == "review_request" and event.get("body") == event.get("source_body"):
+        event["body"] = pr.get("body", "")
+    event.update(
+        title=pr.get("title", ""),
+        source_body=pr.get("body", ""),
+        state=pr["state"],
+        **review_identity.revision(pr),
+    )
     route_result = workflow_routing.effective_route(config_result, repo, event, route_id="review-pr")
     if not event.get("drives_execution") or not route_result.get("native_review_workers"):
+        return None
+    fresh_canonical = review_identity.canonical_request(
+        repo, event, route_result, route_result["native_review_workers"], pr
+    )
+    if canonical and not fresh_canonical:
         return None
     # A fresh round preserves the old snapshot and accepted request. The unique
     # recovery key prevents enqueue from rebinding the superseded round.
@@ -1127,6 +1193,15 @@ def _restart_changed_review(
         # The workstream permits one live task. Release the parent's lifecycle
         # inside this transaction while retaining its binding for child admission.
         db_write_tasks.update_for_supervise_running_attempts(conn, run_now, task_id)
+        successor = review_store.enqueue(
+            conn,
+            repo,
+            event,
+            route_result,
+            route_result["native_review_workers"],
+            recovery_key=previous_attempt_id,
+            canonical_identity=fresh_canonical,
+        )
         result = create_task_attempt_and_prompt(
             conn,
             data_dir,
@@ -1139,12 +1214,14 @@ def _restart_changed_review(
             run_now,
             parent_task_id=task_id,
             recovery_key=previous_attempt_id,
+            native_round_id=successor["round_id"],
         )
         if not result or result.get("blocked"):
             db_transactions.rollback_to(conn, "restart_changed_review")
             return None
         execution_ownership.inherit_recovery_budget(conn, task_id, result["task_id"], run_now)
         execution_ownership.close_terminal_task(conn, task_id, run_now)
+        review_store.bind_triggers(conn, successor["round_id"])
     except BaseException:
         db_transactions.rollback_to(conn, "restart_changed_review")
         raise

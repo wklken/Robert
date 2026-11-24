@@ -94,6 +94,84 @@ class MergePreflightTests(unittest.TestCase):
     def check(self):
         return module.check_merge_environment(self.repo, env=self.env)
 
+    def prepare_merge(self):
+        self.git("commit", "--allow-empty", "-m", "initial")
+        self.git("checkout", "-b", "incoming")
+        (self.repo / "incoming.txt").write_text("incoming\n")
+        self.git("add", "incoming.txt")
+        self.git("commit", "-m", "incoming")
+        self.git("checkout", "main")
+
+    def test_valid_unknown_post_merge_hook_runs_only_during_real_merge(self):
+        self.prepare_merge()
+        marker = self.repo / ".git/post-merge-marker"
+        self.hook("#!/bin/sh\nprintf 'hook ran\\n' > .git/post-merge-marker\n", "post-merge")
+        before = self.git("rev-parse", "HEAD")
+        with self.assertLogs(module.__name__, level="WARNING") as logged:
+            self.assertIsNone(self.check())
+        self.assertIn("post-merge", "\n".join(logged.output))
+        self.assertFalse(marker.exists())
+        self.assertEqual(self.git("rev-parse", "HEAD"), before)
+        self.git("merge", "--no-ff", "--no-edit", "incoming")
+        self.assertEqual(marker.read_text(), "hook ran\n")
+        self.assertEqual(len(self.git("rev-list", "--parents", "-n", "1", "HEAD").split()), 3)
+
+    def test_unknown_pre_merge_hook_failure_is_reported_by_real_git(self):
+        self.prepare_merge()
+        marker = self.repo / ".git/pre-merge-marker"
+        self.hook("#!/bin/sh\nprintf 'hook ran\\n' > .git/pre-merge-marker\nexit 23\n", "pre-merge-commit")
+        before = self.git("rev-parse", "HEAD")
+        with self.assertLogs(module.__name__, level="WARNING"):
+            self.assertIsNone(self.check())
+        self.assertFalse(marker.exists())
+        with self.assertRaises(subprocess.CalledProcessError) as raised:
+            self.git("merge", "--no-ff", "--no-edit", "incoming")
+        self.assertNotEqual(raised.exception.returncode, 0)
+        self.assertEqual(marker.read_text(), "hook ran\n")
+        self.assertEqual(self.git("rev-parse", "HEAD"), before)
+
+    def test_valid_shell_flags_and_shebangless_hooks_are_left_to_git(self):
+        self.prepare_merge()
+        for text in (
+            "#!/bin/sh -e\nprintf 'hook ran\\n' > .git/post-merge-marker\n",
+            "printf 'hook ran\\n' > .git/post-merge-marker\n",
+        ):
+            with self.subTest(text=text.splitlines()[0]):
+                self.hook(text, "post-merge")
+                with self.assertLogs(module.__name__, level="WARNING"):
+                    self.assertIsNone(self.check())
+        # Git itself supports an executable shell hook without a shebang.
+        self.git("merge", "--no-ff", "--no-edit", "incoming")
+        self.assertEqual((self.repo / ".git/post-merge-marker").read_text(), "hook ran\n")
+
+    def test_unknown_hook_does_not_hide_known_missing_commitlint_dependency(self):
+        self.node_hook()
+        marker = self.repo / ".git/pre-merge-marker"
+        self.hook("#!/bin/sh\nprintf ran > .git/pre-merge-marker\n", "pre-merge-commit")
+        (self.bin / "node").unlink()
+        with self.assertLogs(module.__name__, level="WARNING"):
+            with self.assertRaisesRegex(module.MergePreflightError, "node.*PATH"):
+                self.check()
+        self.assertFalse(marker.exists())
+
+    def test_known_missing_package_manifest_remains_a_preflight_refusal(self):
+        front = self.node_hook()
+        (front / "node_modules/@commitlint/config-conventional/package.json").unlink()
+        with self.assertRaisesRegex(module.MergePreflightError, "missing"):
+            self.check()
+
+    def test_malformed_package_descriptors_are_diagnosed_as_unknown(self):
+        front = self.node_hook()
+        manifest = front / "package.json"
+        original = manifest.read_text()
+        for field in ("dependencies", "devDependencies", "engines"):
+            with self.subTest(field=field):
+                value = json.loads(original)
+                value[field] = ["unknown"]
+                manifest.write_text(json.dumps(value))
+                with self.assertLogs(module.__name__, level="WARNING"):
+                    self.assertIsNone(self.check())
+
     def test_valid_identity_no_hooks_preserves_config_index_and_environment(self):
         before = (self.repo / ".git/config").read_bytes()
         environment = dict(self.env)
@@ -129,12 +207,15 @@ class MergePreflightTests(unittest.TestCase):
         )
         self.assertIsNone(self.check())
 
-    def test_unknown_hook_is_refused_and_never_executed(self):
+    def test_unknown_hook_is_diagnosed_and_never_executed_by_preflight(self):
         sentinel = self.root / "side-effect"
-        self.hook(f'#!/bin/sh\ntouch "{sentinel}"\nsecret_token=private-material\n')
-        with self.assertRaisesRegex(module.MergePreflightError, "commit-msg.*dependencies") as caught:
-            self.check()
-        self.assertNotIn("private-material", str(caught.exception))
+        self.hook(f'#!/bin/sh\nprintf ran > "{sentinel}"\nsecret_token=private-material\n')
+        with self.assertLogs(module.__name__, level="WARNING") as logged:
+            self.assertIsNone(self.check())
+        diagnostic = "\n".join(logged.output)
+        self.assertIn("commit-msg", diagnostic)
+        self.assertNotIn("private-material", diagnostic)
+        self.assertNotIn(str(sentinel), diagnostic)
         self.assertFalse(sentinel.exists())
 
     def test_nonexecutable_hook_is_ignored_as_git_ignores_it(self):
@@ -170,21 +251,22 @@ class MergePreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(module.MergePreflightError, "node.*version"):
             self.check()
 
-    def test_dynamic_hook_init_is_refused_without_sourcing(self):
+    def test_dynamic_hook_init_is_diagnosed_without_sourcing(self):
         self.node_hook()
         rc = self.root / "init.sh"
         rc.write_text("private-token=credential\n")
         self.env["SIMPLE_GIT_HOOKS_RC"] = str(rc)
-        with self.assertRaisesRegex(module.MergePreflightError, "initialization") as caught:
-            self.check()
-        self.assertNotIn(str(rc), str(caught.exception))
+        with self.assertLogs(module.__name__, level="WARNING") as logged:
+            self.assertIsNone(self.check())
+        self.assertNotIn(str(rc), "\n".join(logged.output))
+        self.assertNotIn("credential", "\n".join(logged.output))
 
     def test_node_options_are_not_executed_or_exposed(self):
         self.node_hook()
         self.env["NODE_OPTIONS"] = "--require=/private/credential.js"
-        with self.assertRaisesRegex(module.MergePreflightError, "NODE_OPTIONS") as caught:
-            self.check()
-        self.assertNotIn("credential.js", str(caught.exception))
+        with self.assertLogs(module.__name__, level="WARNING") as logged:
+            self.assertIsNone(self.check())
+        self.assertNotIn("credential.js", "\n".join(logged.output))
 
     def test_git_timeout_is_bounded_and_sanitized(self):
         with patch.object(
@@ -204,13 +286,13 @@ class MergePreflightTests(unittest.TestCase):
 """)
         self.assertIsNone(self.check())
 
-    def test_dynamic_commitlint_config_is_refused_without_execution(self):
+    def test_dynamic_commitlint_config_is_diagnosed_without_execution(self):
         front = self.node_hook()
         (front / ".commitlintrc.cjs").write_text(
             "module.exports = {extends: ['@commitlint/config-conventional'], rules: getRules()};"
         )
-        with self.assertRaisesRegex(module.MergePreflightError, "dynamic or unknown"):
-            self.check()
+        with self.assertLogs(module.__name__, level="WARNING"):
+            self.assertIsNone(self.check())
 
     def test_missing_transitive_package_refuses_before_runtime_probe(self):
         front = self.node_hook()
@@ -227,8 +309,9 @@ class MergePreflightTests(unittest.TestCase):
         for name in ["pre-merge-commit", "prepare-commit-msg", "post-merge"]:
             with self.subTest(name=name):
                 self.hook("#!/bin/sh\nunknown-side-effect\n", name)
-                with self.assertRaisesRegex(module.MergePreflightError, name + ".*dependencies"):
-                    self.check()
+                with self.assertLogs(module.__name__, level="WARNING") as logged:
+                    self.assertIsNone(self.check())
+                self.assertIn(name, "\n".join(logged.output))
                 (self.hooks / name).unlink()
 
     def test_runtime_probe_and_git_queries_are_the_only_processes(self):
@@ -271,7 +354,7 @@ class MergePreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(module.MergePreflightError, "commitlint.*install"):
             self.check()
 
-    def test_husky_modified_driver_and_init_are_refused_without_sourcing(self):
+    def test_husky_modified_driver_and_init_are_diagnosed_without_sourcing(self):
         self.node_hook(wrapper=False)
         self.hooks = self.repo / ".husky/_"
         self.git("config", "core.hooksPath", ".husky/_")
@@ -283,37 +366,41 @@ class MergePreflightTests(unittest.TestCase):
         self.env["XDG_CONFIG_HOME"] = str(self.root / "config")
         startup = self.root / "config/husky/init.sh"
         self.executable(startup, "#!/bin/sh\nunknown-side-effect\n")
-        with self.assertRaisesRegex(module.MergePreflightError, "initialization"):
-            self.check()
+        with self.assertLogs(module.__name__, level="WARNING"):
+            self.assertIsNone(self.check())
         startup.unlink()
         (self.hooks / "h").write_text(module._HUSKY_DRIVER + "\nunknown-side-effect\n")
-        with self.assertRaisesRegex(module.MergePreflightError, "unknown Husky"):
-            self.check()
+        with self.assertLogs(module.__name__, level="WARNING"):
+            self.assertIsNone(self.check())
 
     def test_environment_preflight_never_bypasses_configured_hooks(self):
         self.node_hook()
         self.env["SKIP_SIMPLE_GIT_HOOKS"] = "1"
-        with self.assertRaisesRegex(module.MergePreflightError, "disables hooks"):
-            self.check()
+        environment = dict(self.env)
+        before = (self.hooks / "commit-msg").read_bytes()
+        with self.assertLogs(module.__name__, level="WARNING"):
+            self.assertIsNone(self.check())
+        self.assertEqual(environment, self.env)
+        self.assertEqual(before, (self.hooks / "commit-msg").read_bytes())
 
-    def test_unknown_engine_expression_refuses_instead_of_guessing(self):
+    def test_unknown_engine_expression_is_diagnosed_instead_of_guessing(self):
         front = self.node_hook()
         manifest = front / "package.json"
         value = json.loads(manifest.read_text())
         value["engines"]["node"] = "some-custom-version-policy"
         manifest.write_text(json.dumps(value))
-        with self.assertRaisesRegex(module.MergePreflightError, "version.*unsupported"):
-            self.check()
+        with self.assertLogs(module.__name__, level="WARNING"):
+            self.assertIsNone(self.check())
 
-    def test_nonregular_hook_is_refused_without_blocking(self):
+    def test_nonregular_hook_is_diagnosed_without_reading_or_blocking(self):
         os.mkfifo(self.hooks / "commit-msg", 0o755)
-        with self.assertRaisesRegex(module.MergePreflightError, "unreadable"):
-            self.check()
+        with self.assertLogs(module.__name__, level="WARNING"):
+            self.assertIsNone(self.check())
 
-    def test_interpreter_flags_with_unknown_execution_are_refused(self):
+    def test_interpreter_flags_with_unknown_execution_are_diagnosed(self):
         self.hook("#!/bin/sh -c arbitrary-command\nexit 0\n")
-        with self.assertRaisesRegex(module.MergePreflightError, "interpreter arguments"):
-            self.check()
+        with self.assertLogs(module.__name__, level="WARNING"):
+            self.assertIsNone(self.check())
 
     def test_node_package_cycle_is_bounded_without_execution(self):
         front = self.node_hook()
@@ -349,12 +436,12 @@ class MergePreflightTests(unittest.TestCase):
                 self.check()
         self.assertNotIn("private-material", str(caught.exception))
 
-    def test_shell_initialization_refuses_without_sourcing(self):
+    def test_shell_initialization_is_diagnosed_without_sourcing(self):
         self.node_hook()
         self.env["BASH_ENV"] = "/private/credential-init.sh"
-        with self.assertRaisesRegex(module.MergePreflightError, "shell initialization") as caught:
-            self.check()
-        self.assertNotIn("credential-init.sh", str(caught.exception))
+        with self.assertLogs(module.__name__, level="WARNING") as logged:
+            self.assertIsNone(self.check())
+        self.assertNotIn("credential-init.sh", "\n".join(logged.output))
 
     def test_node_probe_timeout_is_sanitized_and_leaves_no_merge_state(self):
         self.node_hook()
@@ -378,8 +465,8 @@ class MergePreflightTests(unittest.TestCase):
         tree = self.root / "assigned"
         self.git("worktree", "add", "-b", "assigned", str(tree))
         self.hook("#!/bin/sh\nunknown-side-effect\n")
-        with self.assertRaisesRegex(module.MergePreflightError, "commit-msg.*dependencies"):
-            module.check_merge_environment(tree, env=self.env)
+        with self.assertLogs(module.__name__, level="WARNING"):
+            self.assertIsNone(module.check_merge_environment(tree, env=self.env))
         (self.hooks / "commit-msg").unlink()
         before = (self.repo / ".git/config").read_bytes()
         self.assertIsNone(module.check_merge_environment(tree, env=self.env))

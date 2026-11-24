@@ -107,6 +107,49 @@ class StageStoppedTests(ReviewCoordinatorFixture):
         self.assertTrue(saved["slot_reserved"])
         self.assertEqual(saved["dispatch"], original["dispatch"])
 
+    def test_cleanup_ignores_concurrent_timestamp_only_updates(self):
+        driver = self.prepare_driver()
+        original, _ = self.exited_run(driver, checkpoint=False)
+        finished = stages._group_finished
+
+        def heartbeat(recorded):
+            with database.connect(self.db) as conn:
+                conn.execute("UPDATE review_runs SET updated_at='2099-01-01' WHERE run_id=?", (original["run_id"],))
+                conn.execute("UPDATE review_sessions SET updated_at='2099-01-01' WHERE round_id=?", (driver.round_id,))
+                conn.execute(
+                    "UPDATE execution_subjects SET updated_at='2099-01-01' WHERE subject_id=?", (driver.task_id,)
+                )
+            return finished(recorded)
+
+        with patch.object(stages, "_group_finished", side_effect=heartbeat):
+            with store.connect(self.db) as conn:
+                self.assertEqual(stages.terminate_children(conn, driver.task_id, store=store), "terminated")
+        saved = self.saved_run(driver)
+        self.assertEqual(saved["status"], "interrupted")
+        self.assertFalse(saved["slot_reserved"])
+        self.assertTrue(saved["dispatch"]["group_exit_confirmed"])
+
+    def test_stopped_checkpoint_ignores_concurrent_timestamp_only_updates(self):
+        driver = self.prepare_driver()
+        original, _ = self.exited_run(driver)
+        observe = stages.stage_evidence.observe_source
+
+        def heartbeat(*args):
+            with database.connect(self.db) as conn:
+                conn.execute("UPDATE review_runs SET updated_at='2099-01-01' WHERE run_id=?", (original["run_id"],))
+                conn.execute("UPDATE review_sessions SET updated_at='2099-01-01' WHERE round_id=?", (driver.round_id,))
+                conn.execute(
+                    "UPDATE execution_subjects SET updated_at='2099-01-01' WHERE subject_id=?", (driver.task_id,)
+                )
+            return observe(*args)
+
+        with patch.object(stages.stage_evidence, "observe_source", side_effect=heartbeat):
+            driver.checkpoint_stopped_run(original, stages.StageStopped("stopped"))
+        saved = self.saved_run(driver)
+        self.assertEqual(saved["status"], "interrupted")
+        self.assertFalse(saved["slot_reserved"])
+        self.assertEqual(saved["dispatch"]["result_checkpoint"], driver.source_checkpoint(saved))
+
     def test_stopped_validation_records_interruption_and_adopts_without_model(self):
         driver = self.prepare_driver()
         with patch.object(driver, "validate_output", side_effect=stages.StageStopped("validation needs attention")):

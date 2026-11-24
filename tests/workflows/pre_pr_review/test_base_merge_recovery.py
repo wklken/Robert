@@ -87,7 +87,9 @@ class BaseMergeRecoveryTests(ReviewWorkspaceFixture):
             "merge_current_base",
             "verify_base_merge",
             "save_manifest",
+            "save_candidate_snapshot",
             "check_base",
+            "accept_base_refresh",
             "address_workspace",
         ):
             setattr(self.driver, name, MethodType(getattr(module.Coordinator, name), self.driver))
@@ -152,6 +154,61 @@ class BaseMergeRecoveryTests(ReviewWorkspaceFixture):
         self.assertEqual(self.entry()["manifest"]["head_sha"], merged)
         self.assertEqual(self.entry()["request"]["base_refresh_count"], 1)
         self.assertEqual(checkpoint["candidate_sha"], self.head)
+
+    def test_newer_base_reconciles_saved_merge_before_effect(self):
+        self.assert_newer_base_reconciles_saved_merge(after_effect=False)
+
+    def test_newer_base_reconciles_saved_merge_after_effect(self):
+        self.assert_newer_base_reconciles_saved_merge(after_effect=True)
+
+    def assert_newer_base_reconciles_saved_merge(self, *, after_effect):
+        native_git = module.git
+
+        def interrupted_git(path, *args, **kwargs):
+            if args[:3] == ("merge", "--no-ff", "--no-edit"):
+                if after_effect:
+                    native_git(path, *args, **kwargs)
+                raise StageStopped("saved first base merge")
+            return native_git(path, *args, **kwargs)
+
+        with patch.object(module, "git", side_effect=interrupted_git):
+            with self.assertRaisesRegex(StageStopped, "saved first base merge"):
+                self.driver.prepare()
+        first_base = self.current_base
+        saved = self.entry()["request"]["base_merge"]
+        self.assertEqual(saved["base_sha"], first_base)
+        self.git(self.upstream, "checkout", "main")
+        (self.upstream / "second_feature.py").write_text("def new_base():\n    return True\n")
+        self.git(self.upstream, "add", "second_feature.py")
+        self.git(self.upstream, "commit", "-m", "second upstream advance")
+        self.current_base = self.git(self.upstream, "rev-parse", "HEAD")
+        snapshots = []
+        prepare_snapshot = module.workspace.prepare_candidate_snapshot
+
+        def record_snapshot(*args, **kwargs):
+            manifest = prepare_snapshot(*args, **kwargs)
+            snapshots.append(manifest)
+            return manifest
+
+        with patch.object(module.workspace, "prepare_candidate_snapshot", side_effect=record_snapshot):
+            self.driver.prepare()
+        self.assertEqual(snapshots[0]["base_sha"], first_base)
+        first_merge = snapshots[0]["head_sha"]
+        self.assertEqual(self.git(self.tree, "show", "-s", "--format=%P", first_merge).split(), [self.head, first_base])
+        self.assertEqual(self.git(self.tree, "rev-parse", first_merge + "^{tree}"), saved["tree_sha"])
+        entry = self.entry()
+        self.assertEqual(entry["manifest"]["base_sha"], self.current_base)
+        self.assertNotIn("base_merge", entry["request"])
+        self.assertEqual(entry["request"]["base_refresh_count"], 2)
+        snapshot = entry["snapshot_id"]
+        merged = self.git(self.tree, "rev-parse", "HEAD")
+        self.driver.prepare()
+        self.assertEqual(self.entry()["snapshot_id"], snapshot)
+        self.assertEqual(self.entry()["request"]["base_refresh_count"], 2)
+        self.assertEqual(self.git(self.tree, "rev-parse", "HEAD"), merged)
+        self.assertEqual(
+            self.git(self.tree, "show", "-s", "--format=%P", "HEAD").split(), [first_merge, self.current_base]
+        )
 
     def test_completed_merge_without_explicit_retrigger_is_rejected(self):
         self.completed_merge()

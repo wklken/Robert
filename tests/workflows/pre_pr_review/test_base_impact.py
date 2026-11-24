@@ -93,6 +93,7 @@ class BaseImpactTests(ReviewWorkspaceFixture):
             "merge_current_base",
             "verify_base_merge",
             "save_manifest",
+            "save_candidate_snapshot",
             "check_base",
             "accept_base_refresh",
             "refresh_base",

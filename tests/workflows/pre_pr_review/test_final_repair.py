@@ -159,6 +159,15 @@ class FinalRepairTests(unittest.TestCase):
         self.assertEqual(feedback["source_run_id"], self.blocked.disposition["run_id"])
         final_repair.validate_feedback(self.coordinator)
 
+    def test_final_question_only_offers_context_for_guarded_continuation(self):
+        final_repair.handle(self.coordinator, self.blocked)
+        _, question = final_repair.handle(self.coordinator, self.blocker("2"))
+        self.assertEqual({choice["id"] for choice in question["choices"]}, {"clarify", "repair"})
+        for choice in question["choices"]:
+            self.assertIn("继续", choice["tradeoff"])
+        self.assertNotIn("暂缓", json.dumps(question, ensure_ascii=False))
+        self.assertNotIn("不会发布", json.dumps(question, ensure_ascii=False))
+
     def test_feedback_rejects_changed_bytes_before_reuse(self):
         final_repair.handle(self.coordinator, self.blocked)
         for field in ("verification_path", "dispositions_path"):

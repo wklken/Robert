@@ -1,6 +1,7 @@
 """Read-only prerequisites for a new merge commit; callers own recovery and effects."""
 
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import time
 from robert_agent.foundation.commands import run_command
 
 
+_LOG = logging.getLogger(__name__)
 _MERGE_HOOKS = ("pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-merge")
 _SIMPLE_PREFIX = """if [ "$SKIP_SIMPLE_GIT_HOOKS" = "1" ]; then
     echo "[INFO] SKIP_SIMPLE_GIT_HOOKS is set to 1, skipping hook."
@@ -52,6 +54,10 @@ class MergePreflightError(ValueError):
     """A merge prerequisite needs operator attention before spending a refresh."""
 
 
+class _UnknownHookDependencies(MergePreflightError):
+    """Static inspection cannot prove prerequisites; Git still owns execution."""
+
+
 def _read(path):
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
@@ -64,19 +70,21 @@ def _read(path):
                 raise ValueError
             return value.decode("utf-8")
     except (OSError, ValueError, UnicodeError):
-        raise MergePreflightError(
+        error = MergePreflightError if not path.exists() else _UnknownHookDependencies
+        raise error(
             "merge hook dependency file is missing, unreadable or too large; restore its installation"
         ) from None
 
 
 def _manifest(path):
+    text = _read(path)
     try:
-        result = json.loads(_read(path))
+        result = json.loads(text)
         if not isinstance(result, dict):
             raise ValueError
         return result
     except (ValueError, TypeError):
-        raise MergePreflightError(
+        raise _UnknownHookDependencies(
             "merge hook package manifest is unavailable or malformed; restore the local install"
         ) from None
 
@@ -94,7 +102,7 @@ def _executable(name, cwd, env, *, kind="runtime"):
 
 def _interpreter(text, cwd, env):
     if not text.startswith("#!"):
-        raise MergePreflightError("merge hook interpreter is undeclared; provide a supported explicit shebang")
+        raise _UnknownHookDependencies("merge hook interpreter is undeclared")
     try:
         parts = shlex.split(text.splitlines()[0][2:])
     except ValueError:
@@ -104,7 +112,7 @@ def _interpreter(text, cwd, env):
         if parts[:1] == ["-S"]:
             parts = parts[1:]
     if len(parts) != 1 or parts[0].startswith("-") or "=" in parts[0]:
-        raise MergePreflightError("merge hook interpreter arguments are unsupported; verify its environment explicitly")
+        raise _UnknownHookDependencies("merge hook interpreter arguments cannot be inspected statically")
     _executable(parts[0], cwd, env, kind="interpreter")
     return Path(parts[0]).name
 
@@ -160,16 +168,19 @@ def _node_packages(package_path, *, boundary, seen=None, deadline):
     if actual in seen:
         return []
     if len(seen) >= 256:
-        raise MergePreflightError("merge hook package dependency graph is too large; verify the install explicitly")
+        raise _UnknownHookDependencies("merge hook package dependency graph is too large for static inspection")
     seen.add(actual)
     manifest = _manifest(package_path / "package.json")
     dependencies = manifest.get("dependencies", {})
     if not isinstance(dependencies, dict):
-        raise MergePreflightError("merge hook package dependencies are malformed; restore the local install")
-    constraints = [manifest.get("engines", {}).get("node")]
+        raise _UnknownHookDependencies("merge hook package dependencies are malformed")
+    engines = manifest.get("engines", {})
+    if not isinstance(engines, dict):
+        raise _UnknownHookDependencies("merge hook package engines are malformed")
+    constraints = [engines.get("node")]
     for name in dependencies:
         if not re.fullmatch(r"(?:@[A-Za-z0-9_.-]+/)?[A-Za-z0-9_.-]+", name) or name in (".", ".."):
-            raise MergePreflightError("merge hook package dependency is unsupported; restore the local install")
+            raise _UnknownHookDependencies("merge hook package dependency is unsupported")
         child = None
         for parent in (actual, *actual.parents):
             if parent.name != "node_modules" and (parent / "node_modules" / name / "package.json").is_file():
@@ -191,22 +202,24 @@ def _commitlint(cwd, env, command, *, deadline):
     except ValueError:
         parts = []
     if len(parts) != 4 or parts[:3] != ["npx", "commitlint", "--edit"] or parts[3] not in ("$1", "${1}"):
-        raise MergePreflightError(
+        raise _UnknownHookDependencies(
             "merge commit-msg hook dependencies are unknown; verify or simplify its commands explicitly"
         )
     if env.get("NODE_OPTIONS"):
-        raise MergePreflightError(
+        raise _UnknownHookDependencies(
             "merge hook NODE_OPTIONS changes runtime initialization; verify or remove it in the merge environment"
         )
     if env.get("NODE_PATH"):
-        raise MergePreflightError(
+        raise _UnknownHookDependencies(
             "merge hook NODE_PATH changes package resolution; verify the local dependency environment"
         )
     node = _executable("node", cwd, env)
     npx = _executable("npx", cwd, env)
     if _interpreter(_read(npx), cwd, env) != "node":
-        raise MergePreflightError("merge hook npx interpreter is unsupported; restore the local npm installation")
+        raise _UnknownHookDependencies("merge hook npx interpreter is unsupported")
     manifest = _manifest(cwd / "package.json")
+    if any(not isinstance(manifest.get(key, {}), dict) for key in ("dependencies", "devDependencies", "engines")):
+        raise _UnknownHookDependencies("merge hook package dependencies or engines are malformed")
     dependencies = {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}
     if "@commitlint/cli" not in dependencies:
         raise MergePreflightError("merge hook commitlint is undeclared; declare and install its local package")
@@ -218,12 +231,16 @@ def _commitlint(cwd, env, command, *, deadline):
     cli = _manifest(cwd / "node_modules/@commitlint/cli/package.json")
     bins = cli.get("bin", {})
     entry = bins if isinstance(bins, str) else bins.get("commitlint") if isinstance(bins, dict) else None
-    if not entry or local.resolve() != (cwd / "node_modules/@commitlint/cli" / entry).resolve():
-        raise MergePreflightError(
+    if (
+        not isinstance(entry, str)
+        or not entry
+        or local.resolve() != (cwd / "node_modules/@commitlint/cli" / entry).resolve()
+    ):
+        raise _UnknownHookDependencies(
             "merge hook commitlint executable differs from its local package; restore the install"
         )
     if _interpreter(_read(local), cwd, env) != "node":
-        raise MergePreflightError("merge hook commitlint interpreter is unsupported; restore the local Node entrypoint")
+        raise _UnknownHookDependencies("merge hook commitlint interpreter is unsupported")
     constraints = [manifest.get("engines", {}).get("node")]
     constraints.extend(
         _node_packages(cwd / "node_modules/@commitlint/cli", boundary=Path(cwd.anchor), deadline=deadline)
@@ -241,7 +258,7 @@ def _commitlint(cwd, env, command, *, deadline):
         if (cwd / name).is_file()
     ]
     if len(configs) != 1:
-        raise MergePreflightError(
+        raise _UnknownHookDependencies(
             "merge hook commitlint configuration is unknown; verify a single supported local config"
         )
     config = _read(configs[0]).strip()
@@ -260,7 +277,7 @@ def _commitlint(cwd, env, command, *, deadline):
         if extends != ["@commitlint/config-conventional"]:
             raise ValueError
     except (ValueError, KeyError, TypeError):
-        raise MergePreflightError(
+        raise _UnknownHookDependencies(
             "merge hook commitlint configuration dependencies are dynamic or unknown; verify a literal local config"
         ) from None
     for package in extends:
@@ -278,7 +295,8 @@ def check_merge_environment(worktree_path, *, env=None, timeout_seconds=10):
     The supplied environment replaces os.environ, matching subprocess semantics.
     Only Git observations and the declared Node runtime's --version are executed.
     Shell hooks, npx, package installation and JavaScript configs are never run.
-    Unknown scripts require explicit operator verification, without hook bypass.
+    Unknown dependencies produce diagnostics and are left to the actual Git
+    merge. Known missing identity/runtime/packages still stop preflight.
     """
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise MergePreflightError("merge preflight requires a finite positive timeout")
@@ -320,78 +338,77 @@ def check_merge_environment(worktree_path, *, env=None, timeout_seconds=10):
                 "in the target repository or supply valid GIT identity variables"
             ) from None
     hooks = Path(observe([str(git), "rev-parse", "--path-format=absolute", "--git-path", "hooks"]))
-    for name in _MERGE_HOOKS:
+
+    def inspect_hook(name):
         if time.monotonic() >= deadline:
             raise MergePreflightError("merge environment preflight timed out; restore prerequisites and retry")
         hook = hooks / name
         if not hook.exists() or not os.access(hook, os.X_OK):
-            continue
+            return
         text = _read(hook)
         interpreter = _interpreter(text, cwd, environment)
         if any(environment.get(variable) for variable in ("BASH_ENV", "ENV")):
-            raise MergePreflightError(
+            raise _UnknownHookDependencies(
                 "merge hook shell initialization is dynamic; verify its runtime environment explicitly"
             )
         hook_env = dict(environment)
         if _normalized(text) == _normalized(_HUSKY_WRAPPER):
             if _normalized(_read(hooks / "h")) != _normalized(_HUSKY_DRIVER):
-                raise MergePreflightError(
+                raise _UnknownHookDependencies(
                     f"merge {name} hook dependencies use an unknown Husky driver; verify the installation"
                 )
             if environment.get("HUSKY") == "0":
-                raise MergePreflightError("merge hook HUSKY disables hooks; restore the required hook environment")
+                raise _UnknownHookDependencies("merge hook HUSKY disables hooks in the supplied environment")
             home = Path(environment.get("HOME", "~"))
             config_home = Path(environment.get("XDG_CONFIG_HOME") or home / ".config")
             if (config_home / "husky/init.sh").exists():
-                raise MergePreflightError(
+                raise _UnknownHookDependencies(
                     "merge hook Husky initialization is dynamic; verify its runtime environment explicitly"
                 )
             for utility in ("basename", "dirname", "sh"):
                 _executable(utility, cwd, environment)
             hook = hooks.parent / name
             if not hook.exists():
-                continue
+                return
             text = _read(hook)
             interpreter = "sh"
             hook_env["PATH"] = "node_modules/.bin" + os.pathsep + environment.get("PATH", os.defpath)
         body = "\n".join(text.splitlines()[1:]) if text.startswith("#!") else text
         if body.strip().startswith(_SIMPLE_PREFIX):
             if environment.get("SKIP_SIMPLE_GIT_HOOKS") == "1":
-                raise MergePreflightError(
+                raise _UnknownHookDependencies(
                     "merge hook SKIP_SIMPLE_GIT_HOOKS disables hooks; restore the required hook environment"
                 )
             startup = environment.get("SIMPLE_GIT_HOOKS_RC")
             if startup and Path(startup).exists():
-                raise MergePreflightError(
+                raise _UnknownHookDependencies(
                     "merge hook initialization is dynamic; verify its runtime environment explicitly"
                 )
             body = body.strip()[len(_SIMPLE_PREFIX) :].strip()
         body = body.strip()
         if interpreter in ("sh", "bash", "dash") and body in ("exit 0", ":"):
-            continue
+            return
+        if name != "commit-msg" or interpreter not in ("sh", "bash", "dash"):
+            raise _UnknownHookDependencies("merge hook commands are not statically recognized")
         at = cwd
         if body.startswith("cd "):
             split = body.split(" && ", 1)
             if len(split) != 2:
-                raise MergePreflightError(f"merge {name} hook dependencies are unknown; verify its commands explicitly")
+                raise _UnknownHookDependencies("merge hook commands are not statically recognized")
             try:
                 directory = shlex.split(split[0])
             except ValueError:
                 directory = []
             if len(directory) != 2 or re.search(r"[$`\n]", directory[1]):
-                raise MergePreflightError(
+                raise _UnknownHookDependencies(
                     f"merge {name} hook dependencies use a dynamic directory; verify them explicitly"
                 )
             at = (cwd / directory[1]).resolve()
             if not at.is_relative_to(cwd) or not at.is_dir():
-                raise MergePreflightError(
+                raise _UnknownHookDependencies(
                     f"merge {name} hook dependencies directory is unavailable; restore its checkout"
                 )
             body = split[1]
-        if name != "commit-msg" or interpreter not in ("sh", "bash", "dash"):
-            raise MergePreflightError(
-                f"merge {name} hook dependencies are unknown; verify or simplify the hook explicitly"
-            )
         try:
             node, constraints = _commitlint(at, hook_env, body, deadline=deadline)
             output = observe([str(node), "--version"], at=at)
@@ -400,11 +417,26 @@ def check_merge_environment(worktree_path, *, env=None, timeout_seconds=10):
                 raise ValueError
             version = tuple(map(int, match.groups()))
             for constraint in constraints:
-                if constraint and (not isinstance(constraint, str) or not _version_satisfies(version, constraint)):
-                    raise ValueError
+                if constraint:
+                    try:
+                        compatible = isinstance(constraint, str) and _version_satisfies(version, constraint)
+                    except ValueError:
+                        raise _UnknownHookDependencies("merge hook Node engine expression is unknown") from None
+                    if not isinstance(constraint, str):
+                        raise _UnknownHookDependencies("merge hook Node engine expression is unknown")
+                    if not compatible:
+                        raise ValueError
         except (ValueError, TypeError, AttributeError, OSError) as exc:
             if isinstance(exc, MergePreflightError):
                 raise
             raise MergePreflightError(
                 "merge hook node version or declared engines are unsupported; install a compatible Node runtime"
             ) from None
+
+    for name in _MERGE_HOOKS:
+        try:
+            inspect_hook(name)
+        except _UnknownHookDependencies:
+            # No script text, path, environment values or credentials belong
+            # in this diagnostic. Do not execute or bypass a hook here.
+            _LOG.warning("merge %s hook dependencies are not statically known; leaving execution to Git", name)

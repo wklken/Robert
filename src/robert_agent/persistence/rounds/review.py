@@ -1,6 +1,11 @@
 """Durable file handoffs for native PR review rounds (SQLite, no agent framework)."""
 
-from robert_agent.foundation.contracts.execution import ModelRunStatus
+from robert_agent.foundation.contracts.execution import BindingStatus, ModelRunStatus, RoundStatus
+from robert_agent.foundation.contracts.work import LIVE_TASK_LIFECYCLES
+from robert_agent.persistence.rounds.review_stop import decode_round_stop
+from robert_agent.persistence import execution_control
+from robert_agent.persistence.queries import tasks as task_queries
+from robert_agent.persistence.queries import attempts as attempt_queries
 from robert_agent.persistence.rounds import records as round_records
 
 from robert_agent.persistence import database as db_database
@@ -49,7 +54,46 @@ def decode(row):
     for field in ("request_json", "manifest_json", "dispatch_json", "artifact_json"):
         if field in result:
             result[field[:-5]] = json.loads(result.pop(field) or "{}")
+    if result.get("status") == RoundStatus.SUPERSEDED:
+        stop = decode_round_stop(result.get("error"))
+        if stop:
+            result["stop_reason"] = stop
+            result["error"] = stop["safe_error"]
     return result
+
+
+def advanceable(conn, entry):
+    """Reuse the original owner while its existing scheduling contract can advance."""
+    if not entry or entry["status"] in {RoundStatus.CANCELED, RoundStatus.SUPERSEDED, RoundStatus.ATTENTION}:
+        return False
+    if not entry["task_id"]:
+        return entry["status"] == RoundStatus.QUEUED
+    binding = execution_control.get_binding(conn, "task", entry["task_id"])
+    if not binding or binding["binding_status"] != BindingStatus.ACTIVE:
+        return False
+    task = db_records.first(
+        task_queries.find_task_kind_and_lifecycle_and_metadata_json_by_task_id(conn, entry["task_id"])
+    )
+    if not task:
+        return False
+    metadata = json.loads(task[2] or "{}")
+    if metadata.get("execution_attention") or metadata.get("audit_retry_required"):
+        return False
+    latest = db_records.first(attempt_queries.find_for_latest_attempt_for_task(conn, entry["task_id"]))
+    if not latest or latest["status"] == "canceled":
+        return False
+    if latest["status"] == "failed":
+        failure = json.loads(latest["failure_json"] or "{}")
+        return (
+            task[1] in LIVE_TASK_LIFECYCLES | {"failed"}
+            and binding["recovery_attempts"] == 0
+            and failure.get("status")
+            in {
+                "failed_timeout",
+                "waiting_for_model_decision",
+            }
+        )
+    return task[1] in LIVE_TASK_LIFECYCLES
 
 
 def session(conn, *, round_id=None, task_id=None):
@@ -70,6 +114,8 @@ def enqueue(conn, repo, event, route, workers, *, recovery_key=None, canonical_i
         "route": dict(route),
         "workers": [dict(worker) for worker in workers],
     }
+    if canonical_identity:
+        request["canonical_identity"] = canonical_identity["identity"]
     timestamp = now()
     # A write lock is acquired before the first identity lookup, preserving
     # scanner races and caller transaction ownership. No network runs here.
@@ -85,7 +131,20 @@ def enqueue(conn, repo, event, route, workers, *, recovery_key=None, canonical_i
         if execution:
             if execution["identity_json"] != encoded_identity:
                 raise ValueError("canonical review identity conflict")
-            round_id = execution["round_id"]
+            existing = session(conn, round_id=execution["round_id"])
+            published = bool(existing and existing["status"] == RoundStatus.PUBLISHED)
+            reusable = (
+                complete_triggers(conn, existing["round_id"])
+                if published and event.get("event_type") != "comment"
+                else advanceable(conn, existing)
+            )
+            if (event.get("event_type") == "comment" and published) or not reusable:
+                # A new request needs a real owner after the previous execution
+                # ended. Re-polling its fingerprint preserves the association.
+                request["canonical_identity"] = canonical["identity"]
+                canonical = None
+            else:
+                round_id = execution["round_id"]
         else:
             round_id = "review-" + hashlib.sha256(canonical["key"].encode()).hexdigest()[:24]
             request["canonical_identity"] = canonical["identity"]
@@ -327,13 +386,14 @@ def board_status_from_records(entry, model_runs, process_pool):
     from robert_agent.security.text import safe_text
 
     manifest = entry["manifest"]
+    stop = decode_round_stop(entry.get("error")) if entry["status"] == RoundStatus.SUPERSEDED else None
     return {
         "round_id": entry["round_id"],
         "status": entry["status"],
         "process_pool": process_pool,
         "head_sha": manifest.get("head_sha"),
         "base_ref": manifest.get("base_ref"),
-        "error": safe_text(entry["error"] or ""),
+        "error": safe_text(stop["safe_error"] if stop else entry["error"] or ""),
         "runs": [
             {
                 "run_id": run["run_id"],

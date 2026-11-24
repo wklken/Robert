@@ -180,6 +180,11 @@ def _stopped_dispatch(run, *, observe_source):
     return recorded
 
 
+def _stop_snapshot(record):
+    """Ignore heartbeat timestamps, preserving every ownership and result fact."""
+    return {key: value for key, value in record.items() if key != "updated_at"} if record is not None else None
+
+
 def terminate_children(conn, task_id, *, store: StageStore):
     """Cancel all model process groups before allowing another attempt to start."""
     review = store.session(conn, task_id=task_id)
@@ -253,9 +258,10 @@ def terminate_children(conn, task_id, *, store: StageStore):
         if not conn.in_transaction:
             db_transactions.begin(conn, immediate=True)
         if (
-            store.session(conn, task_id=task_id) != review
-            or store.runs(conn, review["round_id"]) != runs
-            or execution_store.get_binding(conn, "task", task_id) != binding
+            _stop_snapshot(store.session(conn, task_id=task_id)) != _stop_snapshot(review)
+            or [_stop_snapshot(run) for run in store.runs(conn, review["round_id"])]
+            != [_stop_snapshot(run) for run in runs]
+            or _stop_snapshot(execution_store.get_binding(conn, "task", task_id)) != _stop_snapshot(binding)
         ):
             return "attention"
     if finished and (database := db_sqlite.main_database_path(conn)):
@@ -451,10 +457,14 @@ class StageCoordinator:
                         pinned = parent["dispatch"].get("result_checkpoint") or parent["dispatch"].get(
                             "launch_checkpoint"
                         )
+                        if not pinned or pinned.get("source_pin_error"):
+                            raise StageStopped("native resume source checkpoint incomplete before launch")
                         if pinned != self.source_checkpoint(parent):
                             raise StageStopped("native resume source changed before launch")
                     checkpoint = self.source_checkpoint(run)
                     resume = (run.get("dispatch") or {}).get("native_resume")
+                    if resume and checkpoint.get("source_pin_error"):
+                        raise StageStopped("native resume launch source checkpoint incomplete")
                     native_home = resume["native_home"] if resume else None
                     if not resume and supports_native_resume(worker["agent"]):
                         try:
@@ -577,6 +587,10 @@ class StageCoordinator:
             raise StageStopped("registered stage source worktree changed")
         try:
             return stage_evidence.observe_source(run, self.manifest, path)
+        except stage_evidence.SourcePinUnavailable as exc:
+            # Ordinary execution still validates the frozen snapshot and output.
+            # This provenance cannot prove source compatibility for recovery.
+            return exc.checkpoint
         except ValueError as exc:
             raise StageStopped(str(exc)) from exc
 
@@ -588,6 +602,13 @@ class StageCoordinator:
             current = next(r for r in self.store.runs(conn, self.round_id) if r["run_id"] == run["run_id"])
             recorded = dict(current["dispatch"])
             saved = recorded.get("result_checkpoint")
+            if saved and saved.get("source_pin_error"):
+                # A later complete observation cannot retrospectively prove
+                # the inputs of the execution whose first result pin failed.
+                identity = {key: value for key, value in saved.items() if key != "source_pin_error"}
+                if any(checkpoint.get(key) != value for key, value in identity.items()):
+                    raise StageStopped("completed model source checkpoint changed")
+                checkpoint = saved
             if saved and saved != checkpoint:
                 raise StageStopped("completed model source checkpoint changed")
             recorded["result_checkpoint"] = checkpoint
@@ -613,9 +634,9 @@ class StageCoordinator:
             db_transactions.begin(conn, immediate=True)
             current = next((r for r in self.store.runs(conn, self.round_id) if r["run_id"] == run["run_id"]), None)
             if (
-                current != original
-                or self.store.session(conn, task_id=self.task_id) != session
-                or execution_store.get_binding(conn, "task", self.task_id) != binding
+                _stop_snapshot(current) != _stop_snapshot(original)
+                or _stop_snapshot(self.store.session(conn, task_id=self.task_id)) != _stop_snapshot(session)
+                or _stop_snapshot(execution_store.get_binding(conn, "task", self.task_id)) != _stop_snapshot(binding)
                 or not attempt_is_active(conn, self.task_id, self.attempt_id)
             ):
                 return
@@ -689,7 +710,13 @@ class StageCoordinator:
         checkpoint = recorded.get("result_checkpoint") or recorded.get("launch_checkpoint")
         if not checkpoint:
             return None, "source_checkpoint_unavailable"
-        if checkpoint != self.source_checkpoint(run):
+        current = self.source_checkpoint(run)
+        if checkpoint.get("source_pin_error"):
+            identity = {key: value for key, value in checkpoint.items() if key != "source_pin_error"}
+            if any(current.get(key) != value for key, value in identity.items()):
+                raise StageStopped("native resume source checkpoint changed")
+            return None, "source_checkpoint_incomplete"
+        if checkpoint != current:
             raise StageStopped("native resume source checkpoint changed")
         self.workspace.verify_snapshot(self.manifest)
         self.bind_native_session(run, recorded, worker, prompt_path)
@@ -712,15 +739,13 @@ class StageCoordinator:
         accepted |= classification == "interrupted" or run["status"] == ModelRunStatus.INTERRUPTED
         if not checkpoint or not accepted:
             return False
+        if self.missing_output(run):
+            return False
+        if checkpoint.get("source_pin_error"):
+            raise StageStopped("completed artifact source checkpoint incomplete; adoption requires exact evidence")
         if checkpoint != self.source_checkpoint(run):
             raise StageStopped("completed artifact source checkpoint changed")
         self.workspace.verify_snapshot(self.manifest)
-        parent = "runs" if run["stage"] == self.voter_stage else run["stage"]
-        sealed = Path(self.manifest["artifact_root"]) / parent / "sealed" / run["run_id"]
-        if not (sealed / "seal.json").exists():
-            output = self.artifact_files.safe_path(run["output_dir"], self.manifest["artifact_root"])
-            if any(not (output / name).is_file() for name in self.handoff_files[run["stage"]]):
-                return False
         return True
 
     def sealed_output(self, run):

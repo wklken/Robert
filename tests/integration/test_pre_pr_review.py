@@ -23,6 +23,25 @@ from tests.support.tapd import STORY
 
 
 class PrePublicationReviewTests(PrePRReviewFixture):
+    def test_report_cookie_example_can_pass_original_submission_audit(self):
+        from robert_agent.workflows.pre_pr_review import coordinator as module
+
+        driver = self.start(["claude"])
+        example = "响应头 Set-Cookie: session=<redacted>; Path=/，仍需校验会话处理。"
+        render = module.files.render_individual
+        with patch.object(module.files, "render_individual", side_effect=lambda *args: render(*args) + "\n" + example):
+            result = driver.run()
+        self.assertTrue(result["ok"], result)
+        with fixture_database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=driver.task_id)
+            self.assertIn(example, Path(entry["report_path"]).read_text())
+            (metadata,) = conn.execute(
+                "SELECT metadata_json FROM github_actions WHERE action_type='open_pr'"
+            ).fetchone()
+            body = json.loads(metadata)["body"]
+            self.assertIn("仍需校验会话处理", body)
+            self.assertIn("Set-Cookie", body)
+
     def test_invalid_handoff_repairs_only_the_artifact_and_reuses_implementation(self):
         driver = self.start(["claude"])
         launch = driver.launcher
@@ -32,15 +51,8 @@ class PrePublicationReviewTests(PrePRReviewFixture):
             prompt = Path(kwargs["prompt_path"])
             output = Path(kwargs["log_dir"])
             if prompt.name.startswith("repair-handoff-"):
-                inputs = json.loads(
-                    Path(kwargs["trusted_environment"]["ROBERT_PRE_PR_HANDOFF_REPAIR_INPUT"]).read_text()
-                )
-                self.assertIn("unsupported", inputs["error"])
-                payload = json.loads(Path(inputs["handoff_path"]).read_text())
-                payload.pop("unexpected_program_field")
-                (output / "handoff.json").write_text(json.dumps(payload))
-                repairs.append(inputs)
-                return {"ok": True, "process_exited": True, "returncode": 0, "pid": 1073741824}
+                repairs.append(prompt)
+                self.fail("deterministic handoff correction must not launch a model")
             result = launch(**kwargs)
             if "ROBERT_PRE_PR_CANDIDATE_DIR" in kwargs["trusted_environment"]:
                 path = output / "candidate.json"
@@ -53,7 +65,19 @@ class PrePublicationReviewTests(PrePRReviewFixture):
         result = driver.run()
         self.assertTrue(result["ok"], result)
         self.assertEqual(self.launches["implement"], 1)
-        self.assertEqual(len(repairs), 1)
+        self.assertEqual(len(repairs), 0)
+        corrected = list((driver.root / driver.round_id).glob("corrected-handoffs/*/*/candidate.json"))
+        self.assertEqual(len(corrected), 1)
+        with fixture_database.connect(self.db) as conn:
+            runs = store.runs(conn, driver.round_id)
+            original = next(run for run in runs if run["stage"] == "implement")
+            pin = original["dispatch"]["handoff_repair_checkpoint"]
+            original_path = Path(pin["handoff_path"])
+            self.assertEqual(store.digest(original_path), pin["handoff_sha256"])
+            expected = json.loads(original_path.read_text())
+            self.assertTrue(expected.pop("unexpected_program_field"))
+            self.assertEqual(json.loads(corrected[0].read_text()), expected)
+            self.assertFalse(any(run["stage"] == "repair_handoff" for run in runs))
 
     def test_one_targeted_repair_after_final_blocker_then_delivers(self):
         driver = self.start(["claude"])

@@ -7,10 +7,7 @@ from pathlib import Path
 import subprocess
 
 from robert_agent.adapters.git.review_revision import clean_head
-from robert_agent.context.native_prompts import repair_handoff_input
-from robert_agent.context.prompts import render_prompt
 from robert_agent.delivery import contract
-from robert_agent.execution.budgets import MAX_HANDOFF_REPAIR_ATTEMPTS, MAX_HANDOFF_REPAIR_SECONDS
 from robert_agent.execution.stages import StageStopped
 from robert_agent.persistence.rounds import pre_pr_review as store
 from robert_agent.workflows.review import files
@@ -81,17 +78,14 @@ def _preserved(value, stage):
     return value
 
 
-def _check_preserved(original, repaired, stage):
+def _corrected(original, stage):
     expected = _preserved(original, stage)
-    actual = deepcopy(repaired)
     expected_payload = expected.get("submission", expected) if stage == "implement" else expected
-    actual_payload = actual.get("submission", actual) if stage == "implement" else actual
-    before_checks, after_checks = expected_payload.get("verification"), actual_payload.get("verification")
-    if isinstance(before_checks, list) and isinstance(after_checks, list):
-        for before, after in zip(before_checks, after_checks):
+    checks = expected_payload.get("verification")
+    if isinstance(checks, list):
+        for before in checks:
             if (
                 isinstance(before, dict)
-                and isinstance(after, dict)
                 and before.get("status") == "skipped"
                 and not (isinstance(before.get("skipped_reason"), str) and before["skipped_reason"].strip())
             ):
@@ -101,11 +95,16 @@ def _check_preserved(original, repaired, stage):
                 if not isinstance(purpose, str) or not purpose.lower().startswith("skipped:"):
                     raise StageStopped("missing recorded evidence for skipped_reason")
                 reason = purpose.partition(":")[2].strip()
-                if not reason or after.get("skipped_reason") != reason:
-                    raise StageStopped("handoff repair invented skipped_reason")
+                if not reason:
+                    raise StageStopped("missing recorded evidence for skipped_reason")
                 before["skipped_reason"] = reason
+    return expected
+
+
+def _check_preserved(original, repaired, stage):
+    expected = _corrected(original, stage)
     # Serialized equality distinguishes boolean/integer and missing/null too.
-    if json.dumps(actual, sort_keys=True) != json.dumps(expected, sort_keys=True):
+    if json.dumps(repaired, sort_keys=True) != json.dumps(expected, sort_keys=True):
         raise StageStopped("handoff repair changed supported fields or verification evidence")
 
 
@@ -131,20 +130,22 @@ def repair(coordinator, run, validate, model, exc):
     try:
         name = coordinator.handoff_files[run["stage"]][0]
         source = coordinator.sealed_output(run) / name
-        original = _read(source.read_bytes())
+        original_bytes = source.read_bytes()
+        original = _read(original_bytes)
+        candidate = _corrected(original, run["stage"])
         prompt = Path(run["dispatch"]["prompt_path"])
         inputs = {
             "stage": run["stage"],
             "source_run_id": run["run_id"],
             "handoff_path": str(source),
-            "handoff_sha256": store.digest(source),
+            "handoff_sha256": hashlib.sha256(original_bytes).hexdigest(),
             "prompt_path": str(prompt),
             "prompt_sha256": run["prompt_sha256"],
             "worktrees": _worktrees(coordinator, run),
         }
         if store.digest(prompt) != inputs["prompt_sha256"]:
             raise StageStopped("handoff repair prompt changed")
-        # Pin once before launch; a resume cannot bless a newly changed HEAD.
+        # Pin once before correction; a resume cannot bless a changed HEAD.
         with store.connect(coordinator.db_path) as conn:
             current = next(item for item in store.runs(conn, coordinator.round_id) if item["run_id"] == run["run_id"])
             dispatch = current["dispatch"]
@@ -161,11 +162,8 @@ def repair(coordinator, run, validate, model, exc):
         input_path = coordinator.prompt(
             f"handoff-repair-input-{key}.json", json.dumps(inputs, sort_keys=True, indent=2)
         )
-        repair_prompt = coordinator.prompt(
-            f"repair-handoff-{key}.md", render_prompt(repair_handoff_input(inputs, input_path)).text
-        )
         coordinator.handoff_repair_input = str(input_path)
-        input_digest, repair_prompt_digest = store.digest(input_path), store.digest(repair_prompt)
+        input_digest = store.digest(input_path)
 
         def check_inputs():
             coordinator.check_active()
@@ -174,16 +172,13 @@ def repair(coordinator, run, validate, model, exc):
                 or store.digest(source) != inputs["handoff_sha256"]
                 or store.digest(prompt) != inputs["prompt_sha256"]
                 or store.digest(input_path) != input_digest
-                or store.digest(repair_prompt) != repair_prompt_digest
             ):
                 raise StageStopped("handoff repair input or source worktree changed")
 
-        def validate_repair(output, _model):
+        def validate_repair():
             try:
                 check_inputs()
-                repaired = files.safe_path(output / "handoff.json", coordinator.manifest["artifact_root"])
-                content = repaired.read_bytes()
-                _check_preserved(original, _read(content), run["stage"])
+                content = (json.dumps(candidate, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()
                 corrected = files.safe_path(
                     Path(coordinator.manifest["artifact_root"])
                     / "corrected-handoffs"
@@ -194,20 +189,21 @@ def repair(coordinator, run, validate, model, exc):
                 corrected.mkdir(parents=True, exist_ok=True)
                 target = files.safe_path(corrected / name, coordinator.manifest["artifact_root"])
                 if not target.exists():
-                    target.write_bytes(content)
+                    files.atomic_text(target, content.decode("utf-8"))
                 if target.read_bytes() != content:
                     raise StageStopped("corrected handoff changed")
+                _check_preserved(original, _read(target.read_bytes()), run["stage"])
                 coordinator.handoff_source_run_id = run["run_id"]
                 try:
                     artifact = validate(corrected, model)
                 finally:
                     coordinator.handoff_source_run_id = None
                 check_inputs()
-                if target.read_bytes() != content or repaired.read_bytes() != content:
+                if target.read_bytes() != content:
                     raise StageStopped("corrected handoff changed during validation")
                 return {
                     **artifact,
-                    "handoff_repair_path": str(repaired),
+                    "handoff_repair_path": str(target),
                     "handoff_repair_sha256": hashlib.sha256(content).hexdigest(),
                 }
             except StageStopped:
@@ -215,31 +211,9 @@ def repair(coordinator, run, validate, model, exc):
             except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
                 raise StageStopped("handoff repair validation refused: " + str(error)) from error
 
-        profile = {
-            **coordinator.implementer,
-            "timeout_seconds": min(coordinator.implementer["timeout_seconds"], MAX_HANDOFF_REPAIR_SECONDS),
-        }
-        for attempt in range(MAX_HANDOFF_REPAIR_ATTEMPTS):
-            check_inputs()
-            try:
-                artifact = coordinator.run_phase(
-                    "repair_handoff", profile, repair_prompt, validate_repair, input_hash=key
-                )
-                check_inputs()
-                return {
-                    **{
-                        field: value
-                        for field, value in artifact.items()
-                        if field not in {"run_id", "worker_id", "input_sha256"}
-                    },
-                    "model": model,
-                }
-            except StageStopped:
-                raise
-            except (OSError, RuntimeError) as error:
-                check_inputs()
-                if attempt + 1 == MAX_HANDOFF_REPAIR_ATTEMPTS:
-                    raise StageStopped("handoff repair transient retry budget exhausted") from error
+        artifact = validate_repair()
+        check_inputs()
+        return {**artifact, "model": model}
     except StageStopped:
         raise
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:

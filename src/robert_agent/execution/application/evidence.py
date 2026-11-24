@@ -1,6 +1,8 @@
 """Collect attempt and command evidence for recovery."""
 
 from robert_agent.foundation.contracts.execution import ModelRunStatus, RoundStatus
+from robert_agent.adapters.github.pull_requests import read_pr
+from robert_agent.persistence.rounds import review as review_store
 
 from robert_agent.persistence.dialects import sqlite as db_sqlite
 
@@ -311,10 +313,52 @@ def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
     pre_pr = pre_pr_review.session(conn, task_id=task_id) if conn is not None and not review else None
     review = review or pre_pr
     if review:
+        stop = review.get("stop_reason") or {}
         revision_changed = (
-            review["status"] == RoundStatus.SUPERSEDED
-            and review.get("error") == "PR head/base changed after context preparation"
+            not pre_pr
+            and review["status"] == RoundStatus.SUPERSEDED
+            and (
+                review.get("error") == "PR head/base changed after context preparation"
+                or (
+                    stop.get("reason_code") == "review_revision_changed"
+                    and stop.get("round_id") == review["round_id"]
+                    and stop.get("task_id") == task_id
+                    and stop.get("attempt_id") == attempt_id
+                )
+            )
         )
+        changed_source = {}
+        if revision_changed:
+            if conn.in_transaction:
+                raise ValueError("review source recovery observation requires no writer transaction")
+            try:
+                current_pr = read_pr(review["repo"], review["pr_number"])
+            except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+                return {
+                    "status": "unrecoverable",
+                    "reason_code": "review_source_observation_failed",
+                    "safe_error": "current PR could not be verified for review recovery",
+                    "error_type": type(exc).__name__,
+                    "task_id": task_id,
+                    "previous_attempt_id": attempt_id,
+                    "round_id": review["round_id"],
+                    "progress_signals": [],
+                    "logs": {},
+                    "commands": [],
+                }
+            current = review_store.session(conn, round_id=review["round_id"])
+            revision_changed = current == review and isinstance(current_pr, dict) and current_pr.get("state") == "open"
+            if revision_changed:
+                changed_source = {
+                    "review_source": {
+                        "pr": current_pr,
+                        "pr_sha256": hashlib.sha256(json.dumps(current_pr, sort_keys=True).encode()).hexdigest(),
+                        "stop_reason": stop,
+                        "original_request_sha256": hashlib.sha256(
+                            json.dumps(review["request"], sort_keys=True).encode()
+                        ).hexdigest(),
+                    }
+                }
         row = db_records.first(db_read_attempts.find_metadata_json_by_attempt_id(conn, attempt_id))
         diagnostic = values.json_object(row[0] if row else None).get("submission_validation", {})
         deadline_checkpoint = bool(pre_pr and not diagnostic and _pre_pr_deadline_checkpoint(conn, pre_pr, task_id))
@@ -334,6 +378,7 @@ def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
             "progress_signals": ["native_review_checkpoint"],
             "logs": _attempt_log_tails(conn, attempt_id),
             "commands": [],
+            **changed_source,
             **(
                 {
                     key: diagnostic[key]

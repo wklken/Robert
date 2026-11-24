@@ -41,15 +41,7 @@ class RepairDriver(StageCoordinator):
 
     def launch_with_slot(self, run, worker, prompt, environment):
         self.launches.append(run["stage"])
-        if self.failures:
-            self.failures -= 1
-            raise RuntimeError("temporary model transport failure")
-        if self.on_launch:
-            self.on_launch()
-        Path(run["output_dir"], "handoff.json").write_text(json.dumps(self.repaired))
-        with store.connect(self.db_path) as conn:
-            store.update_run(conn, run["run_id"], status="running", dispatch_json="{}")
-        return {"ok": True, "process_exited": True}
+        raise AssertionError("deterministic handoff repair must not launch a model")
 
     def _wait(self, run, launched, timeout):
         pass
@@ -87,7 +79,8 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
             "default_model": "repair-model",
             "timeout_seconds": 4200,
         }
-        self.driver.launches, self.driver.failures, self.driver.on_launch = [], 0, None
+        self.driver.launches = []
+        self.driver.on_validate = None
         self.value = {
             "planned_github_actions": [
                 {
@@ -141,6 +134,8 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
 
     def validate(self, output, model):
         name = self.driver.handoff_files[self.run["stage"]][0]
+        if self.driver.on_validate:
+            self.driver.on_validate(output / name)
         value = json.loads((output / name).read_text())
         if self.run["stage"] == "implement":
             contract.validate_submission(value.get("submission", value), value.get("output_type", "new_pr"), "github")
@@ -162,6 +157,9 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
             ),
         )
 
+    def forge_during_validation(self):
+        self.driver.on_validate = lambda path: path.write_text(json.dumps(self.driver.repaired))
+
     def test_malformed_json_cannot_forge_failed_check_as_passed(self):
         source = Path(self.run["output_dir"], "candidate.json")
         failed = deepcopy(self.value)
@@ -176,8 +174,41 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
 
     def test_ci_url_replacement_is_rejected(self):
         self.driver.repaired["verification"][0]["url"] = "https://ci.invalid/forged"
+        self.forge_during_validation()
         with self.assertRaises(StageStopped):
             self.repair()
+
+    def test_supported_correction_requires_no_model_call_or_new_run(self):
+        with store.connect(self.db) as conn:
+            before = store.runs(conn, self.driver.round_id)
+        with fixture_database.connect(self.db) as conn:
+            before_usage = conn.execute("SELECT COUNT(*) FROM model_usage").fetchone()[0]
+        result = self.repair()
+        self.assertEqual(self.driver.launches, [])
+        self.assertEqual(json.loads(Path(result["result_path"]).read_text()), self.driver.repaired)
+        self.assertEqual(result["handoff_repair_sha256"], store.digest(result["handoff_repair_path"]))
+        self.assertEqual(result["model"], "writer-model")
+        with store.connect(self.db) as conn:
+            after = store.runs(conn, self.driver.round_id)
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM model_usage").fetchone()[0], before_usage)
+        self.assertEqual([run["run_id"] for run in after], [run["run_id"] for run in before])
+
+    def test_recorded_skip_explanation_requires_no_model_call(self):
+        original = deepcopy(self.value)
+        original["verification"][0].update(
+            status="skipped", required=False, source="worker_reported", purpose="Skipped: optional CI unavailable"
+        )
+        original["verification"][0].pop("exit_code")
+        self.run = self.make_run("implement", original)
+        self.driver.repaired = deepcopy(original)
+        self.driver.repaired.pop("unsupported")
+        self.driver.repaired["verification"][0]["skipped_reason"] = "optional CI unavailable"
+        result = self.repair(
+            contract.InvalidSubmission("verification[0].skipped_reason", "Skipped verification requires a reason.")
+        )
+        self.assertEqual(self.driver.launches, [])
+        self.assertEqual(json.loads(Path(result["result_path"]).read_text()), self.driver.repaired)
 
     def test_worker_envelope_is_preserved_during_nested_submission_repair(self):
         original = {
@@ -191,7 +222,7 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
         del self.driver.repaired["submission"]["unsupported"]
         result = self.repair()
         self.assertEqual(json.loads(Path(result["result_path"]).read_text()), self.driver.repaired)
-        self.assertEqual(self.driver.launches, ["repair_handoff"])
+        self.assertEqual(self.driver.launches, [])
 
     def test_worker_envelope_identity_and_nested_evidence_cannot_be_rewritten(self):
         original = {
@@ -201,8 +232,10 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
             "submission": deepcopy(self.value),
         }
         self.run = self.make_run("implement", original)
+        self.forge_during_validation()
         for field in ("task_id", "attempt_id", "output_type", "ci_url"):
             with self.subTest(field=field):
+                self.run = self.make_run("implement", original)
                 self.driver.repaired = deepcopy(original)
                 del self.driver.repaired["submission"]["unsupported"]
                 if field == "ci_url":
@@ -219,8 +252,10 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
             ("used_skills", ["invented"]),
             ("consumed_event_fingerprints", []),
         ]
+        self.forge_during_validation()
         for field, value in changes:
             with self.subTest(field=field):
+                self.run = self.make_run("implement", self.value)
                 self.driver.repaired = {**deepcopy(self.value), field: value}
                 del self.driver.repaired["unsupported"]
                 with self.assertRaises(StageStopped):
@@ -231,7 +266,7 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
             (self.repo / "source.py").write_text("value = 99\n")
             self.git(self.repo, "commit", "-am", "forbidden source repair")
 
-        self.driver.on_launch = commit
+        self.driver.on_validate = lambda path: commit()
         with self.assertRaises(StageStopped):
             self.repair()
 
@@ -252,7 +287,7 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
         }
         self.run = self.make_run("address_findings", value)
         self.driver.repaired = deepcopy(value)
-        self.driver.on_launch = lambda: (self.repo / "source.py").write_text("value = 99\n")
+        self.driver.on_validate = lambda path: (self.repo / "source.py").write_text("value = 99\n")
         with self.assertRaises(StageStopped):
             self.repair(contract.InvalidSubmission("verification[0]", "Verification contains unsupported fields."))
         self.assertEqual(self.driver.handoff_repair_worktree, str(self.driver.address_path))
@@ -269,7 +304,7 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
             )
         )
         self.assertEqual(json.loads(Path(result["result_path"]).read_text()), self.driver.repaired)
-        self.assertEqual(self.driver.launches, ["repair_handoff"])
+        self.assertEqual(self.driver.launches, [])
 
     def test_address_writer_commit_and_finding_changes_are_rejected(self):
         value = {
@@ -283,7 +318,9 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
         self.run = self.make_run("address_findings", value)
         for field in ("body", "id", "purpose", "commit"):
             with self.subTest(field=field):
+                self.run = self.make_run("address_findings", value)
                 self.driver.repaired = deepcopy(value)
+                self.forge_during_validation()
                 if field == "body":
                     self.driver.repaired["body"] = "forged body"
                 elif field == "id":
@@ -296,7 +333,7 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
                         (self.driver.address_path / "source.py").write_text("value = 99\n")
                         self.git(self.driver.address_path, "commit", "-am", "forbidden address repair")
 
-                    self.driver.on_launch = commit
+                    self.driver.on_validate = lambda path: commit()
                 with self.assertRaises(StageStopped):
                     self.repair(
                         contract.InvalidSubmission("verification[0]", "Verification contains unsupported fields.")
@@ -304,25 +341,31 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
 
     def test_action_body_change_is_rejected_even_during_unsupported_cleanup(self):
         self.driver.repaired["planned_github_actions"][0]["body"] = "Changed body"
+        self.forge_during_validation()
         with self.assertRaises(StageStopped):
             self.repair()
 
-    def test_nested_transient_failure_retries_only_repair_and_resume_is_stable(self):
-        self.driver.failures = 1
+    def test_local_correction_preserves_source_failure_and_resume_is_stable(self):
+        with store.connect(self.db) as conn:
+            store.update_run(conn, self.run["run_id"], status="failed", error="original validation failure")
         first = self.repair()
         second = self.repair()
         self.assertEqual(first, second)
-        self.assertEqual(self.driver.launches, ["repair_handoff", "repair_handoff"])
+        self.assertEqual(self.driver.launches, [])
         with store.connect(self.db) as conn:
             source = next(run for run in store.runs(conn, self.driver.round_id) if run["run_id"] == self.run["run_id"])
-        self.assertEqual(source["status"], "running")
+        self.assertEqual(source["status"], "failed")
+        self.assertEqual(source["error"], "original validation failure")
 
-    def test_transient_exhaustion_stops_without_new_coding_launch(self):
-        self.driver.failures = 10
+    def test_original_validation_failure_stops_without_model_or_coding_launch(self):
+        def refuse(path):
+            raise RuntimeError("original validator refuses missing proof")
+
+        self.driver.on_validate = refuse
         for _ in range(2):
             with self.assertRaises(StageStopped):
                 self.repair()
-        self.assertEqual(self.driver.launches, ["repair_handoff"] * 3)
+        self.assertEqual(self.driver.launches, [])
 
     def test_changed_head_on_resume_cannot_repin_success(self):
         self.repair()
@@ -330,7 +373,7 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
         self.git(self.repo, "commit", "-am", "source changed after repair")
         with self.assertRaises(StageStopped):
             self.repair()
-        self.assertEqual(self.driver.launches, ["repair_handoff"])
+        self.assertEqual(self.driver.launches, [])
 
     def test_missing_skip_reason_cannot_be_invented(self):
         original = deepcopy(self.value)
@@ -362,3 +405,69 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
             contract.InvalidSubmission("verification[0].skipped_reason", "Skipped verification requires a reason.")
         )
         self.assertEqual(json.loads(Path(result["result_path"]).read_text()), self.driver.repaired)
+
+    def test_verification_evidence_cannot_be_fabricated_during_validation(self):
+        for field, value in (
+            ("status", "skipped"),
+            ("exit_code", 1),
+            ("required", False),
+            ("source", "worker_reported"),
+            ("command", "invented command"),
+            ("command_record_path", "/forged/journal.json"),
+            ("skipped_reason", "invented dependency"),
+        ):
+            with self.subTest(field=field):
+                self.run = self.make_run("implement", self.value)
+                self.driver.repaired = deepcopy(self.value)
+                self.driver.repaired.pop("unsupported")
+                self.driver.repaired["verification"][0][field] = value
+                self.forge_during_validation()
+                with self.assertRaises(StageStopped):
+                    self.repair()
+        self.assertEqual(self.driver.launches, [])
+
+    def test_deterministic_cached_candidate_tamper_is_not_overwritten(self):
+        result = self.repair()
+        target = Path(result["handoff_repair_path"])
+        value = json.loads(target.read_text())
+        value["verification"][0]["url"] = "https://ci.invalid/forged"
+        target.write_text(json.dumps(value))
+        forged = target.read_bytes()
+        with self.assertRaises(StageStopped):
+            self.repair()
+        self.assertEqual(target.read_bytes(), forged)
+        self.assertEqual(self.driver.launches, [])
+
+    def test_source_prompt_and_input_tamper_during_validation_are_refused(self):
+        for field in ("source", "prompt", "input"):
+            with self.subTest(field=field):
+                self.run = self.make_run("implement", self.value)
+                original_prompt = self.prompt_path.read_bytes()
+                sealed_source = self.driver.sealed_output(self.run) / "candidate.json"
+
+                def tamper(target):
+                    path = (
+                        sealed_source
+                        if field == "source"
+                        else self.prompt_path
+                        if field == "prompt"
+                        else Path(self.driver.handoff_repair_input)
+                    )
+                    path.write_bytes(path.read_bytes() + b"\n")
+
+                self.driver.on_validate = tamper
+                with self.assertRaises(StageStopped):
+                    self.repair()
+                self.prompt_path.write_bytes(original_prompt)
+        self.assertEqual(self.driver.launches, [])
+
+    def test_duplicate_nonfinite_and_nonobject_json_are_refused(self):
+        source = Path(self.run["output_dir"], "candidate.json")
+        for document in ('{"handoff":"original","handoff":"forged"}', '{"unsupported":NaN}', "[]", "{broken}"):
+            with self.subTest(document=document):
+                self.run = self.make_run("implement", self.value)
+                source = Path(self.run["output_dir"], "candidate.json")
+                source.write_text(document)
+                with self.assertRaises(StageStopped):
+                    self.repair()
+        self.assertEqual(self.driver.launches, [])

@@ -280,6 +280,16 @@ class Coordinator(ReviewStages):
         self.stage = "snapshot"
         base_impact.verify_original(self)
         base_impact.verify_saved(self, self.request.get("base_compatibility"))
+        with store.connect(self.db_path) as conn:
+            saved_merge = store.session(conn, task_id=self.task_id)["request"].get("base_merge")
+        if saved_merge:
+            # Reconcile the already charged operation against its pinned base
+            # before observing a newer remote revision or creating another intent.
+            preserved = self.preserve_completed_repair(candidate, align=False)
+            if not isinstance(saved_merge, dict) or not saved_merge.get("base_sha"):
+                raise StageStopped("base merge checkpoint changed")
+            candidate = self.merge_current_base(preserved, saved_merge["base_sha"])
+            self.save_candidate_snapshot(candidate, saved_merge["base_sha"])
         base_sha = self.observe_base(self.repo["repo_root"], "upstream", self.base)
         original_matches = self.manifest.get("original_request") == self.original_request
         if self.manifest.get("base_sha") != base_sha and original_matches:
@@ -306,28 +316,33 @@ class Coordinator(ReviewStages):
                     store.update(conn, self.round_id, request_json=json.dumps(request, sort_keys=True))
                 self.request.pop("final_feedback", None)
                 self.final_feedback = None
-            self.manifest = workspace.prepare_candidate_snapshot(
-                self.repo["repo_root"],
-                self.repo["worktree_root"],
-                self.root,
-                self.round_id,
-                self.repo["full_name"],
-                self.base,
-                base_sha,
-                candidate["head"],
-                self.request["event"],
-                original_request=self.original_request,
-            )
-            self.manifest["candidate"] = candidate
-            self.manifest["github_account"] = self.repo["github_account"]
-            self.manifest["decision_owner"] = self.scope.get("decision_owner")
-            if not self.manifest["frozen"]:
-                self.manifest["original_request"] = self.original_request
-                files.atomic_json(Path(self.manifest["context_dir"]) / "manifest.json", self.manifest)
-            self.save_manifest()
+            self.save_candidate_snapshot(candidate, base_sha)
         self.check_base()
         self.stage = "prepare"
         self.prepare_context()
+
+    def save_candidate_snapshot(self, candidate, base_sha):
+        self.manifest = workspace.prepare_candidate_snapshot(
+            self.repo["repo_root"],
+            self.repo["worktree_root"],
+            self.root,
+            self.round_id,
+            self.repo["full_name"],
+            self.base,
+            base_sha,
+            candidate["head"],
+            self.request["event"],
+            original_request=self.original_request,
+        )
+        self.manifest.update(
+            candidate=candidate,
+            github_account=self.repo["github_account"],
+            decision_owner=self.scope.get("decision_owner"),
+        )
+        if not self.manifest["frozen"]:
+            self.manifest["original_request"] = self.original_request
+            files.atomic_json(Path(self.manifest["context_dir"]) / "manifest.json", self.manifest)
+        self.save_manifest()
 
     def preserve_completed_repair(self, candidate, *, align=True):
         """Carry a validated repaired commit into a new review snapshot."""

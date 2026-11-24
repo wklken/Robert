@@ -98,6 +98,34 @@ class CanonicalExecutionTests(ReviewCoordinatorFixture):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 1)
             self.assertEqual(store.session(conn, round_id=driver.round_id)["report_path"], str(report))
 
+    def test_new_comment_after_publication_starts_review_but_same_event_poll_is_idempotent(self):
+        self.cycle([self.equivalent()])
+        driver = self.coordinator()
+        driver.run()
+        self.publish_report(driver)
+        calls = len(self.calls)
+        self.cycle([self.equivalent("new-comment")])
+        self.cycle([self.equivalent("new-comment")])
+        with fixture_database.connect(self.db) as conn:
+            rounds = [dict(row) for row in conn.execute("SELECT round_id,status FROM review_sessions")]
+            self.assertEqual(len(rounds), 2)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 2)
+        latest = next(item for item in rounds if item["round_id"] != driver.round_id)
+        self.assertNotEqual(latest["status"], "published")
+        with fixture_database.connect(self.db) as conn:
+            association = store.trigger_associations(conn, latest["round_id"])
+        self.assertEqual(len(association), 1)
+        self.assertNotEqual(association[0]["status"], "completed")
+        self.assertEqual(len(self.calls), calls)
+        next_driver = self.coordinator()
+        next_driver.run()
+        self.publish_report(next_driver)
+        self.assertEqual(len(self.calls), calls + 3)
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 2)
+            self.assertEqual(store.session(conn, round_id=driver.round_id)["status"], "published")
+            self.assertEqual(store.session(conn, round_id=next_driver.round_id)["status"], "published")
+
     def test_delivered_receipts_follow_final_publication_without_new_calls_for_adoption(self):
         self.cycle([self.equivalent(), self.equivalent("requested", request=True)])
         driver = self.coordinator()
@@ -201,8 +229,10 @@ class CanonicalExecutionTests(ReviewCoordinatorFixture):
         self.publish_report(driver)
         report.write_text("tampered")
         self.cycle([self.equivalent("late", request=True)])
+        successor = self.coordinator()
+        self.assertNotEqual(successor.round_id, driver.round_id)
         trigger = next(
-            item for item in self.associations(driver) if item["trigger_fingerprint"] == "review_request:late"
+            item for item in self.associations(successor) if item["trigger_fingerprint"] == "review_request:late"
         )
         self.assertNotEqual(trigger["status"], "completed")
 

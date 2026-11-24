@@ -2,6 +2,7 @@
 
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
 from robert_agent.foundation.contracts.execution import RoundStatus
+from robert_agent.persistence.rounds.review_stop import encode_round_stop
 
 from robert_agent.persistence.stores import artifacts as db_write_artifacts
 from robert_agent.persistence.stores import attempts as db_write_attempts
@@ -244,11 +245,25 @@ class Coordinator(ReviewStages):
         canonical = self.request.get("canonical_identity")
         if not canonical:
             return
+        error = None
         if review_identity.revision(pr) != {key: canonical[key] for key in ("head_sha", "base_sha", "base_ref")}:
-            raise StageSuperseded("PR revision changed after canonical admission")
+            error = "PR revision changed after canonical admission"
         acceptance = canonical["acceptance"]
         if pr.get("title", "") != acceptance["title"] or pr.get("body", "") != acceptance["source_body"]:
-            raise StageSuperseded("PR acceptance changed after canonical admission")
+            error = "PR acceptance changed after canonical admission"
+        if error:
+            raise StageSuperseded(
+                encode_round_stop(
+                    {
+                        "reason_code": "review_revision_changed",
+                        "safe_error": error,
+                        "round_id": self.round_id,
+                        "task_id": self.task_id,
+                        "attempt_id": self.attempt_id,
+                        "canonical_sha256": hashlib.sha256(review_identity.encoded(canonical).encode()).hexdigest(),
+                    }
+                )
+            )
 
     def _check_canonical_snapshot(self):
         if not self.request.get("canonical_identity"):

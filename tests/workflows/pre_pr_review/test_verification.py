@@ -152,7 +152,9 @@ class FinalVerificationTests(ReviewWorkspaceFixture):
         before = deepcopy(self.response)
         with self.assertRaises(ValueError):
             self.address()
-        with self.assertRaisesRegex(ValueError, "new PR result contract"):
+        with self.assertRaisesRegex(
+            ValueError, "verification policy failed: route requires every required verification"
+        ):
             self.validate_original_delivery(self.response["verification"])
         self.assertEqual(self.response, before)
 
@@ -162,7 +164,9 @@ class FinalVerificationTests(ReviewWorkspaceFixture):
                 self.response["verification"] = checks
                 with self.assertRaises(ValueError):
                     self.address()
-                with self.assertRaisesRegex(ValueError, "new PR result contract"):
+                with self.assertRaisesRegex(
+                    ValueError, "verification policy failed: route requires every required verification"
+                ):
                     self.validate_original_delivery(checks)
 
     def test_required_skipped_check_cannot_replace_final_execution(self):
@@ -172,7 +176,7 @@ class FinalVerificationTests(ReviewWorkspaceFixture):
         self.response["verification"] = [skipped, check()]
         with self.assertRaises(ValueError):
             self.address()
-        with self.assertRaisesRegex(ValueError, "new PR result contract"):
+        with self.assertRaisesRegex(ValueError, "verification policy failed: required verification cannot be skipped"):
             self.validate_original_delivery(self.response["verification"])
 
     def test_original_contract_refuses_malformed_optional_evidence(self):
