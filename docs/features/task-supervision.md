@@ -12,8 +12,8 @@ when its rule observes positive progress evidence.
 Explicit `mode: decide` gives a dedicated model the choice of the next supported
 action for an Issue/PR and its linked workstreams. It observes goals, source
 events, tasks, attempts, CI/conflict episodes, execution budgets, progress
-observations, results and prior decisions. It also checks work without an
-Incident, so a stalled goal can lead to a question or notice. Calls are bounded
+observations, results, the original verified decision owner and prior decisions.
+It also checks work without an Incident, so a stalled goal can lead to a question or notice. Calls are bounded
 and share a persisted installation-wide hourly budget and cooldown.
 
 ```yaml
@@ -88,6 +88,15 @@ confirm completion. It stops observation of that completed goal without closing
 an Issue or merging a PR. It does not create arbitrary tasks or run arbitrary
 commands. If the goal requires an action outside current capabilities, the model
 must ask or notify the operator.
+
+A review report superseded by a newer PR revision remains a historical failed
+request. Once the primary PR is confirmed merged and that review's processes,
+leases, recovery actions and publication effects are settled, the supervisor
+dismisses the obsolete incident. If the goal and other requests are also
+complete, it automatically stops supervision and resolves an outstanding
+supervisor question without calling the model or asking for another decision.
+An unknown publication effect, active process or unfinished request keeps
+supervision active. This closeout preserves tasks, attempts, results and budgets.
 
 Existing repository `pr_automation` enablement, CI check allowlists and episode
 budgets still apply. Known recovery candidates require the existing

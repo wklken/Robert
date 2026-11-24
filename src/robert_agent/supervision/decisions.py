@@ -29,6 +29,7 @@ from robert_agent.supervision import store
 from robert_agent.supervision.rules import timestamp
 from robert_agent.supervision.policy import current_config
 from robert_agent.work.questions import record_supervisor_question
+from robert_agent.work import decision_owner
 
 
 RUNNER_KEY = ("decision_runner", "installation", "current")
@@ -160,6 +161,12 @@ def snapshot(conn, root_id, config, now):
     repo = next((r for r in config.get("repos", ()) if r["full_name"] == context["repository"]["full_name"]), None)
     if not repo or not repo.get("enabled", True):
         return None
+    stream_ids = [stream["workstream_id"] for stream in context["streams"]]
+    settled_reviews = store.settled_merged_reviews(conn, stream_ids, now)
+    if settled_reviews:
+        context["completion"] = queries.completion(conn, stream_ids, [proof["task_id"] for proof in settled_reviews])
+    context["settled_reviews"] = settled_reviews
+    context["decision_owner"] = decision_owner.for_workstream(conn, root_id, repo.get("github_account", ""))
     candidates = []
     for row in queries.checkpoints(conn, "decision_candidate", root_id, now=now, policy_version=policy_version(config)):
         item = json.loads(row["metadata_json"])
@@ -255,13 +262,50 @@ def packet(snapshot_value, previous):
 
 def can_finish(snapshot_value):
     context = snapshot_value["context"]
+    settled_ids = {proof["task_id"] for proof in context.get("settled_reviews", ())}
     if snapshot_value["candidates"] or any(
-        t["lifecycle"] not in {TaskLifecycle.COMPLETED, TaskLifecycle.CANCELED, TaskLifecycle.IGNORED}
+        t["task_id"] not in settled_ids
+        and t["lifecycle"] not in {TaskLifecycle.COMPLETED, TaskLifecycle.CANCELED, TaskLifecycle.IGNORED}
         for t in context["tasks"]
     ):
         return False
     proof = context["completion"]
     return bool(proof["has_goal"] and not proof["unfinished_goal"] and not proof["unfinished_task"])
+
+
+def finish_merged_review(conn, root_id, snapshot_value, now):
+    """End obsolete merged-PR supervision using current domain proof, without a model call."""
+    if not conn.in_transaction:
+        raise ValueError("supervision closeout requires a writer transaction")
+    context = snapshot_value["context"]
+    proofs = context.get("settled_reviews", ())
+    if (
+        context["streams"][0]["lifecycle"] != WorkstreamLifecycle.COMPLETED
+        or not any(proof["workstream_id"] == root_id for proof in proofs)
+        or not can_finish(snapshot_value)
+    ):
+        return False
+    previous = read(conn, root_id)
+    if previous.get("status") == DecisionStatus.FINISH_SUPERVISION:
+        return True
+    store.dismiss_terminal_tasks(conn, [proof["task_id"] for proof in proofs], now)
+    if previous.get("notification_id"):
+        notifications.resolve_supervisor_question(conn, previous["notification_id"])
+    write(
+        conn,
+        root_id,
+        {
+            **previous,
+            "status": DecisionStatus.FINISH_SUPERVISION.value,
+            "history": decision_history(previous),
+            "decision": None,
+            "input_generation": digest(snapshot_value),
+            "receipt": {"reason_code": "merged_review_no_remaining_work", "reviews": proofs, "confirmed_at": now},
+            "next_check_at": None,
+        },
+        now,
+    )
+    return True
 
 
 def validate(raw, request):
