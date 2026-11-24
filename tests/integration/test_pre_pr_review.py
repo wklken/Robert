@@ -7,12 +7,13 @@ from unittest.mock import patch
 import yaml
 
 from robert_agent.adapters.git.review_revision import git
+from robert_agent.configuration import validation as config_validation
 from robert_agent.delivery import queries
 from robert_agent.delivery.application import publish, submission, validation
 from robert_agent.execution import capacity, rounds
 from robert_agent.execution.stages import StageStopped
 from robert_agent.persistence.rounds import pool
-from robert_agent.work.application import commands
+from robert_agent.work.application import commands, tapd_scan
 from robert_agent.persistence.rounds import pre_pr_review as store
 from robert_agent.workflows.pre_pr_review.coordinator import Coordinator
 from robert_agent.workflows.review import workspace as review_workspace
@@ -20,14 +21,32 @@ from tests.support.work_items import example_choices
 from tests.support import database as fixture_database
 from tests.support.repository_cycle import _new_pr_actions, _verification_evidence
 from tests.support.review_coordinator import ReviewCoordinatorFixture
+from tests.support.tapd import STORY, FakeClient, comment
+from tests.support.tapd_cycle import TAPD_CONFIG
 
 
 class PrePublicationReviewTests(ReviewCoordinatorFixture):
-    def start(self, workers, *, local=False):
+    def start(self, workers, *, local=False, tapd=False, github_comment=False):
         config = yaml.safe_load(self.config_path.read_text())
         config["repos"][0]["routes"] = {"new-pr": {"pre_pr_review": {"workers": workers}}}
+        if tapd:
+            config.update(yaml.safe_load(TAPD_CONFIG.format(trusted="alice")))
         self.config_path.write_text(yaml.safe_dump(config))
-        if local:
+        if tapd:
+            self.cycle([])
+            settings = config_validation.validate_config(self.config_path, skip_external=True)
+            client = FakeClient()
+            client.comments.append(comment("2", "@robert-wklken please fix this bug"))
+            tapd_scan.scan_project(
+                self.db,
+                settings["tapd"],
+                settings["tapd"]["projects"][0],
+                {repo["full_name"]: repo for repo in settings["repos"]},
+                client,
+                now="2026-11-20T03:00:00+00:00",
+            )
+            self.cycle([])
+        elif local:
             self.cycle([])
             context = commands.CommandContext(
                 "operator", "owner", frozenset({"repo:example/backend"}), frozenset({"codex", "claude"})
@@ -52,15 +71,16 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
                         "id": "implement",
                         "number": 42,
                         "source_type": "issue",
-                        "event_type": "assigned",
+                        "event_type": "comment" if github_comment else "assigned",
                         "actor_login": "maintainer",
                         "assigned_to": "robert-bot",
                         "assignment_actor_login": "maintainer",
-                        "body": "Update the example",
+                        "body": "@robert-bot update the example" if github_comment else "Update the example",
                         "intent": "small_change",
                         "title": "Update example",
                         "state": "open",
-                        "html_url": "https://github.com/example/backend/issues/42",
+                        "html_url": "https://github.com/example/backend/issues/42"
+                        + ("#issuecomment-123" if github_comment else ""),
                     }
                 ]
             )
@@ -76,6 +96,8 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             "consumed_event_fingerprints": [saved["request"]["event"]["event_fingerprint"]] if not local else [],
             "handoff": "Update example and verify the result.",
         }
+        if tapd:
+            self.submission["planned_github_actions"].append({"type": "comment", "body": "Updated the example."})
         if local:
             with fixture_database.connect(self.db) as conn:
                 self.submission["consumed_work_item_event_ids"] = [
@@ -233,6 +255,43 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             actions = conn.execute("SELECT action_type FROM github_actions").fetchall()
             self.assertEqual([row[0] for row in actions], ["comment"])
         self.assertEqual(self.launches["address"], 1)
+
+    def test_tapd_review_decision_targets_the_ticket_without_a_github_event_url(self):
+        driver = self.start(["claude"], tapd=True)
+        self.assertNotIn("html_url", driver.request["event"])
+        self.with_finding = self.needs_decision = True
+
+        result = driver.run()
+
+        self.assertTrue(result["ok"], result)
+        with fixture_database.connect(self.db) as conn:
+            saved = store.session(conn, task_id=driver.task_id)
+            self.assertEqual(saved["status"], "waiting_for_user")
+            self.assertEqual(saved["proof"]["decision"]["candidate_sha"], saved["manifest"]["head_sha"])
+            self.assertFalse(any(run["slot_reserved"] for run in store.runs(conn, driver.round_id)))
+            question = json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])[
+                "operator_question"
+            ]
+            self.assertEqual(question["choices"], example_choices())
+            actions = conn.execute("SELECT action_type, target_url FROM github_actions").fetchall()
+            self.assertEqual(
+                [tuple(row) for row in actions],
+                [("comment", f"https://tapd.example/100/prong/stories/view/{STORY}")],
+            )
+
+    def test_github_comment_review_decision_targets_the_issue_without_the_comment_fragment(self):
+        driver = self.start(["claude"], github_comment=True)
+        self.with_finding = self.needs_decision = True
+
+        result = driver.run()
+
+        self.assertTrue(result["ok"], result)
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(store.session(conn, task_id=driver.task_id)["status"], "waiting_for_user")
+            actions = conn.execute("SELECT action_type, target_url FROM github_actions").fetchall()
+            self.assertEqual(
+                [tuple(row) for row in actions], [("comment", "https://github.com/example/backend/issues/42")]
+            )
 
     def test_review_missing_choices_stays_in_recovery_and_does_not_publish_an_unanswerable_question(self):
         driver = self.start(["claude"])
