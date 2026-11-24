@@ -334,9 +334,24 @@ def _delivery_candidates(now, repo_ids, messaging_repo_ids, messaging_settings):
     )
     cards = select(notification.c.notification_id, notification.c.created_at).where(
         _pending_delivery(now, repo_ids, card_only=True),
+        _card_endpoint(messaging_settings),
         *scope,
     )
     return bodies.union_all(cards).subquery()
+
+
+def _card_endpoint(settings):
+    """A card may only follow its durable body to the same configured destination."""
+    settings = settings or {}
+    if not settings.get("enabled") or settings.get("provider") != "openclaw" or settings.get("channel") != "wecom":
+        return sql_constant(1) == sql_constant(0)
+    metadata = tables["notifications"].c.metadata_json
+    return and_(
+        *(
+            func.json_extract(metadata, "$.delivery.endpoint." + field) == settings.get(field, "")
+            for field in ("provider", "channel", "account", "conversation", "thread", "target")
+        )
+    )
 
 
 def find_for_deliver_pending(conn, now, limit, repo_ids=None, *, messaging_repo_ids=None, messaging_settings=None):

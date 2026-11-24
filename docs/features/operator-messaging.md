@@ -217,6 +217,12 @@ that connection it uses the channel’s normal text transport. The queue saves t
 body's message ID and delivery receipt before sending the card; quoted replies
 use that body ID. Card receipts and retry state are stored separately. A confirmed
 card rejection retries only the card under the existing attempt and time budgets.
+The body receipt binds the actual outbound `target` as well as the provider,
+channel, account, conversation and thread. Card retries require that destination
+to match the current configuration. Delivery and readiness exclude mismatched
+cards before the queue limit, so they cannot hold up new notices. The saved
+receipt remains intact; restoring the destination permits retries within the
+existing budgets. Older receipts without a saved target withhold card retries.
 A timeout, missing acknowledgement or interrupted card send remains `unknown`
 and withholds automatic card retries until the remote effect can be reconciled.
 The delivered body stays answerable in all these cases. No second transport is

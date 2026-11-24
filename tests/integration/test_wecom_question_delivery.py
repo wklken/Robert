@@ -11,7 +11,9 @@ import unittest
 from unittest.mock import patch
 
 from robert_agent.delivery.application import notifications
+from robert_agent.execution import notifications as execution_notifications
 from robert_agent.integrations.openclaw import write_plugin
+from robert_agent.persistence import database
 from robert_agent.work.application import messaging
 from robert_agent.work.errors import WorkItemValidationError
 from tests.support.work_items import WorkItemCommandFixture, example_choices
@@ -64,16 +66,18 @@ const effect = value => appendFileSync(process.argv[4], JSON.stringify(value) + 
 let handler;
 registerWeComQuestionTransport({ registerGatewayMethod: (_, fn) => handler = fn,
   runtime: { channel: { outbound: { loadAdapter: async () => ({ sendText: async p => {
-    effect({ kind: 'text', text: p.text }); return { messageId: 'body-1' }; } }) } } } });
+    effect({ kind: 'text', text: p.text, target: p.to, account: p.accountId });
+    return { messageId: 'body-1' }; } }) } } } });
 globalThis[Symbol.for('wecom-openclaw-plugin:shared-state:v1')] = { wsClientInstances: new Map([
-  ['default', { isConnected: outcome !== 'disconnected', sendMessage: async () => {
-    effect({ kind: 'card' });
+  ...['default', 'another'].map(account => [account, {
+    isConnected: outcome !== 'disconnected', sendMessage: async (target, card) => {
+    effect({ kind: 'card', target, account, card });
     if (outcome === 'failed') throw Object.assign(new Error('rejected'), { errcode: 40008 });
     if (outcome === 'rejected') return { errcode: 40008, headers: { req_id: 'card-1' } };
     if (outcome === 'unknown') throw new Error('timeout');
     if (outcome === 'missing') return {};
     return { headers: { req_id: 'card-1' } };
-  } }]
+  } }])
 ]) };
 await handler({ params, respond: (ok, payload, error) => console.log(JSON.stringify(
   ok ? { payload } : { ok: false, error })) });
@@ -101,13 +105,14 @@ await handler({ params, respond: (ok, payload, error) => console.log(JSON.string
             timeout=10,
         )
 
-    def deliver(self, now="2026-07-19T02:00:00+00:00", runner=None):
+    def deliver(self, now="2026-07-19T02:00:00+00:00", runner=None, limit=100):
         with patch.dict(os.environ, {}, clear=True):
             return notifications.deliver_pending(
                 self.db_path,
                 config=self.config,
                 runner=runner or self.runner,
                 now=now,
+                limit=limit,
             )
 
     def kinds(self):
@@ -239,3 +244,68 @@ await handler({ params, respond: (ok, payload, error) => console.log(JSON.string
         self.config["messaging"]["repos"] = []
         self.deliver("2026-07-19T02:00:06+00:00")
         self.assertEqual(self.kinds(), ["text", "card"])
+
+    def test_changed_target_withholds_old_card_and_restored_target_can_retry(self):
+        self.outcome = "failed"
+        self.deliver()
+        self.config["messaging"]["target"] = "another-operator"
+        self.outcome = "sent"
+        self.deliver("2026-07-19T02:00:06+00:00")
+        self.assertEqual(self.kinds(), ["text", "card"])
+        self.assertEqual(self.state()["endpoint"]["target"], "operator")
+        self.config["messaging"]["target"] = "operator"
+        self.deliver("2026-07-19T02:00:06+00:00")
+        effects = [json.loads(line) for line in self.effects.read_text().splitlines()]
+        self.assertEqual(self.kinds(), ["text", "card", "card"])
+        self.assertEqual([effect["target"] for effect in effects], ["operator"] * 3)
+        self.assertEqual(self.quote()["notification_id"], self.notice)
+
+    def test_target_changed_after_body_receipt_withholds_initial_card(self):
+        def runner(argv, **kwargs):
+            result = self.runner(argv, **kwargs)
+            self.config["messaging"]["target"] = "another-operator"
+            return result
+
+        self.assertEqual(self.deliver(runner=runner)["sent"], 1)
+        self.assertEqual(self.kinds(), ["text"])
+        self.assertEqual(self.state()["endpoint"]["target"], "operator")
+        self.assertEqual(self.quote()["notification_id"], self.notice)
+
+    def test_changed_account_card_does_not_block_new_questions(self):
+        self._assert_changed_destination_does_not_block_new_questions("account", "another")
+
+    def test_changed_target_card_does_not_block_new_questions(self):
+        self._assert_changed_destination_does_not_block_new_questions("target", "another-operator")
+
+    def _assert_changed_destination_does_not_block_new_questions(self, field, value):
+        self.outcome = "failed"
+        self.deliver()
+        old_state = self.state()
+        self.config["messaging"][field] = value
+        self.outcome = "sent"
+        for sequence, now in (
+            (2, "2026-07-19T02:00:06+00:00"),
+            (3, "2026-07-19T02:11:00+00:00"),
+        ):
+            with self.subTest(now=now):
+                with closing(database.connect(self.db_path)) as conn:
+                    self.assertFalse(
+                        execution_notifications.has_pending_local_delivery(conn, None, now, config=self.config)
+                    )
+                item = self._create(start=True, idempotency_key=f"create-{sequence}")["item"]
+                question = self._question(item["work_item_id"], sequence)
+                with closing(sqlite3.connect(self.db_path)) as conn, conn:
+                    conn.execute(
+                        "UPDATE work_item_events SET metadata_json=json_set(metadata_json, '$.choices', json(?)) "
+                        "WHERE event_id=?",
+                        (json.dumps(example_choices()), question["event_id"]),
+                    )
+                self.assertEqual(self.deliver(now, limit=1)["sent"], 1)
+                self.assertEqual(self.state(), old_state)
+                with closing(database.connect(self.db_path)) as conn:
+                    self.assertFalse(
+                        execution_notifications.has_pending_local_delivery(conn, None, now, config=self.config)
+                    )
+        effects = [json.loads(line) for line in self.effects.read_text().splitlines()]
+        self.assertEqual(self.kinds(), ["text", "card"] * 3)
+        self.assertEqual([effect[field] for effect in effects[2:]], [value] * 4)

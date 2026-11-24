@@ -70,7 +70,8 @@ def _deliver_question_card(db_path, notification_id, payload, state, *, config, 
             return
         settings = (config or {}).get("messaging", {})
         if state.get("endpoint") != {
-            field: settings.get(field, "") for field in ("provider", "channel", "account", "conversation", "thread")
+            field: settings.get(field, "")
+            for field in ("provider", "channel", "account", "conversation", "thread", "target")
         }:
             return
         if int(previous.get("attempt_count", 0)) >= retry_policy.MAX_ATTEMPTS or (
@@ -222,7 +223,7 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
                     version=payload["version"],
                     endpoint={
                         field: settings.get(field, "")
-                        for field in ("provider", "channel", "account", "conversation", "thread")
+                        for field in ("provider", "channel", "account", "conversation", "thread", "target")
                     },
                 )
             with closing(db_database.connect(db_path)) as conn, conn:
