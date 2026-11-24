@@ -75,6 +75,69 @@ test('a filter change during refresh discards the old response and loads the lat
   assert.deepEqual(b.context.rendered.map(data=>data.items[0].work_item_id),['selected']);
 });
 
+test('single-page automatic polling removes vanished cards even with unloaded history available', async () => {
+  for (const cursor of [null, 'unloaded']) {
+    const urls = [];
+    const b = board(async url => {
+      urls.push(url);
+      return urls.length === 1 ? page([card('gone')], cursor)
+        : {...page([]), counts:{done:0, doing:0}};
+    });
+    await b.run('start()');
+    assert.deepEqual(Array.from(b.context.rendered.at(-1).items, item=>item.work_item_id), ['gone']);
+    const timer = Array.from(b.timers.values()).at(-1);
+    assert.equal(timer.delay, 45000);
+    b.advance(timer.delay);
+    await timer.callback();
+    const data = b.context.rendered.at(-1);
+    assert.equal(urls.length, 2);
+    assert.equal(urls.some(url=>url.includes('cursor=')), false);
+    assert.deepEqual(Array.from(data.items, item=>item.work_item_id), []);
+    assert.equal(data.counts.done, 0);
+    assert.equal(data.next_cursor, null);
+  }
+});
+
+test('head polls replace old head cards and retain only loaded history until its deadline', async () => {
+  const urls = [];
+  let head = [card('gone')], history = [card('promoted'), card('old')];
+  let running = 1;
+  const b = board(async url => {
+    urls.push(url);
+    return url.includes('cursor=') ? page(history)
+      : {...page(head, head.length ? 'older' : null, running), counts:{done:head.length + history.length, doing:running}};
+  });
+  await b.run('start()');
+  await b.refresh({more:true, quiet:true});
+  await b.refresh();
+  const historyReads = urls.filter(url=>url.includes('cursor=')).length;
+  head = [card('new'), card('promoted', {version:2})];
+  let timer = Array.from(b.timers.values()).at(-1);
+  assert.equal(timer.delay, 15000);
+  b.advance(timer.delay);
+  await timer.callback();
+  let data = b.context.rendered.at(-1);
+  assert.deepEqual(Array.from(data.items, item=>item.work_item_id), ['new', 'promoted', 'old']);
+  assert.equal(data.items.find(item=>item.work_item_id==='promoted').version, 2);
+  assert.equal(data.next_cursor, null);
+  head = [];
+  running = 0;
+  timer = Array.from(b.timers.values()).at(-1);
+  b.advance(timer.delay);
+  await timer.callback();
+  data = b.context.rendered.at(-1);
+  assert.deepEqual(Array.from(data.items, item=>item.work_item_id), ['old']);
+  assert.equal(urls.filter(url=>url.includes('cursor=')).length, historyReads);
+  const deadline = Array.from(b.timers.values()).at(-1);
+  assert.equal(deadline.delay, 30000);
+  history = [];
+  b.advance(deadline.delay);
+  await deadline.callback();
+  assert.deepEqual(Array.from(b.context.rendered.at(-1).items, item=>item.work_item_id), []);
+  assert.equal(b.run('state.pageCount'), 1);
+  assert.equal(Array.from(b.timers.values()).at(-1).delay, 45000);
+});
+
 test('automatic refresh retains loaded history with fresh metadata and rebuilds loaded pages after 60 seconds', async () => {
   const urls = [];
   const b = board(async url => {urls.push(url); return url.includes('cursor=') ? page([card('old')])

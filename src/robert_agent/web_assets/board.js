@@ -899,6 +899,7 @@ const params = new URLSearchParams(location.search);
 const state = {
   session: null,
   board: null,
+  headItemIds: new Set(),
   detail: null,
   historyLimits: {},
   selectedItem: params.get("item"),
@@ -2348,6 +2349,7 @@ async function performBoardRefresh({ quiet, more, automatic }) {
   // Rebuild all loaded pages at least once a minute to bound stale retained
   // cards and repair pagination after items move, disappear or change state.
   const headOnly = automatic && sameQuery && state.board &&
+    (state.pageCount || 1) > 1 &&
     Date.now() - state.pagesCheckedAt < 60000;
   $("#sync-status").textContent = t("syncing");
   $("#load-more").disabled = true;
@@ -2367,12 +2369,18 @@ async function performBoardRefresh({ quiet, more, automatic }) {
       data = { ...state.board, items: Array.from(merged.values()), next_cursor: data.next_cursor };
     } else if (headOnly) {
       const freshIds = new Set(data.items.map(item => item.work_item_id));
+      // The head is authoritative. Only cards from loaded, unrefreshed history
+      // survive; cards promoted into the head leave that retained history.
       data.items = [...data.items, ...state.board.items.filter(item =>
-        !freshIds.has(item.work_item_id))];
-      if ((state.pageCount || 1) > 1) data.next_cursor = state.board.next_cursor;
+        !state.headItemIds.has(item.work_item_id) && !freshIds.has(item.work_item_id))];
+      data.next_cursor = state.board.next_cursor;
     }
     if (!more) {
-      if (!headOnly) state.pagesCheckedAt = Date.now();
+      state.headItemIds = new Set(data.headItemIds);
+      if (!headOnly) {
+        state.pageCount = data.pageCount;
+        state.pagesCheckedAt = Date.now();
+      }
     }
     state.board = data;
     renderFilters(data);

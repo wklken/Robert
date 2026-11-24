@@ -60,6 +60,8 @@ test('refresh retains loaded pages and deduplicates moving cards', async () => {
   assert.equal(page.items.length, 2);
   assert.equal(page.items[0].title, 'new');
   assert.equal(page.next_cursor, null);
+  assert.equal(page.pageCount, 2);
+  assert.deepEqual(Array.from(page.headItemIds), ['a']);
   assert.equal(urls[1], '/board?limit=50&cursor=cursor%2B%2F%3D');
   assert.equal(urls.length, 2);
 });
@@ -76,4 +78,6 @@ test('multi-page results use head metadata and the final pagination cursor', asy
   assert.equal(result.filters.agents[0],'new');
   assert.equal(result.next_cursor,'last');
   assert.equal(result.items.length,2);
+  assert.equal(result.pageCount,2);
+  assert.deepEqual(Array.from(result.headItemIds),['a']);
 });
