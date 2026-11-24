@@ -22,6 +22,7 @@ from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence import transactions as db_transactions
 from robert_agent.persistence.queries import scheduling
+from robert_agent.persistence.queries import review_executions
 from robert_agent.persistence.queries import task_events as db_read_task_events
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import wakeups as db_read_wakeups
@@ -773,6 +774,11 @@ def prepare_queued_reviews(
     config_result=None,
 ):
     kind = "vote" if round_store is vote_store else "review"
+    if round_store is review_store:
+        # Retries after a crash between publishing and completion only attach
+        # the existing receipt; they never dispatch another model or action.
+        for pending_round in review_executions.pending_trigger_rounds(conn, repo["full_name"]):
+            round_store.complete_triggers(conn, pending_round)
     for round_id in scheduling.queued_round_ids(conn, kind, repo["full_name"]):
         entry = round_store.session(conn, round_id=round_id)
         if round_store is review_store:
@@ -821,4 +827,6 @@ def prepare_queued_reviews(
             native_round_id=round_id,
         )
         if task_info:
+            if round_store is review_store:
+                round_store.bind_triggers(conn, round_id)
             dispatcher.queue_dispatch(dispatch_queue, task_info, None, dispatch_budget, repo_id=repo_id, repo=repo)

@@ -84,6 +84,7 @@ def cancel_execution(conn, item, facts, now, db_path, locks, *, abandon_review_r
             attempt["attempt_id"],
             attempt["task_id"],
             metadata.get("dispatch"),
+            terminal=True,
         )
         db_write_attempts.set_metadata_json_by_attempt_id(conn, json.dumps(metadata), attempt["attempt_id"])
     # This is an explicit operator attestation, never an automatic inference

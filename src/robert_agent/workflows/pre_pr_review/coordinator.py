@@ -13,7 +13,7 @@ from robert_agent.adapters.git.workspace import check_worktree_reuse
 from robert_agent.context.native_prompts import address_findings_input
 from robert_agent.context.prompts import render_prompt
 from robert_agent.delivery import contract
-from robert_agent.delivery.base_revisions import documentation_refresh
+from robert_agent.delivery.base_revisions import compatibility_refresh
 from robert_agent.delivery.application import submission, validation, audit
 from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import retry
@@ -25,10 +25,12 @@ from robert_agent.foundation.contracts.execution import ModelRunStatus
 from robert_agent.persistence import transactions
 from robert_agent.persistence.stores import artifacts as db_write_artifacts
 from robert_agent.persistence.rounds import pre_pr_review as store
+from robert_agent.persistence.rounds.records import artifact_available
 from robert_agent.security.redaction import redact_and_truncate, redact_report
-from robert_agent.workflows.review import files, workspace
+from robert_agent.security import redaction
+from robert_agent.workflows.review import files, workspace, report_checkpoint
 from robert_agent.workflows.review.coordinator import ReviewStages
-from robert_agent.workflows.pre_pr_review import final_verification, handoff_repair, final_repair
+from robert_agent.workflows.pre_pr_review import base_impact, final_verification, handoff_repair, final_repair
 
 
 class ReviewDecisionRequired(StageStopped):
@@ -111,6 +113,12 @@ class Coordinator(ReviewStages):
             entry = store.session(conn, task_id=self.task_id)
             request = dict(entry["request"])
             checkpoint = request.get("base_merge")
+            compatibility = request.get("base_compatibility")
+            if compatibility and compatibility.get("snapshot_id") != self.manifest["snapshot_id"]:
+                request.pop("base_compatibility")
+                store.update(conn, self.round_id, request_json=json.dumps(request, sort_keys=True))
+                self.request.pop("base_compatibility", None)
+                self.base_refresh = None
             if checkpoint and self.manifest["base_sha"] == checkpoint["base_sha"]:
                 request.pop("base_merge")
                 request.pop("final_feedback", None)
@@ -121,7 +129,11 @@ class Coordinator(ReviewStages):
 
     def check_launch_budget(self, stage, prompt_hash, previous):
         failed = [
-            run for run in previous if run["status"] == ModelRunStatus.FAILED and run["prompt_sha256"] == prompt_hash
+            run
+            for run in previous
+            if run["status"] in {ModelRunStatus.FAILED, ModelRunStatus.INTERRUPTED}
+            and run["prompt_sha256"] == prompt_hash
+            and (run["dispatch"].get("pid") or run["status"] == ModelRunStatus.FAILED)
         ]
         override = self.request.get("retry_attempt_id") == self.attempt_id and not any(
             run["owner_attempt_id"] == self.attempt_id for run in failed
@@ -133,7 +145,7 @@ class Coordinator(ReviewStages):
         return stage != "implement" or super().phase_input_changed(stage)
 
     def preserve_phase_artifact(self, run):
-        return run["status"] == ModelRunStatus.SUCCEEDED and run["stage"] in {"address_findings", "verify_final"}
+        return artifact_available(run) and run["stage"] in {"address_findings", "verify_final"}
 
     def stage_environment(self, run):
         environment = super().stage_environment(run)
@@ -146,6 +158,8 @@ class Coordinator(ReviewStages):
         return environment
 
     def stage_worktree(self, run):
+        if (run.get("dispatch") or {}).get("native_resume"):
+            return super().stage_worktree(run)
         if run["stage"] == "repair_handoff":
             return self.handoff_repair_worktree
         if run["stage"] == "verify_final":
@@ -170,6 +184,26 @@ class Coordinator(ReviewStages):
             return handoff_repair.repair(self, current, validate, model, exc)
 
     def address_workspace(self, run_id):
+        with store.connect(self.db_path) as conn:
+            runs = store.runs(conn, self.round_id)
+        run = next((r for r in runs if r["run_id"] == run_id), None)
+        if run and (resume := run["dispatch"].get("native_resume")):
+            path = Path(resume["cwd"])
+            owner = Path(self.repo["worktree_root"]) / "pre-pr-address" / self.round_id
+            if path.parent != owner or run["stage"] != "address_findings":
+                raise StageStopped("native address writer is outside its round")
+            parent = next((r for r in runs if r["run_id"] == run["dispatch"].get("parent_run_id")), None)
+            checkpoint = parent and (
+                parent["dispatch"].get("result_checkpoint") or parent["dispatch"].get("launch_checkpoint")
+            )
+            if (
+                not parent
+                or parent["stage"] != "address_findings"
+                or not checkpoint
+                or checkpoint["worktree_path"] != str(path)
+            ):
+                raise StageStopped("native address source writer changed")
+            return path
         return Path(self.repo["worktree_root"]) / "pre-pr-address" / self.round_id / run_id
 
     def validate_candidate(self, output, _model):
@@ -221,8 +255,18 @@ class Coordinator(ReviewStages):
             self.stage = "implement"
             candidate = self.run_phase("implement", self.implementer, prompt_path, self.validate_candidate)
         self.stage = "snapshot"
+        base_impact.verify_original(self)
+        base_impact.verify_saved(self, self.request.get("base_compatibility"))
         base_sha = self.observe_base(self.repo["repo_root"], "upstream", self.base)
-        if self.manifest.get("base_sha") != base_sha or self.manifest.get("original_request") != self.original_request:
+        original_matches = self.manifest.get("original_request") == self.original_request
+        if self.manifest.get("base_sha") != base_sha and original_matches:
+            preserved = self.preserve_completed_repair(candidate, align=False)
+            if self.accept_base_refresh(base_sha, preserved["head"]):
+                self.check_base(preserved["head"])
+                self.stage = "prepare"
+                self.prepare_context()
+                return
+        if self.manifest.get("base_sha") != base_sha or not original_matches:
             changed_base = bool(self.manifest.get("base_sha") and self.manifest["base_sha"] != base_sha)
             candidate = self.preserve_completed_repair(candidate, align=not changed_base)
             git(self.repo["repo_root"], "fetch", "upstream", base_sha)
@@ -270,7 +314,7 @@ class Coordinator(ReviewStages):
             entry = store.session(conn, task_id=self.task_id)
             history = store.runs(conn, self.round_id)
         for run in reversed(history):
-            if run["stage"] != "address_findings" or run["status"] != ModelRunStatus.SUCCEEDED:
+            if run["stage"] != "address_findings" or not artifact_available(run):
                 continue
             artifact = run["artifact"]
             path = artifact.get("dispositions_path")
@@ -374,23 +418,46 @@ class Coordinator(ReviewStages):
             raise StageStopped("assigned branch is not the exact intended base merge")
 
     def check_base(self, final=None):
+        base_impact.verify_original(self)
         current = self.observe_base(self.repo["repo_root"], "upstream", self.base)
+        base_impact.verify_saved(self, self.request.get("base_compatibility"))
         if current != self.manifest["base_sha"]:
-            if final and self.accept_base_refresh(current, final):
+            if final is None:
+                preserved = self.preserve_completed_repair(self.manifest["candidate"], align=False)
+                final = preserved["head"]
+            if self.accept_base_refresh(current, final):
                 return current
             raise BaseRefreshRequired(current)
         self.base_refresh = None
         return current
 
     def accept_base_refresh(self, current, final):
+        base_impact.verify_original(self)
         root = self.repo["repo_root"]
         reviewed = self.manifest["base_sha"]
         git(root, "fetch", "upstream", current)
-        self.base_refresh = documentation_refresh(root, reviewed, current, final)
-        return bool(self.base_refresh)
+        certificate = compatibility_refresh(
+            root,
+            reviewed,
+            current,
+            final,
+            round_id=self.round_id,
+            snapshot_id=self.manifest["snapshot_id"],
+            candidate=self.manifest["head_sha"],
+        )
+        if not certificate:
+            self.base_refresh = None
+            return False
+        return base_impact.save_compatibility(self, certificate)
 
     def refresh_base(self, changed):
+        base_impact.verify_original(self)
         candidate = self.manifest["candidate"]
+        preserved = self.preserve_completed_repair(candidate, align=False)
+        final = changed.disposition["head"] if changed.disposition else preserved["head"]
+        if self.accept_base_refresh(changed.current, final):
+            return
+        candidate = preserved
         if changed.disposition:
             candidate = {**candidate, "head": changed.disposition["head"]}
             current = clean_head(self.assigned_path, self.branch)
@@ -422,40 +489,108 @@ class Coordinator(ReviewStages):
 
     def report(self, records):
         self.stage = "synthesis"
+        self.check_active()
+        evaluation_identity = {"records": records}
+        load_anchor, save_anchor = ReviewStages.report_anchor_callbacks(self)
         if len(records) == 1:
+            for kind in ("result", "report"):
+                if files.sha256_file(records[0][kind + "_path"]) != records[0][kind + "_sha256"]:
+                    raise StageStopped("selected reviewer artifact hash changed")
             result = files.read_result(records[0]["result_path"], self.manifest)
             items = result["findings"] + result["dismissed_findings"]
-            body = files.render_individual(result, records[0]["worker_id"], records[0]["model"])
+
+            def render():
+                return files.render_individual(result, records[0]["worker_id"], records[0]["model"])
         else:
-            evaluation = self.evaluate(records)
-            items = evaluation["items"]
-            body = files.render_merged(self.manifest, records, evaluation)
-        body += "\n\n## Finding IDs\n" + "\n".join(f"- `{item['id']}` {item['title']}" for item in items)
-        report = redact_report(body)
-        if not report["ok"]:
-            raise StageStopped("review report did not pass public content redaction")
-        body = report["text"]
-        # The exact review input set determines the immutable report path.
-        path = self.prompt(f"report-{hashlib.sha256(body.encode()).hexdigest()}.md", body)
-        sha = store.digest(path)
-        self.check_active()
-        with store.connect(self.db_path) as conn:
-            transactions.begin(conn, immediate=True)
-            if not attempt_is_active(conn, self.task_id, self.attempt_id):
-                raise StageStopped("review owner changed")
-            store.update(conn, self.round_id, report_path=str(path), report_sha256=sha)
-            db_write_artifacts.insert_for_register(
-                conn,
-                f"{self.round_id}:{sha}",
-                self.task_id,
-                self.attempt_id,
-                "pre_pr_review_report",
-                str(path),
-                sha,
-                path.stat().st_size,
-                store.now(),
+            inputs = files.write_synthesis_inputs(self.manifest, records)
+
+            def completed_evaluation():
+                with store.connect(self.db_path) as conn:
+                    runs = store.runs(conn, self.round_id)
+                return next(
+                    (
+                        run["artifact"]
+                        for run in reversed(runs)
+                        if run["stage"] == "synthesis"
+                        and artifact_available(run)
+                        and run["artifact"].get("input_sha256") == inputs["sha256"]
+                        and run["artifact"].get("evaluation_path")
+                    ),
+                    None,
+                )
+
+            completed = completed_evaluation()
+            if completed is None:
+                self.evaluate(records)
+                completed = completed_evaluation()
+            if completed is None:
+                raise StageStopped("completed evaluation has no registered input identity")
+            evaluation_identity.update(
+                evaluation_path=completed["evaluation_path"],
+                evaluation_sha256=completed["evaluation_sha256"],
+                input_sha256=inputs["sha256"],
             )
-        return path, sha, [item["id"] for item in items]
+            if files.sha256_file(completed["evaluation_path"]) != completed["evaluation_sha256"]:
+                raise StageStopped("registered review evaluation changed")
+            evaluation = files.read_evaluation(completed["evaluation_path"], self.manifest, records)
+            items = evaluation["items"]
+
+            def render():
+                return files.render_merged(self.manifest, records, evaluation)
+
+        def render_with_ids():
+            return render() + "\n\n## Finding IDs\n" + "\n".join(f"- `{item['id']}` {item['title']}" for item in items)
+
+        def register(report):
+            self.check_active()
+            path, sha = report["path"], report["sha256"]
+            with store.connect(self.db_path) as conn:
+                transactions.begin(conn, immediate=True)
+                if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                    raise StageStopped("review owner changed")
+                store.update(conn, self.round_id, report_path=str(path), report_sha256=sha)
+                db_write_artifacts.insert_for_register(
+                    conn,
+                    f"{self.round_id}:{sha}",
+                    self.task_id,
+                    self.attempt_id,
+                    "pre_pr_review_report",
+                    str(path),
+                    sha,
+                    path.stat().st_size,
+                    store.now(),
+                )
+                checkpoint = report["checkpoint_path"]
+                db_write_artifacts.insert_for_register(
+                    conn,
+                    f"{self.round_id}:report-checkpoint:{report['input_sha256']}",
+                    self.task_id,
+                    self.attempt_id,
+                    "pre_pr_review_report_checkpoint",
+                    str(checkpoint),
+                    report["checkpoint_sha256"],
+                    checkpoint.stat().st_size,
+                    store.now(),
+                )
+
+        try:
+            report = report_checkpoint.seal_rendered_report(
+                self.db_path,
+                self.round_id,
+                self.manifest,
+                evaluation_identity,
+                render_with_ids,
+                redact=redact_report,
+                renderer_version=report_checkpoint.code_version(files.__file__, __file__),
+                redaction_version=report_checkpoint.code_version(redaction.__file__),
+                check_active=self.check_active,
+                register=register,
+                load_anchor=load_anchor,
+                save_anchor=save_anchor,
+            )
+        except report_checkpoint.RedactionBlocked as exc:
+            raise StageStopped(str(exc)) from exc
+        return report["path"], report["sha256"], [item["id"] for item in items]
 
     def address(self, path, report_sha, ids):
         self.stage = "address_findings"
@@ -644,25 +779,101 @@ class Coordinator(ReviewStages):
             for item in response["dispositions"]
             if item["status"] in ("deferred", "dismissed")
         ]
-        append = "\n".join(
-            [
-                "## Review 报告",
-                f"送审提交：`{head}`",
-                f"最终提交：`{final}`",
-                "",
-                body,
-                "",
-                "## 已修复",
-                *(fixed or ["无。"]),
-                "",
-                "## 未处理及原因",
-                *(deferred or ["无。"]),
-            ]
+        load_anchor, save_anchor = ReviewStages.report_anchor_callbacks(self)
+        evaluation_identity = report_checkpoint.report_input_identity(
+            self.db_path,
+            self.round_id,
+            self.manifest,
+            report,
+            report_sha,
+            check_active=self.check_active,
+            load_anchor=load_anchor,
+            redact=redact_report,
         )
-        redacted = redact_report(append)
-        if not redacted["ok"]:
-            raise StageStopped("review dispositions did not pass public content redaction")
-        action["body"] = response["body"] + "\n\n" + redacted["text"]
+        if evaluation_identity is None:
+            # Historical successful reports predate filesystem checkpoints.
+            # Their exact durable session registration remains the authority;
+            # retain those bytes rather than deriving a new model evaluation.
+            with store.connect(self.db_path) as conn:
+                saved = store.session(conn, round_id=self.round_id)
+            if not saved or saved["report_path"] != str(report) or saved["report_sha256"] != report_sha:
+                raise StageStopped("legacy review report registration changed")
+            evaluation_identity = {
+                "records": [],
+                "legacy_report": {
+                    "path": str(report),
+                    "sha256": report_sha,
+                    "round_id": self.round_id,
+                },
+            }
+        evaluation_identity = {
+            **evaluation_identity,
+            "public_report": {"path": str(report), "sha256": report_sha},
+            "dispositions": {
+                "path": disposition["dispositions_path"],
+                "sha256": disposition["dispositions_sha256"],
+            },
+            "candidate_sha": head,
+            "final_sha": final,
+        }
+
+        def render_appendix():
+            return "\n".join(
+                [
+                    "## Review 报告",
+                    f"送审提交：`{head}`",
+                    f"最终提交：`{final}`",
+                    "",
+                    body,
+                    "",
+                    "## 已修复",
+                    *(fixed or ["无。"]),
+                    "",
+                    "## 未处理及原因",
+                    *(deferred or ["无。"]),
+                ]
+            )
+
+        def register_appendix(appendix):
+            self.check_active()
+            with store.connect(self.db_path) as conn:
+                transactions.begin(conn, immediate=True)
+                if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                    raise StageStopped("review owner changed before appendix registration")
+                for kind, path, sha in (
+                    ("appendix", appendix["path"], appendix["sha256"]),
+                    ("checkpoint", appendix["checkpoint_path"], appendix["checkpoint_sha256"]),
+                ):
+                    db_write_artifacts.insert_for_register(
+                        conn,
+                        f"{self.round_id}:review-{kind}:{appendix['input_sha256']}",
+                        self.task_id,
+                        self.attempt_id,
+                        f"pre_pr_review_{kind}",
+                        str(path),
+                        sha,
+                        path.stat().st_size,
+                        store.now(),
+                    )
+
+        try:
+            appendix = report_checkpoint.seal_rendered_report(
+                self.db_path,
+                self.round_id,
+                self.manifest,
+                evaluation_identity,
+                render_appendix,
+                redact=redact_report,
+                renderer_version=report_checkpoint.code_version(files.__file__, __file__),
+                redaction_version=report_checkpoint.code_version(redaction.__file__),
+                check_active=self.check_active,
+                register=register_appendix,
+                load_anchor=load_anchor,
+                save_anchor=save_anchor,
+            )
+        except report_checkpoint.RedactionBlocked as exc:
+            raise StageStopped("review dispositions did not pass public content redaction") from exc
+        action["body"] = response["body"] + "\n\n" + appendix["path"].read_text(encoding="utf-8")
         normalized = self.validate_submission(draft)
         normalized_pr = next(action for action in normalized["planned_github_actions"] if action["type"] == "open_pr")
         envelope = self.envelope(draft)
@@ -683,6 +894,7 @@ class Coordinator(ReviewStages):
                 raise StageSuperseded("assigned branch changed before final review handoff")
             proof = {
                 "final_verification": verification,
+                "round_id": self.round_id,
                 "attempt_id": self.attempt_id,
                 "snapshot_id": self.manifest["snapshot_id"],
                 "candidate_sha": head,
@@ -690,6 +902,7 @@ class Coordinator(ReviewStages):
                 "head_sha": final,
                 "base_ref": self.base,
                 "base_sha": publication_base,
+                "reviewed_base_sha": self.manifest["base_sha"],
                 **({"base_refresh": self.base_refresh} if self.base_refresh else {}),
                 "report_sha256": report_sha,
                 "dispositions_sha256": disposition["dispositions_sha256"],

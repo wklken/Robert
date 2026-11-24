@@ -1,0 +1,53 @@
+"""Exact stopped-stage source observations, independent of workflow selection."""
+
+import hashlib
+from pathlib import Path
+import os
+import stat
+
+from robert_agent.adapters.git.review_revision import git
+
+
+def observe_source(run, manifest, worktree):
+    path = Path(worktree).absolute()
+    if path.resolve() != path or not path.is_dir():
+        raise ValueError("stage source worktree path changed")
+    checkpoint = {
+        "run_id": run["run_id"],
+        "prompt_sha256": run["prompt_sha256"],
+        "snapshot_id": manifest.get("snapshot_id"),
+        "head_sha": manifest.get("head_sha"),
+        "base_sha": manifest.get("base_sha"),
+        "worktree_path": str(path),
+    }
+    if not manifest.get("head_sha") and not manifest.get("implementing"):
+        checkpoint["context_files"] = dict(manifest.get("files") or {})
+        return checkpoint
+    checkpoint.update(
+        worktree_head=git(path, "rev-parse", "HEAD"),
+        branch=git(path, "rev-parse", "--abbrev-ref", "HEAD"),
+        source_status=git(path, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"),
+        tracked_diff_sha256=hashlib.sha256(
+            git(path, "diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv").encode()
+        ).hexdigest(),
+    )
+    # Ignored local configuration can still affect a resumed model or its tools.
+    # Include it in the same bounded pin rather than treating Gitignore as trust.
+    untracked = git(path, "ls-files", "--others", "-z").split("\0")
+    if len(untracked) > 1001:
+        raise ValueError("stage source has too many untracked files to pin")
+    hashes = {}
+    for name in filter(None, untracked):
+        file = path / name
+        if file.resolve() != file or not file.is_relative_to(path):
+            raise ValueError("stage source contains an untracked symlink")
+        fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            if (
+                not stat.S_ISREG(os.fstat(stream.fileno()).st_mode)
+                or os.fstat(stream.fileno()).st_size > 16 * 1024 * 1024
+            ):
+                raise ValueError("stage source untracked file cannot be pinned")
+            hashes[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+    checkpoint["untracked_sha256"] = hashes
+    return checkpoint

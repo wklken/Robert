@@ -20,6 +20,8 @@ from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.work import task_state, wakeup
 import subprocess
 from robert_agent.work.application import preparation
+from robert_agent.adapters.github.pull_requests import read_pr
+import json
 
 
 def _publish_ready_actions_for_repo(
@@ -472,6 +474,17 @@ def run_repo_pipeline(
         )
 
         run_journal.mark_repo_run_step(conn, run_id, repo_id, "route", "running", run_now)
+
+        def review_fetch_pr(repo_name, number):
+            if discovery_runner is None:
+                return read_pr(repo_name, number)
+            completed = discovery_runner(
+                ["gh", "api", f"repos/{repo_name}/pulls/{number}"], capture_output=True, text=True
+            )
+            if completed.returncode != 0:
+                raise ValueError("PR revision observation failed")
+            return json.loads(completed.stdout)
+
         route_failures = intake.admit_requests(
             conn,
             data_dir=data_dir,
@@ -489,6 +502,7 @@ def run_repo_pipeline(
             known_workstreams=known_workstreams,
             active_workstreams=active_workstreams,
             summary=summary,
+            review_fetch_pr=review_fetch_pr if fixture_path is None else None,
         )
 
         if route_failures:

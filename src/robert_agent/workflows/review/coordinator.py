@@ -5,6 +5,8 @@ from robert_agent.foundation.contracts.execution import RoundStatus
 
 from robert_agent.persistence.stores import artifacts as db_write_artifacts
 from robert_agent.persistence.stores import attempts as db_write_attempts
+from robert_agent.persistence.queries import artifacts as db_read_artifacts
+from robert_agent.persistence import transactions
 import argparse
 import hashlib
 import json
@@ -19,6 +21,7 @@ from robert_agent.delivery.application import validation as result_validation
 from robert_agent.workflows.review import files as review_files
 from robert_agent.workflows.review import workspace as review_workspace
 from robert_agent.workflows.review import preparation as review_preparation
+from robert_agent.workflows.review import report_checkpoint
 from robert_agent.persistence.rounds import review as store
 from robert_agent.adapters.github.pull_requests import read_pr
 from robert_agent.execution.stages import (
@@ -31,6 +34,7 @@ from robert_agent.execution.stages import (
 from robert_agent.execution.rounds import SLOT_STORES
 from robert_agent.delivery.application import submission as worker_result
 from robert_agent.work import decision_owner
+from robert_agent.work import review_identity
 
 
 def same_revision(manifest, pr):
@@ -62,6 +66,50 @@ class ReviewStages(StageCoordinator):
     }
     artifact_kinds = ("result", "report", "evaluation", "context_summary", "source_index")
     workflow_name = "review"
+
+    def report_anchor_callbacks(self):
+        """Persist a report's trusted seal before its independent DB registration."""
+
+        def load(input_sha):
+            artifact_id = f"{self.round_id}:report-seal-anchor:{input_sha}"
+            with self.store.connect(self.db_path) as conn:
+                anchor = db_read_artifacts.report_checkpoint_anchor(conn, artifact_id)
+            if anchor is None:
+                return None
+            expected_path = (
+                Path(self.manifest["artifact_root"]).resolve() / "report-checkpoints" / input_sha / "seal.json"
+            )
+            if anchor["artifact_type"] != "review_report_seal_anchor" or anchor["path"] != str(expected_path):
+                raise StageStopped("trusted report seal registration changed")
+            return {"path": anchor["path"], "sha256": anchor["sha256"]}
+
+        def save(report):
+            self.check_active()
+            checkpoint = report["checkpoint_path"]
+            with self.store.connect(self.db_path) as conn:
+                transactions.begin(conn, immediate=True)
+                if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                    raise StageStopped("review owner changed before seal registration")
+                if (
+                    review_files.sha256_file(checkpoint) != report["checkpoint_sha256"]
+                    or review_files.sha256_file(report["path"]) != report["sha256"]
+                ):
+                    raise StageStopped("report seal changed before trusted registration")
+                db_write_artifacts.insert_for_register(
+                    conn,
+                    f"{self.round_id}:report-seal-anchor:{report['input_sha256']}",
+                    self.task_id,
+                    self.attempt_id,
+                    "review_report_seal_anchor",
+                    str(checkpoint),
+                    report["checkpoint_sha256"],
+                    checkpoint.stat().st_size,
+                    self.store.now(),
+                )
+            if load(report["input_sha256"]) != {"path": str(checkpoint), "sha256": report["checkpoint_sha256"]}:
+                raise StageStopped("trusted report seal registration changed")
+
+        return load, save
 
     def prepare_context(self):
         review_workspace.verify_snapshot(self.manifest)
@@ -180,6 +228,7 @@ class ReviewStages(StageCoordinator):
             return {"evaluation_path": str(path), "evaluation_sha256": store.digest(path)}
 
         result = self.run_phase("synthesis", self.request["workers"][0], prompt, validate, input_hash=inputs["sha256"])
+        self.evaluation_identity = {**result, "records": records}
         return review_files.read_evaluation(result["evaluation_path"], self.manifest, records)
 
 
@@ -191,6 +240,25 @@ class Coordinator(ReviewStages):
         super().__init__(db_path, task_id, attempt_id, **kwargs)
         self.fetch_pr = fetch_pr
 
+    def _check_canonical_source(self, pr):
+        canonical = self.request.get("canonical_identity")
+        if not canonical:
+            return
+        if review_identity.revision(pr) != {key: canonical[key] for key in ("head_sha", "base_sha", "base_ref")}:
+            raise StageSuperseded("PR revision changed after canonical admission")
+        acceptance = canonical["acceptance"]
+        if pr.get("title", "") != acceptance["title"] or pr.get("body", "") != acceptance["source_body"]:
+            raise StageSuperseded("PR acceptance changed after canonical admission")
+
+    def _check_canonical_snapshot(self):
+        if not self.request.get("canonical_identity"):
+            return
+        review_workspace.verify_snapshot(self.manifest)
+        path = review_files.safe_path(
+            Path(self.manifest["context_dir"]) / "pr-info.json", self.manifest["artifact_root"]
+        )
+        self._check_canonical_source(json.loads(path.read_text(encoding="utf-8")))
+
     def prepare(self):
         self.phase(RoundStatus.PREPARING.value)
         self.reconcile_running()
@@ -201,6 +269,7 @@ class Coordinator(ReviewStages):
                 pr = self.fetch_pr(repo["full_name"], self.session["pr_number"])
                 if pr.get("state") != "open":
                     raise StageSuperseded("PR is closed")
+                self._check_canonical_source(pr)
                 expected_author = self.request["event"].get("pr_author_login", "")
                 if pr.get("user", {}).get("login", "").casefold() != expected_author.casefold():
                     raise ValueError("PR author does not match the authorized review request")
@@ -231,16 +300,69 @@ class Coordinator(ReviewStages):
                     if retry or "changed while fetching" not in str(exc):
                         raise
             self.save_manifest()
+        elif self.request.get("canonical_identity"):
+            self._check_canonical_source(self.fetch_pr(repo["full_name"], self.session["pr_number"]))
+        self._check_canonical_snapshot()
         self.prepare_context()
-        if not same_revision(self.manifest, self.fetch_pr(repo["full_name"], self.session["pr_number"])):
+        current_pr = self.fetch_pr(repo["full_name"], self.session["pr_number"])
+        self._check_canonical_source(current_pr)
+        self._check_canonical_snapshot()
+        if not same_revision(self.manifest, current_pr):
             raise StageSuperseded("PR head/base changed after context preparation")
 
     def synthesize(self, records):
         evaluation = self.evaluate(records)
-        body = review_files.render_merged(self.manifest, records, evaluation)
-        body += f"\n<!-- robert-review round={self.round_id} -->\n"
-        redacted = redaction.redact_text(body)
-        if not redacted["ok"]:
+        load_anchor, save_anchor = self.report_anchor_callbacks()
+
+        def render():
+            return (
+                review_files.render_merged(self.manifest, records, evaluation)
+                + f"\n<!-- robert-review round={self.round_id} -->\n"
+            )
+
+        def register_report(descriptor):
+            path = descriptor["path"]
+            review_workspace.verify_snapshot(self.manifest)
+            self.check_active()
+            with store.connect(self.db_path) as conn:
+                if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                    raise StageStopped("review attempt is no longer current")
+                store.update(
+                    conn,
+                    self.round_id,
+                    status=RoundStatus.READY.value,
+                    report_path=str(path),
+                    report_sha256=descriptor["sha256"],
+                )
+                db_write_artifacts.insert_for_synthesize(
+                    conn,
+                    self.round_id + ":merged",
+                    self.task_id,
+                    self.attempt_id,
+                    "review_report",
+                    str(path),
+                    descriptor["sha256"],
+                    path.stat().st_size,
+                    store.now(),
+                )
+
+        try:
+            descriptor = report_checkpoint.seal_rendered_report(
+                self.db_path,
+                self.round_id,
+                self.manifest,
+                self.evaluation_identity,
+                render,
+                redact=redaction.redact_text,
+                renderer_version=report_checkpoint.code_version(review_files.__file__, __file__),
+                redaction_version=report_checkpoint.code_version(redaction.__file__),
+                check_active=self.check_active,
+                register=register_report,
+                load_anchor=load_anchor,
+                save_anchor=save_anchor,
+            )
+        except report_checkpoint.RedactionBlocked as exc:
+            redacted = exc.result
             finding = redacted["findings"][0]
             raise ReviewSubmissionRejected(
                 result_validation.failure(
@@ -251,31 +373,11 @@ class Coordinator(ReviewStages):
                         "safe_error": f"{finding['rule']} at line {finding['line']}, column {finding['column']}",
                     }
                 )
-            )
-        body = redacted["text"]
-        path = Path(self.manifest["artifact_root"]) / "synthesis" / "merged-review.md"
-        path.write_text(body, encoding="utf-8")
+            ) from exc
+        path = descriptor["path"]
+        body = path.read_text(encoding="utf-8")
         review_workspace.verify_snapshot(self.manifest)
         self.check_active()
-        with store.connect(self.db_path) as conn:
-            store.update(
-                conn,
-                self.round_id,
-                status=RoundStatus.READY.value,
-                report_path=str(path),
-                report_sha256=store.digest(path),
-            )
-            db_write_artifacts.insert_for_synthesize(
-                conn,
-                self.round_id + ":merged",
-                self.task_id,
-                self.attempt_id,
-                "review_report",
-                str(path),
-                store.digest(path),
-                path.stat().st_size,
-                store.now(),
-            )
         action = {
             "type": GitHubActionType.SUBMIT_PR_REVIEW.value,
             "target_url": f"https://github.com/{self.session['repo']}/pull/{self.session['pr_number']}",
@@ -285,7 +387,7 @@ class Coordinator(ReviewStages):
             self.task_id,
             self.attempt_id,
             OutputType.MULTI_AGENT_REVIEW_REPORT.value,
-            [self.session["trigger_fingerprint"]],
+            [item["trigger_fingerprint"] for item in self.triggers()],
             [],
             f"Review report: {path}",
             [action],
@@ -300,6 +402,11 @@ class Coordinator(ReviewStages):
         with store.connect(self.db_path) as conn:
             db_write_attempts.update_for_synthesize(conn, self.attempt_id)
         return path
+
+    def triggers(self):
+        with store.connect(self.db_path) as conn:
+            associations = store.trigger_associations(conn, self.round_id)
+        return associations or [{"trigger_fingerprint": self.session["trigger_fingerprint"]}]
 
     def run(self):
         try:

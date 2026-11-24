@@ -68,16 +68,25 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
         with fixture_database.connect(self.db) as conn:
             conn.executescript(fixture.read_text())
             schema.initialize(conn)
+            conn.execute(
+                "CREATE TABLE model_usage(kind TEXT, call_id TEXT, scope_id TEXT, recorded_at TEXT, "
+                "usage_json TEXT, PRIMARY KEY(kind,call_id))"
+            )
             self.task, self.attempt = conn.execute("SELECT task_id,attempt_id FROM attempts").fetchone()
             store.create(conn, self.task, {})
         self.driver = RepairDriver(self.db, self.task, self.attempt)
-        self.driver.manifest = {"artifact_root": str(self.root / "artifacts")}
+        self.driver.manifest = {"artifact_root": str(self.root / "artifacts"), "worktree_path": str(self.repo)}
         Path(self.driver.manifest["artifact_root"]).mkdir()
         self.driver.assigned_path = str(self.repo)
         self.driver.branch = "feature"
         self.driver.address_path = self.root / "address"
         self.git(self.repo, "worktree", "add", "--detach", str(self.driver.address_path), "HEAD")
-        self.driver.implementer = {"name": "writer", "default_model": "repair-model", "timeout_seconds": 4200}
+        self.driver.implementer = {
+            "name": "writer",
+            "agent": "codex",
+            "default_model": "repair-model",
+            "timeout_seconds": 4200,
+        }
         self.driver.launches, self.driver.failures, self.driver.on_launch = [], 0, None
         self.value = {
             "planned_github_actions": [

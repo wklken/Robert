@@ -211,7 +211,16 @@ def supervise_running_attempts(
             )
             if not _supervision_observation_current(conn, attempt_id, task_id, snapshot, received_result, run_now):
                 continue
-            record_dispatch_usage(conn, data_dir, "worker", attempt_id, task_id, dispatch, observed=observed)
+            record_dispatch_usage(
+                conn,
+                data_dir,
+                "worker",
+                attempt_id,
+                task_id,
+                dispatch,
+                observed=observed,
+                terminal=process_status["status"] == "dead",
+            )
         if received_result and process_status["status"] != "unknown":
             if process_status["status"] == "dead" or status.get("terminate"):
                 if process_status["status"] == "dead":
@@ -803,7 +812,9 @@ def terminate_owned_attempt(conn, task_id, metadata):
         if isinstance(dispatch, dict) and dispatch.get("attempt_id"):
             database = db_sqlite.main_database_path(conn)
             if database:
-                record_dispatch_usage(conn, database.parent, "worker", dispatch["attempt_id"], task_id, dispatch)
+                record_dispatch_usage(
+                    conn, database.parent, "worker", dispatch["attempt_id"], task_id, dispatch, terminal=True
+                )
     return outcome
 
 

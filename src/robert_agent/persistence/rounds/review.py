@@ -14,6 +14,11 @@ from robert_agent.persistence.stores import (
 )
 from robert_agent.persistence.stores import review_runs as db_write_review_runs
 from robert_agent.persistence.stores import review_sessions as db_write_review_sessions
+from robert_agent.persistence.queries import review_executions as execution_queries
+from robert_agent.persistence.stores import review_executions as execution_store
+from robert_agent.persistence.stores import task_events
+from robert_agent.persistence.queries import github_events
+from robert_agent.persistence import transactions
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import hashlib
@@ -55,7 +60,7 @@ def session(conn, *, round_id=None, task_id=None):
     return decode(dict(row)) if row is not None else None
 
 
-def enqueue(conn, repo, event, route, workers, *, recovery_key=None):
+def enqueue(conn, repo, event, route, workers, *, recovery_key=None, canonical_identity=None):
     trigger = event["event_fingerprint"] + (":recovery:" + recovery_key if recovery_key else "")
     key = f"{repo['full_name']}:{event['number']}:{trigger}"
     round_id = "review-" + hashlib.sha256(key.encode()).hexdigest()[:24]
@@ -66,6 +71,24 @@ def enqueue(conn, repo, event, route, workers, *, recovery_key=None):
         "workers": [dict(worker) for worker in workers],
     }
     timestamp = now()
+    # A write lock is acquired before the first identity lookup, preserving
+    # scanner races and caller transaction ownership. No network runs here.
+    if not conn.in_transaction:
+        transactions.begin_immediate(conn)
+    association = execution_queries.trigger(conn, repo["full_name"], event["number"], trigger)
+    if association:
+        return session(conn, round_id=association["round_id"])
+    canonical = canonical_identity if not recovery_key else None
+    if canonical:
+        encoded_identity = json.dumps(canonical["identity"], ensure_ascii=False, sort_keys=True)
+        execution = execution_queries.by_key(conn, canonical["key"])
+        if execution:
+            if execution["identity_json"] != encoded_identity:
+                raise ValueError("canonical review identity conflict")
+            round_id = execution["round_id"]
+        else:
+            round_id = "review-" + hashlib.sha256(canonical["key"].encode()).hexdigest()[:24]
+            request["canonical_identity"] = canonical["identity"]
     db_write_review_sessions.insert_for_enqueue(
         conn,
         round_id,
@@ -77,7 +100,117 @@ def enqueue(conn, repo, event, route, workers, *, recovery_key=None):
         timestamp,
         timestamp,
     )
+    if canonical:
+        execution_store.register(conn, canonical["key"], round_id, encoded_identity, timestamp)
+    execution_store.attach(
+        conn,
+        repo=repo["full_name"],
+        number=event["number"],
+        fingerprint=trigger,
+        round_id=round_id,
+        workstream_id=event["workstream_id"],
+        request_json=json.dumps(request, ensure_ascii=False, sort_keys=True),
+        authorization_json=json.dumps(
+            {
+                key: event.get(key)
+                for key in (
+                    "authorization_status",
+                    "drives_execution",
+                    "actor_login",
+                    "requester_login",
+                    "authorization_lookup_complete",
+                    "body_authorization_complete",
+                )
+            },
+            sort_keys=True,
+        ),
+        now=timestamp,
+    )
+    bind_triggers(conn, round_id)
     return session(conn, round_id=round_id)
+
+
+def trigger_associations(conn, round_id):
+    result = []
+    for row in execution_queries.triggers(conn, round_id):
+        item = dict(row)
+        for field in ("request_json", "authorization_json", "completion_json"):
+            item[field[:-5]] = json.loads(item.pop(field) or "{}")
+        result.append(item)
+    return result
+
+
+def bind_triggers(conn, round_id):
+    entry = session(conn, round_id=round_id)
+    if not entry or not entry["task_id"]:
+        return
+    execution_store.bind(conn, round_id, entry["task_id"], now())
+    for trigger in trigger_associations(conn, round_id):
+        fingerprint = trigger["request"]["event"]["event_fingerprint"]
+        event_id = "event:" + fingerprint
+        if github_events.find_event_at_by_event_id(conn, event_id):
+            # Associations explicitly distinguish accepted/bound from completed.
+            # This relationship excludes a late equivalent trigger from pending
+            # input refresh while retaining durable source/task lineage.
+            task_events.insert_for_append_event_to_active_task(conn, entry["task_id"], event_id, "consumed", now())
+
+
+def complete_triggers(conn, round_id):
+    """Link every trigger to the original, audited publication receipt only."""
+    entry = session(conn, round_id=round_id)
+    if not entry or entry["status"] != "published" or not entry["task_id"]:
+        return False
+    manifest = entry["manifest"]
+    try:
+        if digest(entry["report_path"]) != entry["report_sha256"]:
+            return False
+    except (OSError, TypeError):
+        return False
+    for row in execution_queries.published_actions(conn, entry["task_id"]):
+        action = dict(row)
+        try:
+            metadata = json.loads(action["metadata_json"])
+            receipt = metadata["publish"]["receipt"]
+            scope = receipt["scope"]
+            result_metadata = json.loads(action["result_metadata_json"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (
+            (result_metadata.get("audit") or {}).get("status") == "accepted"
+            and receipt.get("action_id") == action["action_id"]
+            and receipt.get("result_id") == action["result_id"]
+            and receipt.get("task_id") == entry["task_id"]
+            and receipt.get("external_id")
+            and receipt.get("confirmed_at")
+            and scope.get("review_round_id") == round_id
+            and scope.get("review_head_sha") == manifest.get("head_sha")
+            and scope.get("review_base_sha") == manifest.get("base_sha")
+            and scope.get("review_base_ref") == manifest.get("base_ref")
+            and scope.get("review_report_path") == entry["report_path"]
+            and scope.get("review_report_sha256") == entry["report_sha256"]
+        ):
+            continue
+        bind_triggers(conn, round_id)
+        completion = {
+            "round_id": round_id,
+            "task_id": entry["task_id"],
+            "attempt_id": action["attempt_id"],
+            "result_id": action["result_id"],
+            "action_id": action["action_id"],
+            "report_sha256": entry["report_sha256"],
+            "receipt": receipt,
+        }
+        execution_store.complete(
+            conn,
+            round_id,
+            entry["task_id"],
+            action["result_id"],
+            action["action_id"],
+            json.dumps(completion, ensure_ascii=False, sort_keys=True),
+            now(),
+        )
+        return True
+    return False
 
 
 def update(conn, round_id, **fields):
@@ -164,7 +297,9 @@ def release_slot(conn, run_id):
 
 
 def can_abandon(run):
-    return run["status"] == ModelRunStatus.STARTING and not run["dispatch"] and bool(run.get("slot_reserved"))
+    return (
+        run["status"] == ModelRunStatus.STARTING and not run["dispatch"].get("pid") and bool(run.get("slot_reserved"))
+    )
 
 
 def task_status(conn, task_id):

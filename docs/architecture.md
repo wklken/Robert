@@ -546,6 +546,16 @@ flowchart TD
 两种内建协调器共用 `StageCoordinator` 和 SQLite 模型进程池。一轮占一个任务并发槽，
 各阶段模型再申请共享额度。图用两个模型说明阶段顺序，实际数量来自配置。
 
+多模型 PR review 通过 [review_identity](../src/robert_agent/work/review_identity.py) 核对当前完整修订、
+范围、reviewer 配置、验收意图与资格。等价触发在 `review_executions` 绑定唯一执行，
+`review_triggers` 分别保存授权、原任务关联以及同一报告的发布完成回执；原 task/attempt 继续持有模型额度。
+晚到触发不改冻结输入，历史重复轮次不自动取消。报告由
+[report_checkpoint](../src/robert_agent/workflows/review/report_checkpoint.py) 分别固定渲染、脱敏与封存事实，
+数据库保存公开报告登记前的可信封存 hash。没有可信封存记录的缓存须从原始输入重新推导并逐字核对。
+共享 [stage_evidence](../src/robert_agent/execution/stage_evidence.py) 固定阶段源码，
+[session_resume](../src/robert_agent/adapters/processes/session_resume.py) 验证 provider 会话历史；
+具体 adapter 构造显式 resume 命令，共享执行层保留原会话目录与独立调用段。
+
 ```mermaid
 sequenceDiagram
     participant Local as Local drain

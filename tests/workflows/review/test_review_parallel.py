@@ -70,6 +70,10 @@ while not (gate.exists() and (output/'registered').exists()):
 sys.exit(int(sys.argv[3]))
 """
         exit_code = self.exit_codes.get(kwargs["worker_agent_config"]["name"], 0)
+        if exit_code:
+            # This scenario exercises incomplete output recovery. Complete
+            # independently valid output is now adopted even after nonzero exit.
+            (output / "result.json").unlink()
         kwargs["worker_agent_config"] = {
             "agent": "command",
             "command_argv": [sys.executable, "-c", script, str(output), str(self.gate), str(exit_code)],

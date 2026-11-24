@@ -54,3 +54,36 @@ def build_launch(
         environment_allowlist=tuple(environment_allowlist),
         timeout_seconds=int(timeout_seconds),
     )
+
+
+def build_resume_launch(
+    command_argv,
+    prompt_path,
+    worktree_path,
+    model,
+    reasoning_effort,
+    prompt_transport="stdin",
+    environment_allowlist=(),
+    timeout_seconds=3600,
+    *,
+    resume,
+):
+    # exec resume has its own parser: --cd, --sandbox and --add-dir are
+    # fresh-exec flags. Use the frozen cwd and retained session permissions.
+    command = [*command_argv]
+    if reasoning_effort != "default":
+        command.extend(["--config", f"model_reasoning_effort={json.dumps(reasoning_effort)}"])
+    command.extend(["exec", "resume"])
+    if model != "default":
+        command.extend(["--model", model])
+    command.extend(["--dangerously-bypass-approvals-and-sandbox", "--json", resume["session_id"], "-"])
+    return WorkerLaunch(
+        agent=AGENT_NAME,
+        command=command,
+        cwd=resume["cwd"],
+        stdin_path=str(prompt_path),
+        stdout_format="jsonl",
+        environment_allowlist=tuple(environment_allowlist),
+        timeout_seconds=int(timeout_seconds),
+        resume=resume,
+    )

@@ -43,6 +43,30 @@ CREATE TABLE IF NOT EXISTS review_runs (
   UNIQUE(round_id, stage, worker_id, attempt_no)
 );
 CREATE INDEX IF NOT EXISTS review_sessions_workstream ON review_sessions(workstream_id, created_at);
+CREATE TABLE IF NOT EXISTS review_executions (
+  canonical_key TEXT NOT NULL PRIMARY KEY,
+  round_id TEXT NOT NULL UNIQUE REFERENCES review_sessions(round_id),
+  identity_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS review_triggers (
+  repo TEXT NOT NULL,
+  pr_number INTEGER NOT NULL,
+  trigger_fingerprint TEXT NOT NULL,
+  round_id TEXT NOT NULL REFERENCES review_sessions(round_id),
+  workstream_id TEXT NOT NULL,
+  request_json TEXT NOT NULL,
+  authorization_json TEXT NOT NULL,
+  task_id TEXT REFERENCES tasks(task_id),
+  status TEXT NOT NULL DEFAULT 'accepted',
+  result_id TEXT REFERENCES worker_results(result_id),
+  action_id TEXT REFERENCES github_actions(action_id),
+  completion_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(repo, pr_number, trigger_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS review_triggers_round ON review_triggers(round_id, created_at);
 CREATE TABLE IF NOT EXISTS review_process_pool (
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
   max_concurrency INTEGER NOT NULL CHECK(max_concurrency>0)

@@ -4,9 +4,12 @@ from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputT
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
 
 from robert_agent.persistence.rounds import pre_pr_review
+from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.rounds.records import artifact_available
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import model_usage as db_read_model_usage
 
 from robert_agent.persistence import transactions as db_transactions
 
@@ -36,6 +39,8 @@ from robert_agent.delivery import contract as result_contract
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.execution import ownership as execution_ownership
 from robert_agent.execution import retry as retry_policy
+from robert_agent.execution import rounds as native_rounds
+from robert_agent.execution import usage as model_usage
 from robert_agent.foundation import tapd_identity, values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.work import queries as work_queries
@@ -598,6 +603,10 @@ def finalize_accepted_result(
         include_consumed=payload["output_type"] == OutputType.CLASSIFICATION_RESULT,
     )
     _mark_consumed_events(conn, payload["task_id"], payload["consumed_event_fingerprints"])
+    if payload["output_type"] == OutputType.MULTI_AGENT_REVIEW_REPORT:
+        review = review_store.session(conn, task_id=payload["task_id"])
+        if review:
+            review_store.complete_triggers(conn, review["round_id"])
     pending_events = pending_events_for_task(
         conn,
         payload["task_id"],
@@ -809,6 +818,29 @@ def _complete_published_analysis_items(conn, repo_id, run_now):
     return completed
 
 
+def _record_native_delivery(conn, payload, at):
+    actions = db_read_github_actions.find_audit_status_and_publish_status_by_result_id(conn, payload["result_id"])
+    if not any(status == PublishStatus.PUBLISHED for _audit, status in actions):
+        return
+    store, session = native_rounds.owner(conn, payload["task_id"])
+    if session is None:
+        return
+    for run in store.runs(conn, session["round_id"]):
+        if not artifact_available(run):
+            continue
+        receipt = db_read_model_usage.get(conn, "stage", run["run_id"])
+        model_usage.record_call_event(
+            conn,
+            "stage",
+            run["run_id"],
+            receipt["scope_id"] if receipt else payload["task_id"],
+            "delivered",
+            at=at,
+            stage=run["stage"],
+            segment_id=(run.get("dispatch") or {}).get("usage_segment_id"),
+        )
+
+
 def finalize_published_results(
     conn,
     repo_id,
@@ -849,7 +881,7 @@ def finalize_published_results(
             now=run_now,
         )
         try:
-            finalize_accepted_result(
+            completed = finalize_accepted_result(
                 conn,
                 data_dir,
                 db_path,
@@ -867,6 +899,9 @@ def finalize_published_results(
             raise
         except subprocess.TimeoutExpired:
             continue
+        if not completed:
+            continue
+        _record_native_delivery(conn, payload, run_now)
         finalized += 1
     _complete_published_analysis_items(conn, repo_id, run_now)
     return finalized

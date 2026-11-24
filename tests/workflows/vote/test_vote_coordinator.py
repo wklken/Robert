@@ -19,7 +19,7 @@ class VoteCoordinatorTests(VoteCoordinatorFixture):
             path = Path(kwargs["prompt_path"])
             if path.name.startswith("synthesis-"):
                 failed_prompts.append(path)
-                return {"ok": False, "safe_error": "synthesis unavailable"}
+                return {"ok": False, "status": "failed_dispatch", "safe_error": "synthesis unavailable"}
             return self.launcher(**kwargs)
 
         driver.launcher = fail_synthesis

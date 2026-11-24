@@ -17,6 +17,18 @@ from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
 
 
+def report_checkpoint_anchor(conn, artifact_id):
+    """Read an immutable report seal registration, including its trusted hash."""
+    rows = statements.read(
+        conn,
+        select(tables["artifacts"].c.artifact_type, tables["artifacts"].c.path, tables["artifacts"].c.sha256).where(
+            tables["artifacts"].c.artifact_id == bindparam("artifact_id")
+        ),
+        {"artifact_id": artifact_id},
+    )
+    return dict(rows[0]) if rows else None
+
+
 def find_for_latest_artifacts(conn, task_id):
     query1 = (
         select(tables["artifacts"].c["artifact_type"], tables["artifacts"].c["path"])

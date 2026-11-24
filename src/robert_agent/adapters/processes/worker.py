@@ -110,6 +110,7 @@ def dispatch_worker(
     startup_probe_seconds=0.2,
     trusted_environment=None,
     log_dir=None,
+    resume=None,
 ):
     prompt_path = Path(prompt_path)
     try:
@@ -121,6 +122,7 @@ def dispatch_worker(
             worker_command=worker_command,
             worker_agent=worker_agent,
             worker_agent_config=worker_agent_config,
+            resume=resume,
         )
     except Exception as exc:
         return {

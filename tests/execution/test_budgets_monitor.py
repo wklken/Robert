@@ -256,6 +256,8 @@ class PipelineMonitorTests(TemporaryWorkspace):
             processes={process.pid: process},
             check_active=Mock(),
             release_slot=Mock(),
+            recovery_workers=lambda: {"reviewer": {"timeout_seconds": 60}},
+            checkpoint_result=Mock(),
             poll_seconds=0,
         )
         with (

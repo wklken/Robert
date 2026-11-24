@@ -14,7 +14,12 @@ from robert_agent.foundation import values
 from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.work import policies as work_policies
 from robert_agent.persistence.rounds import vote as vote_store
+from robert_agent.persistence.rounds import review as review_store
+from robert_agent.work import source_policy, review_identity
+from robert_agent.workflows import routing
+from robert_agent.foundation.commands import ControlDeadlineExceeded
 import json
+import subprocess
 
 
 def event_priority(event):
@@ -58,9 +63,42 @@ def dedupe_events_by_fingerprint(events):
     return deduped
 
 
-def enqueue_native_request(conn, store, repo, event, route, workers, admission, now):
+def observe_review_candidates(conn, repo, events, config, *, fetch_pr=None):
+    """Observe candidates outside the writer; None uses explicit fixture facts."""
+    candidates = []
+    for event in events:
+        if event.get("source_type") != "pull_request":
+            continue
+        authorized = source_policy.reauthorize_saved_request(event, repo)
+        if not authorized.get("drives_execution"):
+            continue
+        route = routing.effective_route(config, repo, authorized)
+        if route.get("native_review_workers"):
+            candidates.append(event)
+    observed = {}
+    if candidates and fetch_pr:
+        conn.commit()  # Accepted prior work is durable before any GitHub wait.
+    for event in candidates:
+        try:
+            pr = fetch_pr(repo["full_name"], event["number"]) if fetch_pr else review_identity.fixture_pr(event)
+        except ControlDeadlineExceeded:
+            raise
+        except (ValueError, OSError, subprocess.SubprocessError):
+            pr = None  # Unknown observation stays independent; never reuse stale evidence.
+        observed[event["event_fingerprint"]] = pr
+    return observed
+
+
+def enqueue_native_request(conn, store, repo, event, route, workers, admission, now, *, observed_pr=None):
     lineage = supervision_lineage.github_key(event)
-    round_entry = store.enqueue(conn, repo, {**event, supervision_lineage.LINEAGE_FIELD: lineage}, route, workers)
+    options = {}
+    if store is review_store:
+        options["canonical_identity"] = review_identity.canonical_request(repo, event, route, workers, observed_pr)
+    round_entry = store.enqueue(
+        conn, repo, {**event, supervision_lineage.LINEAGE_FIELD: lineage}, route, workers, **options
+    )
+    if store is review_store:
+        store.complete_triggers(conn, round_entry["round_id"])
     supervision_lineage.record_disposition(
         conn,
         admission,

@@ -60,7 +60,7 @@ class VoteCoordinatorFixture(unittest.TestCase):
         worker = kwargs["worker_agent_config"]["name"]
         self.calls.append((stage, worker, prompt.read_bytes(), kwargs["model"]))
         if stage == "vote" and worker == self.fail_worker:
-            return {"ok": False, "safe_error": "model unavailable"}
+            return {"ok": False, "status": "failed_dispatch", "safe_error": "model unavailable"}
         value = {"schema_version": 1, "round_id": manifest["round_id"], "snapshot_id": manifest["snapshot_id"]}
         if stage == "prepare":
             value.update(

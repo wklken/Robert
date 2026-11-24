@@ -223,7 +223,7 @@ def validate_final_feedback(entry, feedback):
         if (
             any(
                 run["round_id"] != entry["round_id"]
-                or run["status"] != ModelRunStatus.SUCCEEDED
+                or not round_records.artifact_available(run)
                 or run["slot_reserved"]
                 for run in (verifier, source)
             )
@@ -338,7 +338,7 @@ def release_finished_slot(conn, run):
 
 
 def can_abandon(run):
-    return run["status"] == ModelRunStatus.STARTING and not run["dispatch"]
+    return run["status"] == ModelRunStatus.STARTING and not run["dispatch"].get("pid")
 
 
 def seal_result(conn, round_id, proof):
@@ -370,7 +370,7 @@ def _matches_final_verification(entry, result_id=None):
         )
     return bool(
         run["stage"] == "verify_final"
-        and run["status"] == ModelRunStatus.SUCCEEDED
+        and round_records.artifact_available(run)
         and all(
             verification.get(key) == expected
             for key, expected in {
