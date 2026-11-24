@@ -9,6 +9,7 @@ import signal
 import subprocess
 
 from robert_agent.adapters.git.review_revision import clean_head, git, remote_branch_sha
+from robert_agent.adapters.git.workspace import check_worktree_reuse
 from robert_agent.context.native_prompts import address_findings_input
 from robert_agent.context.prompts import render_prompt
 from robert_agent.delivery import contract
@@ -107,6 +108,16 @@ class Coordinator(ReviewStages):
             if not attempt_is_active(conn, self.task_id, self.attempt_id):
                 raise StageStopped("candidate owner changed")
             store.save_snapshot(conn, self.round_id, self.manifest)
+            entry = store.session(conn, task_id=self.task_id)
+            request = dict(entry["request"])
+            checkpoint = request.get("base_merge")
+            if checkpoint and self.manifest["base_sha"] == checkpoint["base_sha"]:
+                request.pop("base_merge")
+                request.pop("final_feedback", None)
+                store.update(conn, self.round_id, request_json=json.dumps(request, sort_keys=True))
+                self.request.update(request)
+                self.request.pop("base_merge", None)
+                self.request.pop("final_feedback", None)
 
     def check_launch_budget(self, stage, prompt_hash, previous):
         failed = [
@@ -212,7 +223,8 @@ class Coordinator(ReviewStages):
         self.stage = "snapshot"
         base_sha = self.observe_base(self.repo["repo_root"], "upstream", self.base)
         if self.manifest.get("base_sha") != base_sha or self.manifest.get("original_request") != self.original_request:
-            candidate = self.preserve_completed_repair(candidate)
+            changed_base = bool(self.manifest.get("base_sha") and self.manifest["base_sha"] != base_sha)
+            candidate = self.preserve_completed_repair(candidate, align=not changed_base)
             git(self.repo["repo_root"], "fetch", "upstream", base_sha)
             if self.manifest.get("base_sha") and self.manifest["base_sha"] != base_sha:
                 candidate = self.merge_current_base(candidate, base_sha)
@@ -250,7 +262,7 @@ class Coordinator(ReviewStages):
         self.stage = "prepare"
         self.prepare_context()
 
-    def preserve_completed_repair(self, candidate):
+    def preserve_completed_repair(self, candidate, *, align=True):
         """Carry a validated repaired commit into a new review snapshot."""
         if not self.manifest.get("snapshot_id"):
             return candidate
@@ -274,6 +286,8 @@ class Coordinator(ReviewStages):
             if value.get("final_sha") != final or clean_head(self.address_workspace(run["run_id"])) != final:
                 raise StageStopped("completed repair worktree changed")
             git(self.assigned_path, "merge-base", "--is-ancestor", candidate["head"], final)
+            if not align:
+                return {**candidate, "head": final}
             current = clean_head(self.assigned_path, self.branch)
             if current == candidate["head"] and current != final:
                 git(self.assigned_path, "merge", "--ff-only", final)
@@ -283,18 +297,81 @@ class Coordinator(ReviewStages):
         return candidate
 
     def merge_current_base(self, candidate, current_base):
-        """Preflight the merge before updating the preserved branch for fresh validation."""
+        """Pin a merge before its effect; recover only its exact parents and tree."""
+        self.check_active()
+        error = check_worktree_reuse(
+            self.repo["repo_root"], self.repo["worktree_root"], self.assigned_path, branch_name=self.branch
+        )
+        if error:
+            raise StageStopped(error)
         final = candidate["head"]
-        if clean_head(self.assigned_path, self.branch) != final:
-            raise StageStopped("candidate branch changed before base merge")
+        current = clean_head(self.assigned_path, self.branch)
+        # A validated address commit may still need its original fast-forward.
+        if current == self.manifest["head_sha"] and current != final:
+            git(self.assigned_path, "merge", "--ff-only", final)
+            current = clean_head(self.assigned_path, self.branch)
         try:
-            git(self.assigned_path, "merge-tree", "--write-tree", current_base, final)
+            tree = git(self.assigned_path, "merge-tree", "--write-tree", final, current_base)
         except subprocess.CalledProcessError as exc:
             raise StageStopped(
                 "current base conflicts with the preserved candidate; conflict resolution is required"
             ) from exc
-        git(self.assigned_path, "merge", "--no-ff", "--no-edit", current_base)
-        return {**candidate, "head": clean_head(self.assigned_path, self.branch)}
+        checkpoint = {
+            "version": 1,
+            "round_id": self.round_id,
+            "snapshot_id": self.manifest["snapshot_id"],
+            "previous_base_sha": self.manifest["base_sha"],
+            "candidate_sha": final,
+            "base_sha": current_base,
+            "tree_sha": tree,
+            "branch": self.branch,
+            "worktree_path": str(Path(self.assigned_path).resolve()),
+        }
+        if current != final:
+            self.verify_base_merge(current, checkpoint)
+        self.check_active()
+        with store.connect(self.db_path) as conn:
+            transactions.begin(conn, immediate=True)
+            if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                raise StageStopped("base merge owner changed")
+            entry = store.session(conn, task_id=self.task_id)
+            if entry["snapshot_id"] != checkpoint["snapshot_id"]:
+                raise StageStopped("base merge snapshot changed")
+            request = dict(entry["request"])
+            saved = request.get("base_merge")
+            if saved:
+                if saved != checkpoint:
+                    raise StageStopped("base merge checkpoint changed")
+            else:
+                if current != final and not request.get("retried_from_task"):
+                    raise StageStopped("completed base merge requires an explicit retrigger")
+                count = request.get("base_refresh_count", 0)
+                if count >= retry.MAX_ATTEMPTS:
+                    raise StageStopped("base refresh budget exhausted; keep checkpoint for a later retry")
+                request.update(base_merge=checkpoint, base_refresh_count=count + 1)
+                request.pop("final_feedback", None)
+                store.update(conn, self.round_id, request_json=json.dumps(request, sort_keys=True), proof_json=None)
+        self.request.update(request)
+        self.request.pop("final_feedback", None)
+        self.final_feedback = None
+        self.check_active()
+        if clean_head(self.assigned_path, self.branch) != current:
+            raise StageStopped("candidate branch changed after base merge checkpoint")
+        if current == final:
+            if git(self.assigned_path, "merge-base", final, current_base) == current_base:
+                return candidate
+            git(self.assigned_path, "merge", "--no-ff", "--no-edit", current_base)
+        merged = clean_head(self.assigned_path, self.branch)
+        self.verify_base_merge(merged, checkpoint)
+        return {**candidate, "head": merged}
+
+    def verify_base_merge(self, head, checkpoint):
+        parents = git(self.assigned_path, "show", "-s", "--format=%P", head).split()
+        if (
+            parents != [checkpoint["candidate_sha"], checkpoint["base_sha"]]
+            or git(self.assigned_path, "rev-parse", head + "^{tree}") != checkpoint["tree_sha"]
+        ):
+            raise StageStopped("assigned branch is not the exact intended base merge")
 
     def check_base(self, final=None):
         current = self.observe_base(self.repo["repo_root"], "upstream", self.base)
@@ -313,11 +390,6 @@ class Coordinator(ReviewStages):
         return bool(self.base_refresh)
 
     def refresh_base(self, changed):
-        with store.connect(self.db_path) as conn:
-            entry = store.session(conn, task_id=self.task_id)
-        count = entry["request"].get("base_refresh_count", 0)
-        if count >= retry.MAX_ATTEMPTS:
-            raise StageStopped("base refresh budget exhausted; keep checkpoint for a later retry")
         candidate = self.manifest["candidate"]
         if changed.disposition:
             candidate = {**candidate, "head": changed.disposition["head"]}
@@ -347,16 +419,6 @@ class Coordinator(ReviewStages):
         )
         files.atomic_json(Path(self.manifest["context_dir"]) / "manifest.json", self.manifest)
         self.save_manifest()
-        request = {**entry["request"], "base_refresh_count": count + 1}
-        request.pop("final_feedback", None)
-        with store.connect(self.db_path) as conn:
-            transactions.begin(conn, immediate=True)
-            if not attempt_is_active(conn, self.task_id, self.attempt_id):
-                raise StageStopped("base refresh owner changed")
-            store.update(conn, self.round_id, request_json=json.dumps(request, sort_keys=True))
-        self.request.update(request)
-        self.request.pop("final_feedback", None)
-        self.final_feedback = None
 
     def report(self, records):
         self.stage = "synthesis"
