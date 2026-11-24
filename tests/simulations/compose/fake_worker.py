@@ -213,6 +213,8 @@ def main():
     identity = prompt_identity(prompt)
     policy = json.loads((root / "worker-policy.json").read_text())
     directory = root / "actors" / identity["attempt_id"]
+    if candidate_dir := os.environ.get("ROBERT_PRE_PR_CANDIDATE_DIR"):
+        directory /= Path(candidate_dir).name
     directory.mkdir(parents=True)
     (directory / "prompt.md").write_text(prompt)
     actor = {key: identity[key] for key in ("task_id", "attempt_id", "workstream_id", "expected_output")}

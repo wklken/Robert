@@ -108,8 +108,15 @@ def run_case(args, image, case, artifact):
                 run("kill", "-s", "SIGKILL", "sut")
             else:
                 run("stop", "--timeout", "25", "sut")
-            stopped = run("ps", "--all", "--status", "exited", "--quiet", "sut", capture_output=True).stdout.strip()
-            if stopped != old:
+            stop_deadline = time.monotonic() + min(10, remaining())
+            while time.monotonic() < stop_deadline:
+                stopped = run(
+                    "ps", "--all", "--status", "exited", "--quiet", "sut", capture_output=True, timeout=10
+                ).stdout.strip()
+                if stopped == old:
+                    break
+                time.sleep(0.2)
+            else:
                 raise RuntimeError(f"old container did not exit: {old}")
             if transition == "stop-stack":
                 run("stop", "--timeout", "10", "fixtures")
