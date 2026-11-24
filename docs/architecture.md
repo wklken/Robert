@@ -77,6 +77,9 @@ robert_agent/
 定义 TAPD 主机、项目键、单据 URL、来源键和评论 fingerprint 的语法，供配置、适配器、
 来源 owner 和发布合同共用。
 
+[`foundation/review_findings.py`](../src/robert_agent/foundation/review_findings.py) 使用标准库计算确定性的
+finding 标识，并识别 reviewer 声明的后续核查需求。报告生成与新 PR 发布证明共用这份规则。
+
 [`foundation/question_choices.py`](../src/robert_agent/foundation/question_choices.py) 提供有序选项的共享格式和校验。
 Worker 结果和原生阶段在进入等待前校验新提问。看板和 OpenClaw 的点选复用版本化回复命令，
 从当前问题记录解析选项，发布与监督继续使用各自的授权边界。

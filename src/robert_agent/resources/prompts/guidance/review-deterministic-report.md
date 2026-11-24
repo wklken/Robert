@@ -1,0 +1,1 @@
+The controller collects results without a model synthesis pass. Set requires_judgment to true when additional review, material coverage gaps, or an unresolved decision require action before delivery, even if findings is empty. Describe the concrete follow-up and evidence in coverage.notes. Set it to false when no such follow-up is needed.

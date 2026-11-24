@@ -19,7 +19,7 @@ class FinalVerificationIdentityTests(PrePRReviewFixture):
         self.driver = self.start(["claude"])
         self.with_finding = True
         self.driver.prepare()
-        self.report, self.report_sha, self.findings = self.driver.report(self.driver.review())
+        self.report, self.report_sha, self.findings, _ = self.driver.report(self.driver.review())
         self.disposition = self.driver.address(self.report, self.report_sha, self.findings)
 
     def verify(self, report=None):
@@ -47,7 +47,7 @@ class FinalVerificationIdentityTests(PrePRReviewFixture):
         git(self.driver.repo["repo_root"], "fetch", "upstream", base)
         self.driver.save_candidate_snapshot(self.driver.manifest["candidate"], base)
         self.driver.prepare_context()
-        self.report, self.report_sha, self.findings = self.driver.report(self.driver.review())
+        self.report, self.report_sha, self.findings, _ = self.driver.report(self.driver.review())
         self.disposition = self.driver.address(self.report, self.report_sha, self.findings)
 
     def assert_snapshot_refresh_launches_new_verifier(self, original):

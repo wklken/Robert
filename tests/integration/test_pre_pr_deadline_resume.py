@@ -59,7 +59,7 @@ class PrePRDeadlineResumeTests(ReviewCoordinatorFixture):
         )
         git(self.driver.assigned_path, "config", "user.name", "Test")
         git(self.driver.assigned_path, "config", "user.email", "test@example.invalid")
-        with patch.object(self.driver, "address", side_effect=StageStopped("checkpoint")):
+        with patch.object(self.driver, "no_repair_disposition", side_effect=StageStopped("checkpoint")):
             with self.assertRaisesRegex(StageStopped, "checkpoint"):
                 self.driver.run()
         self.now = store.now()
@@ -168,7 +168,7 @@ class PrePRDeadlineResumeTests(ReviewCoordinatorFixture):
             self.assertNotEqual(resumed[0], self.attempt)
             self.assertEqual(json.loads(resumed[1])["resume"]["previous_attempt_id"], self.attempt)
         restarted = Coordinator(self.db, self.task, resumed[0], launcher=self.launch_stage, poll_seconds=0.01)
-        with patch.object(restarted, "address", side_effect=StageStopped("reached cached review")):
+        with patch.object(restarted, "no_repair_disposition", side_effect=StageStopped("reached cached review")):
             with self.assertRaisesRegex(StageStopped, "reached cached review"):
                 restarted.run()
         self.assertEqual(self.stage_calls, ["implement", "review"])

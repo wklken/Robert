@@ -17,11 +17,11 @@ from robert_agent.delivery import contract
 from robert_agent.delivery.base_revisions import compatibility_refresh
 from robert_agent.delivery.application import submission, validation, audit
 from robert_agent.delivery.lock import task_publication_lock
-from robert_agent.execution import retry
+from robert_agent.execution import retry, stage_evidence
 from robert_agent.execution.budgets import pipeline_timeout
 from robert_agent.execution.stages import StageStopped, StageSuperseded, attempt_is_active, terminate_children
 from robert_agent.foundation import question_choices
-from robert_agent.foundation.contracts.execution import ModelRunStatus
+from robert_agent.foundation.contracts.execution import ModelRunStatus, ReviewReportMode
 from robert_agent.persistence import transactions
 from robert_agent.persistence.stores import artifacts as db_write_artifacts
 from robert_agent.persistence.rounds import pre_pr_review as store
@@ -33,6 +33,10 @@ from robert_agent.workflows.review.coordinator import ReviewStages
 from robert_agent.workflows.pre_pr_review import base_impact, final_verification, handoff_repair, final_repair
 from robert_agent.workflows.pre_pr_review.verification import final_verification_checks
 from robert_agent.workflows.pre_pr_review import decisions, single_round
+
+
+def _append_finding_ids(body, items):
+    return body + "\n\n## Finding IDs\n" + "\n".join(f"- `{item['id']}` {item['title']}" for item in items)
 
 
 class ReviewDecisionRequired(StageStopped):
@@ -381,6 +385,7 @@ class Coordinator(ReviewStages):
             candidate["head"],
             self.request["event"],
             original_request=self.original_request,
+            review_report_mode=self.plan.get("review_report_mode"),
         )
         self.manifest.update(
             candidate=candidate,
@@ -573,6 +578,7 @@ class Coordinator(ReviewStages):
             candidate["head"],
             self.request["event"],
             original_request=self.original_request,
+            review_report_mode=self.plan.get("review_report_mode"),
         )
         self.manifest.update(
             candidate=candidate,
@@ -583,19 +589,30 @@ class Coordinator(ReviewStages):
         self.save_manifest()
 
     def report(self, records):
-        self.stage = "synthesis"
+        deterministic = self.manifest.get("review_report_mode") == ReviewReportMode.DETERMINISTIC_V1
+        self.stage = "report" if deterministic else "synthesis"
         self.check_active()
         evaluation_identity = {"records": records}
+        requires_followup = True
         load_anchor, save_anchor = ReviewStages.report_anchor_callbacks(self)
-        if len(records) == 1:
+        if deterministic:
+            merged = files.merge_reviewer_results(self.manifest, records)
+            items = merged["items"]
+            requires_followup = merged["requires_followup"]
+            evaluation_identity.update(files.neutral_report_identity(merged))
+
+            def render_with_ids():
+                return files.render_neutral_report(self.manifest, merged)
+        elif len(records) == 1:
             for kind in ("result", "report"):
                 if files.sha256_file(records[0][kind + "_path"]) != records[0][kind + "_sha256"]:
                     raise StageStopped("selected reviewer artifact hash changed")
             result = files.read_result(records[0]["result_path"], self.manifest)
             items = result["findings"] + result["dismissed_findings"]
 
-            def render():
-                return files.render_individual(result, records[0]["worker_id"], records[0]["model"])
+            def render_with_ids():
+                body = files.render_individual(result, records[0]["worker_id"], records[0]["model"])
+                return _append_finding_ids(body, items)
         else:
             inputs = files.write_synthesis_inputs(self.manifest, records)
 
@@ -630,11 +647,9 @@ class Coordinator(ReviewStages):
             evaluation = files.read_evaluation(completed["evaluation_path"], self.manifest, records)
             items = evaluation["items"]
 
-            def render():
-                return files.render_merged(self.manifest, records, evaluation)
-
-        def render_with_ids():
-            return render() + "\n\n## Finding IDs\n" + "\n".join(f"- `{item['id']}` {item['title']}" for item in items)
+            def render_with_ids():
+                body = files.render_merged(self.manifest, records, evaluation)
+                return _append_finding_ids(body, items)
 
         def register(report):
             self.check_active()
@@ -690,7 +705,7 @@ class Coordinator(ReviewStages):
                     raise StageStopped("registered single-round report changed: " + str(exc)) from exc
                 if pinned != evaluation_identity:
                     raise StageStopped("registered single-round report input changed")
-                return saved_path, saved["report_sha256"], [item["id"] for item in items]
+                return saved_path, saved["report_sha256"], [item["id"] for item in items], requires_followup
         try:
             report = report_checkpoint.seal_rendered_report(
                 self.db_path,
@@ -708,7 +723,73 @@ class Coordinator(ReviewStages):
             )
         except report_checkpoint.RedactionBlocked as exc:
             raise StageStopped(str(exc)) from exc
-        return report["path"], report["sha256"], [item["id"] for item in items]
+        return report["path"], report["sha256"], [item["id"] for item in items], requires_followup
+
+    def no_repair_disposition(self, report_sha):
+        """Record zero finding dispositions when the original verification still applies."""
+        reply = self.request.get("operator_reply")
+        if self.final_feedback or (reply and reply["decision"].get("stage") != "implement"):
+            return None
+        head = self.manifest["head_sha"]
+        candidate = self.manifest["candidate"]
+        with store.connect(self.db_path) as conn:
+            history = store.runs(conn, self.round_id)
+        # Once verification was needed, keep its registered stage and evidence
+        # across retries even if the original implementation inputs match again.
+        if any(run["stage"] == "address_findings" for run in history):
+            return None
+        implementation = next((run for run in history if run["run_id"] == candidate.get("run_id")), None)
+        if (
+            not implementation
+            or implementation["stage"] != "implement"
+            or not artifact_available(implementation)
+            or any(
+                implementation["artifact"].get(key) != candidate[key] for key in ("candidate_path", "candidate_sha256")
+            )
+            or implementation["artifact"].get("head") != head
+        ):
+            # Base refresh and preserved repairs can move the candidate beyond
+            # the original implementation checks. Require fresh verification.
+            return None
+        checkpoint = implementation.get("dispatch", {}).get("result_checkpoint", {})
+        if "untracked_sha256" not in checkpoint or checkpoint.get("source_pin_error"):
+            return None
+        implementation_source = {
+            "implementing": True,
+            **{key: checkpoint.get(key) for key in ("snapshot_id", "head_sha", "base_sha")},
+        }
+        try:
+            current = stage_evidence.observe_source(
+                implementation, implementation_source, Path(self.assigned_path).resolve()
+            )
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            return None
+        # Registered worktrees can move during a rebind without changing the
+        # verified commit, recorded inputs or local configuration.
+        if current != {**checkpoint, "worktree_path": current["worktree_path"]}:
+            return None
+        draft = self.candidate_submission()
+        action = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
+        evidence = {
+            "source": "implementation",
+            "source_checkpoint_sha256": hashlib.sha256(json.dumps(checkpoint, sort_keys=True).encode()).hexdigest(),
+            "candidate_sha": head,
+            "final_sha": head,
+            "report_sha256": report_sha,
+            "dispositions": [],
+            "verification": final_verification_checks(draft["verification"]),
+            "body": action["body"],
+        }
+        root = Path(self.manifest["artifact_root"])
+        path = files.safe_path(root / f"no-repair-{report_sha}.json", root)
+        text = json.dumps(evidence, sort_keys=True)
+        self.check_active()
+        if not path.exists():
+            files.atomic_text(path, text)
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        if store.digest(path) != digest:
+            raise StageStopped("registered no-repair disposition changed")
+        return {"head": head, "dispositions_path": str(path), "dispositions_sha256": digest}
 
     def address(self, path, report_sha, ids):
         self.stage = "address_findings"
@@ -843,6 +924,11 @@ class Coordinator(ReviewStages):
             raise ValueError(reason)
         return normalized
 
+    def single_round_disclosure(self, disposition):
+        if disposition.get("run_id") is None:
+            return "评审策略：一轮 review。实施验证适用于送审提交，本轮无需整改。"
+        return "评审策略：一轮 review、一轮整改；未执行独立的最终模型复核。"
+
     def finalize(self, report, report_sha, disposition):
         head, final = self.manifest["head_sha"], disposition["head"]
         if (
@@ -924,11 +1010,7 @@ class Coordinator(ReviewStages):
                     "## Review 报告",
                     f"送审提交：`{head}`",
                     f"最终提交：`{final}`",
-                    *(
-                        ["评审策略：一轮 review、一轮整改；未执行独立的最终模型复核。"]
-                        if single_round.enabled(self)
-                        else []
-                    ),
+                    *([self.single_round_disclosure(disposition)] if single_round.enabled(self) else []),
                     "",
                     body,
                     "",
@@ -1106,8 +1188,10 @@ class Coordinator(ReviewStages):
             self.prepare()
             self.stage = "review"
             records = self.review()
-            report, sha, ids = self.report(records)
-            disposition = self.address(report, sha, ids)
+            report, sha, ids, requires_followup = self.report(records)
+            disposition = None if requires_followup else self.no_repair_disposition(sha)
+            if disposition is None:
+                disposition = self.address(report, sha, ids)
             return self.finalize(report, sha, disposition)
         except ReviewDecisionRequired as exc:
             return self.wait_for_decision(exc, locals().get("sha"))

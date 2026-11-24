@@ -43,6 +43,8 @@ class PipelineBudgetTests(unittest.TestCase):
         plan = {**review_plan(), "review_policy": "single_review_single_repair"}
         self.assertEqual(pipeline_timeout(plan), 2 * 4200 + 4200 + 4200 + 3600 + 6 * 120)
         self.assertEqual(pipeline_timeout(plan), 21120)
+        plan["review_report_mode"] = "deterministic_v1"
+        self.assertEqual(pipeline_timeout(plan), 16920)
 
     def test_single_round_does_not_reserve_verifier_or_second_repair_time(self):
         from robert_agent.execution.budgets import pipeline_timeout

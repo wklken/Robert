@@ -318,6 +318,40 @@ class ReviewFilesTests(unittest.TestCase):
         report = review_files.render_merged(self.manifest, [first, second, third], evaluation)
         self.assertIn("| Missing guard | 发现 | 反驳 | 未报告 | 误报 |", report)
 
+    def test_deterministic_report_preserves_disagreement_and_unmerged_claims(self):
+        manifest = {**self.manifest, "review_report_mode": "deterministic_v1"}
+        self.result["requires_judgment"] = False
+        first = self.record("codex")
+        claim = self.result["findings"][0]
+        self.result["findings"] = [{**claim, "impact": "different consequence"}]
+        self.result["dismissed_findings"] = [
+            {**claim, "id": "D2", "severity": "low", "evidence": "validation at caller", "reason": "guard exists"}
+        ]
+        self.result["coverage"]["unreviewed_paths"] = ["src/out_of_scope.py"]
+        second = self.record("claude")
+
+        merged = review_files.merge_reviewer_results(manifest, [first, second])
+        self.assertEqual(merged, review_files.merge_reviewer_results(manifest, [second, first]))
+        groups = review_files.neutral_report_identity(merged)["finding_groups"]
+        self.assertCountEqual(
+            [[(source["worker_id"], source["finding_id"]) for source in item["sources"]] for item in groups],
+            [[("claude", "F1")], [("claude", "D2"), ("codex", "F1")]],
+        )
+        report = review_files.render_neutral_report(manifest, merged)
+        for text in ("分歧待核查", "[HIGH]", "[LOW]", "guard exists", "validation at caller", "src/out_of_scope.py"):
+            self.assertIn(text, report)
+
+    def test_deterministic_report_checks_result_digest_and_judgment_field(self):
+        manifest = {**self.manifest, "review_report_mode": "deterministic_v1"}
+        with self.assertRaisesRegex(ValueError, "requires_judgment"):
+            review_files.merge_reviewer_results(manifest, [self.record()])
+        self.result["requires_judgment"] = False
+        record = self.record()
+        self.path.write_text("changed")
+        with self.assertRaisesRegex(ValueError, "hash changed"):
+            review_files.merge_reviewer_results(manifest, [record])
+        self.assertIn("Set requires_judgment to true", self.reviewer_prompt(manifest))
+
     def test_synthesis_prompt_requires_concise_public_explanation(self):
         prompt = self.synthesis_prompt()
         self.assertIn("at most three short Chinese sentences", prompt)

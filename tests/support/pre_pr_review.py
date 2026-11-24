@@ -19,7 +19,7 @@ from tests.support.tapd_cycle import TAPD_CONFIG
 
 
 class PrePRReviewFixture(ReviewCoordinatorFixture):
-    def start(self, workers, *, local=False, tapd=False, github_comment=False, legacy=True):
+    def start(self, workers, *, local=False, tapd=False, github_comment=False, legacy=True, legacy_report=True):
         config = yaml.safe_load(self.config_path.read_text())
         config["repos"][0]["routes"] = {"new-pr": {"pre_pr_review": {"workers": workers}}}
         if tapd:
@@ -80,9 +80,12 @@ class PrePRReviewFixture(ReviewCoordinatorFixture):
         task, attempt = self.current()
         with fixture_database.connect(self.db) as conn:
             saved = store.session(conn, task_id=task)
-            if legacy and "review_policy" in saved["request"]["plan"]:
-                # These fixtures exercise already registered historical rounds.
-                saved["request"]["plan"].pop("review_policy")
+            plan = saved["request"]["plan"]
+            if legacy:
+                plan.pop("review_policy", None)
+            if legacy_report:
+                plan.pop("review_report_mode", None)
+            if legacy or legacy_report:
                 store.update(conn, saved["round_id"], request_json=json.dumps(saved["request"], sort_keys=True))
         self.assertIsNotNone(saved)
         self.verification = [_verification_evidence()]
@@ -114,6 +117,8 @@ class PrePRReviewFixture(ReviewCoordinatorFixture):
             )
         git(driver.assigned_path, "config", "user.name", "Test")
         git(driver.assigned_path, "config", "user.email", "test@example.invalid")
+        self.legacy_report = legacy_report
+        self.judgment_workers = set()
         self.fail_synthesis = False
         self.fail_disposition = False
         self.with_finding = False
@@ -174,17 +179,21 @@ class PrePRReviewFixture(ReviewCoordinatorFixture):
                 report_sha = prompt.stem.removeprefix("address-").split("-")[0]
                 candidate_sha = json.loads((prompt.parent / "context" / "manifest.json").read_text())["head_sha"]
                 decisions = []
+                finding_id = "F1"
+                if not self.legacy_report and self.with_finding:
+                    example = prompt.read_text().split("Example:\n\n```json\n", 1)[1].split("\n```", 1)[0]
+                    finding_id = json.loads(example)["dispositions"][0]["id"]
                 if self.with_finding:
                     if (tree / "source.py").read_text() != "value = 4\n":
                         (tree / "source.py").write_text("value = 4\n")
                         git(tree, "commit", "-am", "address finding")
                     decisions = [
-                        {"id": "F1", "status": "fixed", "reason": "Updated the value and verified its consumer."}
+                        {"id": finding_id, "status": "fixed", "reason": "Updated the value and verified its consumer."}
                     ]
                 if self.needs_decision:
                     decisions = [
                         {
-                            "id": "F1",
+                            "id": finding_id,
                             "status": "needs_decision",
                             "reason": "Confirm expected value within the original scope.",
                         }
@@ -214,10 +223,12 @@ class PrePRReviewFixture(ReviewCoordinatorFixture):
             else:
                 self.launches[prompt.name] += 1
             launched = self.launcher(**kwargs)
-            if self.with_finding and prompt.name == "reviewer-prompt.md":
+            if (self.with_finding or not self.legacy_report) and prompt.name == "reviewer-prompt.md":
                 path = output / "result.json"
                 value = json.loads(path.read_text())
-                value["findings"] = [
+                if not self.legacy_report:
+                    value["requires_judgment"] = kwargs["worker_agent_config"]["name"] in self.judgment_workers
+                findings = [
                     {
                         "id": "F1",
                         "title": "Unexpected value",
@@ -229,6 +240,8 @@ class PrePRReviewFixture(ReviewCoordinatorFixture):
                         "suggestion": "Use the expected value",
                     }
                 ]
+                if self.with_finding:
+                    value["findings"] = findings
                 path.write_text(json.dumps(value))
             return launched
         return {"ok": True, "process_exited": True, "returncode": 0, "pid": 1073741824}

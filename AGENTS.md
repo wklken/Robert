@@ -85,6 +85,9 @@ Paths below are relative to `src/robert_agent/`.
   labels for Agent questions. Prompt, Worker result, supervision and notification
   consumers share this standard-library leaf. The delivery use case owns public
   text validation and the operator command owns selection against a saved question.
+- `foundation/review_findings.py` owns the deterministic finding identity and
+  follow-up signal shared by report generation and the pre-PR completion proof.
+  It uses only the standard library and has no I/O or domain dependencies.
 - Group by domain first, then split a domain into responsibility/layer submodules.
   Reuse the domain's existing input types, errors, policies, facts and public
   capabilities. Do not scatter another implementation of the same concept into

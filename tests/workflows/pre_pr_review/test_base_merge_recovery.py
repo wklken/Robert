@@ -59,6 +59,7 @@ class BaseMergeRecoveryTests(ReviewWorkspaceFixture):
             attempt_id=self.attempt_id,
             round_id=self.round_id,
             manifest=manifest,
+            plan={},
             request={
                 "retried_from_task": "original-task",
                 "prompt_path": str(self.prompt),

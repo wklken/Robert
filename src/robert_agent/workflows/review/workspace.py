@@ -194,6 +194,7 @@ def prepare_candidate_snapshot(
     event,
     *,
     original_request=None,
+    review_report_mode=None,
 ):
     info = {
         "head": {"sha": head_sha},
@@ -208,11 +209,20 @@ def prepare_candidate_snapshot(
         info,
         [event],
         original_request=original_request,
+        review_report_mode=review_report_mode,
     )
 
 
 def _build_snapshot(
-    repo_root, worktree_root, artifact_root, round_id, pr_info, github_context, *, original_request=None
+    repo_root,
+    worktree_root,
+    artifact_root,
+    round_id,
+    pr_info,
+    github_context,
+    *,
+    original_request=None,
+    review_report_mode=None,
 ):
     number = pr_info.get("number")
     head_sha = pr_info["head"]["sha"]
@@ -240,7 +250,10 @@ def _build_snapshot(
             "context_dir": str(context),
             "artifact_root": str(artifacts),
         }
-        if any(saved.get(key) != value for key, value in expected.items()):
+        if (
+            any(saved.get(key) != value for key, value in expected.items())
+            or saved.get("review_report_mode") != review_report_mode
+        ):
             raise ValueError("existing round snapshot identity does not match")
         if _trigger(github_context).get("trigger_event_fingerprint") != saved.get("trigger_event_fingerprint"):
             raise ValueError("existing round trigger identity does not match")
@@ -291,6 +304,7 @@ def _build_snapshot(
         "files": {str(context / name): review_files.sha256_file(context / name) for name in CONTEXT_FILES},
         "frozen": False,
         **({"original_request": original_request} if original_request else {}),
+        **({"review_report_mode": review_report_mode} if review_report_mode else {}),
         **_trigger(github_context),
     }
     review_files.atomic_json(context / "manifest.json", manifest)

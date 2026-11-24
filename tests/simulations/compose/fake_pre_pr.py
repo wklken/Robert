@@ -35,7 +35,10 @@ def address(facts):
         "candidate_sha": facts["candidate_sha"],
         "final_sha": sha,
         "report_sha256": facts["report_sha256"],
-        "dispositions": [{"id": FINDING["id"], "status": "fixed", "reason": "Added and ran a negative operand test."}],
+        "dispositions": [
+            {"id": finding, "status": "fixed", "reason": "Added and ran a negative operand test."}
+            for finding in facts["finding_ids"]
+        ],
         "verification": [
             {
                 "command": [sys.executable, "-B", "-m", "unittest", "test_calc"],

@@ -11,6 +11,9 @@ import re
 from pathlib import Path, PurePosixPath
 import tempfile
 
+from robert_agent.foundation.contracts.execution import ReviewReportMode
+from robert_agent.foundation.review_findings import deterministic_finding_id, review_requires_followup
+
 
 SCHEMA_VERSION = 1
 SEVERITIES = ("critical", "high", "medium", "low")
@@ -151,6 +154,11 @@ def read_result(path, manifest):
     _text(coverage.get("notes"), "coverage.notes")
     if document.get("merge_recommendation") not in RECOMMENDATIONS:
         raise ValueError("invalid merge recommendation")
+    if (
+        manifest.get("review_report_mode") == ReviewReportMode.DETERMINISTIC_V1
+        and type(document.get("requires_judgment")) is not bool
+    ):
+        raise ValueError("review requires an explicit requires_judgment boolean")
     return document
 
 
@@ -383,4 +391,95 @@ def render_merged(manifest, records, evaluation):
             "",
         ]
     )
+    return "\n".join(lines)
+
+
+def merge_reviewer_results(manifest, records):
+    """Project every source into neutral, reproducible groups without adjudicating."""
+    documents = _validated_records(manifest, records)
+    groups = {}
+    reviewers = []
+    for record in sorted(records, key=lambda record: record["worker_id"]):
+        worker = record["worker_id"]
+        result = documents[worker]
+        reviewers.append(
+            {
+                "worker_id": worker,
+                "model": record["model"],
+                "requires_judgment": result["requires_judgment"],
+                "merge_recommendation": result["merge_recommendation"],
+                "coverage": {key: result["coverage"][key] for key in ("reviewed_paths", "unreviewed_paths", "notes")},
+            }
+        )
+        for kind in ("findings", "dismissed_findings"):
+            for finding in sorted(result[kind], key=lambda finding: finding["id"]):
+                # Group only the same concrete claim at the same range. Reviewer
+                # IDs are local to one run and cannot identify cross-review duplicates.
+                key = deterministic_finding_id(finding)
+                group = groups.setdefault(key, [])
+                group.append({"worker_id": worker, "kind": kind, "finding": finding})
+    items = [{"id": key, "sources": sources} for key, sources in sorted(groups.items())]
+    requires_followup = any(review_requires_followup(result) for result in documents.values())
+    return {"items": items, "reviewers": reviewers, "requires_followup": requires_followup}
+
+
+def neutral_report_identity(merged):
+    return {
+        "requires_followup": merged["requires_followup"],
+        "finding_groups": [
+            {
+                "id": item["id"],
+                "sources": [
+                    {"worker_id": source["worker_id"], "finding_id": source["finding"]["id"]}
+                    for source in item["sources"]
+                ],
+            }
+            for item in merged["items"]
+        ],
+    }
+
+
+def render_neutral_report(manifest, merged):
+    lines = [
+        "# 候选提交 Review 汇总报告",
+        "",
+        f"送审提交：`{manifest['head_sha']}`",
+        f"目标分支：{_code_span(manifest['base_ref'])}",
+        "结果由程序按来源归并。每个 finding 仍待核查。合并建议仅代表各 reviewer 的判断。",
+        "",
+        "## Finding 与来源",
+        "",
+    ]
+    for item in merged["items"]:
+        sources = item["sources"]
+        lines.append(f"### {item['id']}")
+        if len({(source["kind"], source["finding"]["severity"]) for source in sources}) > 1:
+            lines.append("**分歧待核查。**")
+        lines.append("")
+        for source in sources:
+            finding = source["finding"]
+            stance = "反证" if source["kind"] == "dismissed_findings" else "报告问题"
+            lines.append(f"- {_code_span(source['worker_id'])} · {_code_span(finding['id'])} · {stance}")
+            lines.extend("  " + line for line in _finding_lines(finding))
+            location = finding["location"]
+            if location.get("end_line", location["line"]) != location["line"]:
+                lines.append(f"    - 结束行：{location['end_line']}")
+            if source["kind"] == "dismissed_findings":
+                lines.append(f"    - 反证理由：{finding['reason']}")
+        lines.append("")
+    if not merged["items"]:
+        lines.extend(["Reviewer 未报告 finding。", ""])
+    lines.extend(["## Reviewer 覆盖范围与建议", ""])
+    for reviewer in merged["reviewers"]:
+        coverage = json.dumps(reviewer["coverage"], ensure_ascii=False)
+        lines.extend(
+            [
+                f"- {_code_span(reviewer['worker_id'])} ({_code_span(reviewer['model'])}) "
+                f"· {reviewer['merge_recommendation']}",
+                f"  - {'待核查' if reviewer['requires_judgment'] else '未标记额外核查'}",
+                f"  - {coverage}",
+            ]
+        )
+    next_step = "核查报告与覆盖限制，按需处置。" if merged["requires_followup"] else "核对送审提交的验证证据。"
+    lines.extend(["", f"下一步：{next_step}", ""])
     return "\n".join(lines)

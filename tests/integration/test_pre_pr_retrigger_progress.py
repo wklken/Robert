@@ -66,12 +66,13 @@ class PrePRRetriggerProgressTests(ReviewCoordinatorFixture):
         self.cycle([])
         task, attempt = self.current()
         self.assertNotEqual(task, classifier_task)
-        if legacy_snapshot:
-            # These cases recover rounds frozen before the single-round policy.
-            with fixture_database.connect(self.db) as conn:
-                registered = store.session(conn, task_id=task)
+        with fixture_database.connect(self.db) as conn:
+            registered = store.session(conn, task_id=task)
+            registered["request"]["plan"].pop("review_report_mode", None)
+            if legacy_snapshot:
+                # These cases recover rounds frozen before the single-round policy.
                 registered["request"]["plan"].pop("review_policy")
-                store.update(conn, registered["round_id"], request_json=json.dumps(registered["request"]))
+            store.update(conn, registered["round_id"], request_json=json.dumps(registered["request"]))
         self.driver = Coordinator(self.db, task, attempt, launcher=self.launch_stage, poll_seconds=0.01)
         self.assertEqual(self.driver.branch, "codex/dd-42-original-classifier-slug")
         git(

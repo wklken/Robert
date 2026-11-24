@@ -30,7 +30,8 @@ def single_review_repair(w):
     path = Path(point["entity"]["run_directory"]) / "dispositions.json"
     proof = json.loads(path.read_text())
     assert proof["final_sha"] != proof["candidate_sha"]
-    assert proof["dispositions"][0]["id"] == "F1"
+    (finding,) = proof["dispositions"]
+    assert finding["id"].startswith("F-") and finding["status"] == "fixed"
     w.release(point)
     (task,) = completed(w, "new-pr")
     (pr,) = effect_rows(w, "pr_create")

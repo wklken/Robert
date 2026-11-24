@@ -120,7 +120,7 @@ class PrePRReportCheckpointTests(unittest.TestCase):
             },
         )
         self.manifest["candidate"] = {"candidate_path": str(candidate), "candidate_sha256": store.digest(candidate)}
-        report, sha, _ = self.driver.report(self.records)
+        report, sha, _, _ = self.driver.report(self.records)
         response = self.artifacts / "dispositions.json"
         files.atomic_json(
             response,
@@ -287,7 +287,7 @@ class PrePRReportCheckpointTests(unittest.TestCase):
                         self.driver.report(self.records)
                 with store.connect(self.db) as conn:
                     self.assertIsNone(store.session(conn, task_id=self.task_id)["report_path"])
-                path, sha, ids = self.driver.report(self.records)
+                path, sha, ids, _ = self.driver.report(self.records)
                 self.assertEqual(renderer.call_count, 1)
                 self.assertEqual(redactor.call_count, 1)
         self.driver.evaluate.assert_not_called()
@@ -346,7 +346,7 @@ class PrePRReportCheckpointTests(unittest.TestCase):
         self.driver.evaluate.assert_not_called()
 
     def test_single_reviewer_cached_report_tamper_is_refused_before_registration(self):
-        path, _, _ = self.driver.report(self.records[:1])
+        path, _, _, _ = self.driver.report(self.records[:1])
         path.write_text("Forged public report")
         with self.assertRaises((StageStopped, ValueError)):
             self.driver.report(self.records[:1])
@@ -395,7 +395,7 @@ class PrePRReportCheckpointTests(unittest.TestCase):
         }
         render = files.render_individual
         with patch.object(files, "render_individual", wraps=render) as renderer:
-            public, sha, ids = self.driver.report([record])
+            public, sha, ids, _ = self.driver.report([record])
             self.driver.report([record])
             self.assertEqual(renderer.call_count, 1)
         self.assertEqual(ids, [])

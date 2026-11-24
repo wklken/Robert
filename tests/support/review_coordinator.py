@@ -135,6 +135,8 @@ class ReviewCoordinatorFixture(unittest.TestCase):
                     coverage={"reviewed_paths": ["source.py"], "unreviewed_paths": [], "notes": "Read full source"},
                     merge_recommendation="ready to merge",
                 )
+                if manifest.get("review_report_mode") == "deterministic_v1":
+                    payload["requires_judgment"] = False
                 if self.bad_round:
                     payload["round_id"] = "previous-round"
                 review_files.atomic_json(output / "result.json", payload)
