@@ -155,6 +155,43 @@ class BaseMergeRecoveryTests(ReviewWorkspaceFixture):
         self.assertEqual(self.entry()["request"]["base_refresh_count"], 1)
         self.assertEqual(checkpoint["candidate_sha"], self.head)
 
+    def test_explicit_retrigger_adopts_earlier_merge_before_newer_upstream(self):
+        first_base = self.current_base
+        first_merge = self.completed_merge()
+        self.git(self.upstream, "checkout", "main")
+        (self.upstream / "second_feature.py").write_text(
+            "import importlib\nsecond_feature = importlib.import_module('runtime')\n"
+        )
+        self.git(self.upstream, "add", "second_feature.py")
+        self.git(self.upstream, "commit", "-m", "newer upstream while retry waits")
+        self.current_base = self.git(self.upstream, "rev-parse", "HEAD")
+        snapshots = []
+        prepare_snapshot = module.workspace.prepare_candidate_snapshot
+
+        def record_snapshot(*args, **kwargs):
+            manifest = prepare_snapshot(*args, **kwargs)
+            snapshots.append(manifest)
+            return manifest
+
+        with patch.object(module.workspace, "prepare_candidate_snapshot", side_effect=record_snapshot):
+            self.driver.prepare()
+        self.assertEqual(snapshots[0]["base_sha"], first_base)
+        self.assertEqual(snapshots[0]["head_sha"], first_merge)
+        entry = self.entry()
+        self.assertEqual(entry["manifest"]["base_sha"], self.current_base)
+        self.assertEqual(entry["request"]["base_refresh_count"], 2)
+        self.assertNotIn("base_merge", entry["request"])
+        merged = self.git(self.tree, "rev-parse", "HEAD")
+        self.assertEqual(
+            self.git(self.tree, "show", "-s", "--format=%P", merged).split(), [first_merge, self.current_base]
+        )
+        self.assertTrue((self.tree / "second_feature.py").exists())
+        self.assertEqual(entry["proof"], {})
+        snapshot = entry["snapshot_id"]
+        self.driver.prepare()
+        self.assertEqual(self.entry()["snapshot_id"], snapshot)
+        self.assertEqual(self.entry()["request"]["base_refresh_count"], 2)
+
     def test_newer_base_reconciles_saved_merge_before_effect(self):
         self.assert_newer_base_reconciles_saved_merge(after_effect=False)
 
@@ -226,7 +263,7 @@ class BaseMergeRecoveryTests(ReviewWorkspaceFixture):
         with self.assertRaises(StageStopped):
             self.driver.prepare()
 
-    def test_explicit_retrigger_preserves_authenticated_repair_before_completed_merge(self):
+    def register_repair(self, *, conflicting_file=False):
         report = self.root / "report.md"
         report.write_text("Registered review findings\n")
         with store.connect(self.db) as conn:
@@ -236,6 +273,9 @@ class BaseMergeRecoveryTests(ReviewWorkspaceFixture):
         address.parent.mkdir(parents=True)
         self.git(self.repo, "worktree", "add", "--detach", str(address), self.head)
         (address / "source.py").write_text("value = 4\n")
+        if conflicting_file:
+            (address / "shared.py").write_text("shared = 'repair'\n")
+            self.git(address, "add", "shared.py")
         self.git(address, "commit", "-am", "completed authenticated repair")
         repaired = self.git(address, "rev-parse", "HEAD")
         dispositions = self.root / "dispositions.json"
@@ -261,19 +301,162 @@ class BaseMergeRecoveryTests(ReviewWorkspaceFixture):
                     }
                 ),
             )
+        return repaired, dispositions
+
+    def test_explicit_retrigger_preserves_authenticated_repair_before_completed_merge(self):
+        repaired, dispositions = self.register_repair()
         self.git(self.tree, "merge", "--ff-only", repaired)
         merged = self.completed_merge(repaired)
+        self.git(self.upstream, "checkout", "main")
+        (self.upstream / "second_feature.py").write_text(
+            "import importlib\nvalue = importlib.import_module('runtime')\n"
+        )
+        self.git(self.upstream, "add", "second_feature.py")
+        self.git(self.upstream, "commit", "-m", "upstream advances after authenticated repair merge")
+        self.current_base = self.git(self.upstream, "rev-parse", "HEAD")
         original = dispositions.read_bytes()
         dispositions.write_text("changed evidence")
         with self.assertRaisesRegex(StageStopped, "completed repair evidence changed"):
             self.driver.prepare()
         dispositions.write_bytes(original)
         self.driver.prepare()
-        self.assertEqual(self.entry()["manifest"]["head_sha"], merged)
+        final = self.git(self.tree, "rev-parse", "HEAD")
+        self.assertEqual(self.entry()["manifest"]["head_sha"], final)
+        self.assertEqual(self.git(self.tree, "show", "-s", "--format=%P", final).split(), [merged, self.current_base])
         self.assertEqual((self.tree / "source.py").read_text(), "value = 4\n")
         self.assertEqual((self.tree / "base_feature.py").read_text(), "upstream_feature = True\n")
         self.assertEqual(self.entry()["manifest"]["candidate"]["candidate_sha256"], self.candidate["candidate_sha256"])
         self.assertEqual(self.entry()["proof"], {})
+
+    def test_operator_merge_of_original_candidate_retains_registered_repair(self):
+        self.assert_original_merge_repair_recovery()
+
+    def test_operator_repair_merge_recovers_after_commit_before_snapshot(self):
+        self.assert_original_merge_repair_recovery(interrupt="commit")
+
+    def test_operator_repair_merge_recovers_after_checkpoint_before_commit(self):
+        self.assert_original_merge_repair_recovery(interrupt="before_commit")
+
+    def test_operator_repair_merge_recovers_after_snapshot_before_save(self):
+        self.assert_original_merge_repair_recovery(interrupt="snapshot")
+
+    def test_operator_repair_conflict_keeps_branch_and_evidence(self):
+        self.register_repair(conflicting_file=True)
+        self.git(self.upstream, "checkout", "main")
+        (self.upstream / "shared.py").write_text("shared = 'upstream'\n")
+        self.git(self.upstream, "add", "shared.py")
+        self.git(self.upstream, "commit", "-m", "upstream adds conflicting repair file")
+        self.current_base = self.git(self.upstream, "rev-parse", "HEAD")
+        self.git(self.repo, "fetch", "upstream", self.current_base)
+        merged = self.completed_merge()
+        before = self.entry()
+        with self.assertRaisesRegex(StageStopped, "conflicts with the registered repair"):
+            self.driver.prepare()
+        self.assertEqual(self.git(self.tree, "rev-parse", "HEAD"), merged)
+        self.assertEqual(self.entry()["request"], before["request"])
+        self.assertEqual(self.entry()["proof"], before["proof"])
+
+    def assert_original_merge_repair_recovery(self, interrupt=None):
+        repaired, dispositions = self.register_repair()
+        first_base = self.current_base
+        merged = self.completed_merge()
+        self.git(self.upstream, "checkout", "main")
+        (self.upstream / "second_feature.py").write_text(
+            "import importlib\nvalue = importlib.import_module('runtime')\n"
+        )
+        self.git(self.upstream, "add", "second_feature.py")
+        self.git(self.upstream, "commit", "-m", "newer upstream")
+        self.current_base = self.git(self.upstream, "rev-parse", "HEAD")
+        if interrupt:
+            native_git = module.base_impact.git
+
+            def interrupted_git(path, *args, **kwargs):
+                is_merge = args[:3] == ("merge", "--no-ff", "--no-edit")
+                if is_merge and interrupt == "before_commit":
+                    self.assertIn("base_merge", self.entry()["request"])
+                    raise StageStopped("repair interrupted")
+                result = native_git(path, *args, **kwargs)
+                if is_merge and interrupt == "commit":
+                    self.assertIn("base_merge", self.entry()["request"])
+                    raise StageStopped("repair interrupted")
+                return result
+
+            if interrupt == "snapshot":
+                guard = patch.object(self.driver, "save_manifest", side_effect=StageStopped("repair interrupted"))
+            else:
+                guard = patch.object(module.base_impact, "git", side_effect=interrupted_git)
+            with guard, self.assertRaisesRegex(StageStopped, "repair interrupted"):
+                self.driver.prepare()
+            saved = self.entry()
+            self.assertEqual(saved["request"]["base_merge"]["base_sha"], first_base)
+            self.assertEqual(saved["request"]["base_merge"]["repair_sha"], repaired)
+            self.driver.manifest = saved["manifest"]
+            self.driver.request.update(saved["request"])
+            original = dispositions.read_bytes()
+            dispositions.write_text("forged evidence")
+            with self.assertRaisesRegex(StageStopped, "completed repair evidence changed"):
+                self.driver.prepare()
+            dispositions.write_bytes(original)
+            checkpoint = saved["request"]["base_merge"]
+            changed = dict(saved["request"])
+            changed["base_merge"] = {**checkpoint, "repair_parent_sha": self.head}
+            with store.connect(self.db) as conn:
+                store.update(conn, self.round_id, request_json=json.dumps(changed))
+            with self.assertRaises(StageStopped):
+                self.driver.prepare()
+            with store.connect(self.db) as conn:
+                store.update(conn, self.round_id, request_json=json.dumps(saved["request"]))
+        self.driver.prepare()
+        head = self.git(self.tree, "rev-parse", "HEAD")
+        repair_merge = self.git(self.tree, "rev-parse", head + "^1")
+        self.assertEqual(self.git(self.tree, "show", "-s", "--format=%P", repair_merge).split(), [merged, repaired])
+        self.assertEqual((self.tree / "source.py").read_text(), "value = 4\n")
+        self.assertEqual(self.entry()["manifest"]["base_sha"], self.current_base)
+        self.assertEqual(self.entry()["manifest"]["head_sha"], head)
+        self.assertEqual(self.entry()["request"]["base_refresh_count"], 2)
+        self.assertNotIn("base_merge", self.entry()["request"])
+        self.assertEqual(self.entry()["proof"], {})
+        self.driver.prepare()
+        self.assertEqual(self.git(self.tree, "rev-parse", "HEAD"), head)
+        self.assertEqual(self.entry()["request"]["base_refresh_count"], 2)
+
+    def test_explicit_retrigger_rejects_merge_from_an_unrelated_base(self):
+        self.git(self.upstream, "checkout", "-b", "unrelated", self.base)
+        (self.upstream / "unrelated.py").write_text("unrelated = True\n")
+        self.git(self.upstream, "add", "unrelated.py")
+        self.git(self.upstream, "commit", "-m", "unrelated base")
+        unrelated = self.git(self.upstream, "rev-parse", "HEAD")
+        self.git(self.repo, "fetch", "upstream", unrelated)
+        self.git(self.tree, "merge", "--no-ff", "--no-edit", unrelated)
+        before = self.entry()
+        with self.assertRaisesRegex(StageStopped, "outside the current upstream history"):
+            self.driver.prepare()
+        self.assertEqual(self.entry()["request"], before["request"])
+        self.assertEqual(self.entry()["proof"], before["proof"])
+
+    def test_earlier_merge_recovery_remains_replayable_after_snapshot_interruption(self):
+        first_base = self.current_base
+        first_merge = self.completed_merge()
+        self.git(self.upstream, "checkout", "main")
+        (self.upstream / "second_feature.py").write_text(
+            "import importlib\nvalue = importlib.import_module('runtime')\n"
+        )
+        self.git(self.upstream, "add", "second_feature.py")
+        self.git(self.upstream, "commit", "-m", "newer upstream while retry waits")
+        self.current_base = self.git(self.upstream, "rev-parse", "HEAD")
+        with patch.object(
+            module.workspace, "prepare_candidate_snapshot", side_effect=StageStopped("snapshot interrupted")
+        ):
+            with self.assertRaisesRegex(StageStopped, "snapshot interrupted"):
+                self.driver.prepare()
+        saved = self.entry()["request"]["base_merge"]
+        self.assertEqual(saved["base_sha"], first_base)
+        self.assertEqual(saved["candidate_sha"], self.head)
+        self.assertEqual(self.git(self.tree, "rev-parse", "HEAD"), first_merge)
+        self.driver.prepare()
+        self.assertEqual(self.entry()["manifest"]["base_sha"], self.current_base)
+        self.assertEqual(self.entry()["request"]["base_refresh_count"], 2)
+        self.assertNotIn("base_merge", self.entry()["request"])
 
     def test_explicit_retrigger_rejects_forged_parents_tree_and_dirty_worktree(self):
         merged = self.completed_merge()

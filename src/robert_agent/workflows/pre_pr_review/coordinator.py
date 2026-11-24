@@ -288,9 +288,17 @@ class Coordinator(ReviewStages):
             preserved = self.preserve_completed_repair(candidate, align=False)
             if not isinstance(saved_merge, dict) or not saved_merge.get("base_sha"):
                 raise StageStopped("base merge checkpoint changed")
-            candidate = self.merge_current_base(preserved, saved_merge["base_sha"])
+            if "repair_sha" in saved_merge or "repair_parent_sha" in saved_merge:
+                if saved_merge.get("repair_sha") != preserved["head"] or not saved_merge.get("repair_parent_sha"):
+                    raise StageStopped("base merge repair checkpoint changed")
+                candidate = base_impact.reconcile_repair_merge(
+                    self, candidate, preserved, saved_merge["base_sha"], saved_merge["repair_parent_sha"]
+                )
+            else:
+                candidate = self.merge_current_base(preserved, saved_merge["base_sha"])
             self.save_candidate_snapshot(candidate, saved_merge["base_sha"])
         base_sha = self.observe_base(self.repo["repo_root"], "upstream", self.base)
+        candidate = base_impact.reconcile_operator_merge(self, candidate, base_sha)
         original_matches = self.manifest.get("original_request") == self.original_request
         if self.manifest.get("base_sha") != base_sha and original_matches:
             preserved = self.preserve_completed_repair(candidate, align=False)
