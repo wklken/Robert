@@ -205,6 +205,14 @@ def runs(conn, round_id):
     return [review.decode(dict(row)) for row in rows]
 
 
+def snapshot_artifact_roots(conn, round_id):
+    """Read the registered artifact roots for this round's frozen generations."""
+    rows = statements.read(
+        conn, select(SNAPSHOT.c.snapshot_id, SNAPSHOT.c.manifest_json).where(SNAPSHOT.c.round_id == round_id)
+    )
+    return {row["snapshot_id"]: json.loads(row["manifest_json"])["artifact_root"] for row in rows}
+
+
 def feedback_runs(conn, round_id, run_ids):
     """Read only the registered source runs named by a final feedback binding."""
     if not run_ids:

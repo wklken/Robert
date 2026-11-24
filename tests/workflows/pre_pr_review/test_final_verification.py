@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from robert_agent.adapters.git.review_revision import git
 from robert_agent.execution.stages import StageStopped
 from robert_agent.persistence.rounds import pre_pr_review as store
 from robert_agent.workflows.pre_pr_review import final_verification
@@ -35,6 +36,84 @@ class FinalVerificationIdentityTests(PrePRReviewFixture):
     def runs(self):
         with store.connect(self.db) as conn:
             return [run for run in store.runs(conn, self.driver.round_id) if run["stage"] == "verify_final"]
+
+    def refresh_snapshot(self):
+        upstream = self.git_fixture.upstream
+        git(upstream, "checkout", "main")
+        (upstream / "unrelated.py").write_text("upstream_value = True\n")
+        git(upstream, "add", "unrelated.py")
+        git(upstream, "commit", "-m", "advance upstream")
+        base = git(upstream, "rev-parse", "HEAD")
+        git(self.driver.repo["repo_root"], "fetch", "upstream", base)
+        self.driver.save_candidate_snapshot(self.driver.manifest["candidate"], base)
+        self.driver.prepare_context()
+        self.report, self.report_sha, self.findings = self.driver.report(self.driver.review())
+        self.disposition = self.driver.address(self.report, self.report_sha, self.findings)
+
+    def assert_snapshot_refresh_launches_new_verifier(self, original):
+        original_inputs = Path(self.driver.final_review["input_path"])
+        original_prompt = Path(original["dispatch"]["prompt_path"])
+        frozen = {path: path.read_bytes() for path in (original_inputs, original_prompt)}
+        old_snapshot = self.driver.manifest["snapshot_id"]
+        self.refresh_snapshot()
+        self.assertNotEqual(self.driver.manifest["snapshot_id"], old_snapshot)
+
+        second = self.verify()
+
+        self.assertNotEqual(second["run_id"], original["run_id"])
+        self.assertEqual(self.launches["verify_final"], 2)
+        self.assertEqual(second["snapshot_id"], self.driver.manifest["snapshot_id"])
+        self.assertEqual(self.runs()[0], original)
+        for path, content in frozen.items():
+            self.assertEqual(path.read_bytes(), content)
+        self.assertEqual(self.verify(), second)
+        self.assertEqual(self.launches["verify_final"], 2)
+
+    def test_snapshot_refresh_preserves_completed_verifier_and_launches_current_one(self):
+        self.verify()
+        self.assert_snapshot_refresh_launches_new_verifier(self.runs()[0])
+
+    def test_snapshot_refresh_skips_interrupted_preupgrade_verifier_without_checkpoint(self):
+        self.legacy_verification()
+        original = self.runs()[0]
+        dispatch = dict(original["dispatch"])
+        dispatch.pop("launch_checkpoint", None)
+        dispatch.pop("result_checkpoint", None)
+        with store.connect(self.db) as conn:
+            store.update_run(conn, original["run_id"], status="interrupted", dispatch_json=json.dumps(dispatch))
+        self.assert_snapshot_refresh_launches_new_verifier(self.runs()[0])
+
+    def test_current_verifier_prompt_moved_to_registered_old_snapshot_is_refused(self):
+        self.verify()
+        old_root = Path(self.driver.manifest["artifact_root"])
+        self.refresh_snapshot()
+        self.verify()
+        current = self.runs()[-1]
+        prompt = Path(current["dispatch"]["prompt_path"])
+        moved = old_root / prompt.name
+        moved.write_bytes(prompt.read_bytes())
+        dispatch = {**current["dispatch"], "prompt_path": str(moved)}
+        with store.connect(self.db) as conn:
+            store.update_run(conn, current["run_id"], dispatch_json=json.dumps(dispatch))
+        with self.assertRaisesRegex(StageStopped, "registered final reviewer prompt path changed"):
+            self.verify()
+        self.assertEqual(self.launches["verify_final"], 2)
+
+    def test_unregistered_prompt_directory_is_refused_even_with_unchanged_bytes(self):
+        self.verify()
+        run = self.runs()[0]
+        prompt = Path(run["dispatch"]["prompt_path"])
+        unknown = prompt.parent.parent / "unregistered-snapshot"
+        unknown.mkdir()
+        moved = unknown / prompt.name
+        moved.write_bytes(prompt.read_bytes())
+        with store.connect(self.db) as conn:
+            store.update_run(
+                conn, run["run_id"], dispatch_json=json.dumps({**run["dispatch"], "prompt_path": str(moved)})
+            )
+        with self.assertRaisesRegex(StageStopped, "registered final reviewer prompt path changed"):
+            self.verify()
+        self.assertEqual(self.launches["verify_final"], 1)
 
     def test_identical_report_at_new_checkpoint_reuses_registered_run_and_prompt(self):
         first = self.verify()
