@@ -277,8 +277,8 @@ def verify_snapshot(manifest, *, require_current_prompt=False):
             "--ignore-submodules=none",
         ).strip():
             raise ValueError("review worktree source is dirty")
-        if _git(tree, "ls-files", "--others", "-z"):
-            raise ValueError("review worktree contains unregistered files, including ignored files")
+        if _git(tree, "ls-files", "--others", "--exclude-standard", "-z"):
+            raise ValueError("review worktree contains unregistered files")
         if _source_hashes(tree) != manifest["source_hashes"]:
             raise ValueError("review worktree source hash changed")
         for name, expected in manifest["files"].items():

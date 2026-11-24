@@ -88,6 +88,9 @@ API 使用现有取消命令的 `abandon_review_run_ids` 列表，仍要求仓�
 
 ## 文件交接
 
+源码快照校验遵循 Git 的标准忽略规则：未跟踪且被忽略的测试数据库、字节码和缓存不会阻断审查或恢复。
+已跟踪文件即使命中忽略规则也必须保持不变；未被忽略的新文件、HEAD、源码哈希、上下文和 prompt 的变化仍会被拒绝。
+
 每轮 fetch 当前 PR head/base，验证 SHA 后建立独立 detached Git worktree。
 完整 PR diff 从该轮 merge-base 到 head 计算。共享源码和上下文不被后续轮次 reset。
 PR 信息、触发上下文、变更文件、diff/stat/行数、Python 运行时信息由 Robert 写入；
