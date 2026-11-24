@@ -293,12 +293,25 @@ def handoff(w):
     )
     old = w.sql("SELECT consumed_event_fingerprints_json FROM worker_results WHERE attempt_id=?", actor["attempt_id"])
     assert "comment:1105" not in json.loads(old[0]["consumed_event_fingerprints_json"])
+    w.program("stop", "daemon")
+    assert not w.remote()["effects"]
     w.release(first)
-    w.program("restart", "daemon")
-    child = w.wait(
-        "the pending event gets one completed successor",
-        lambda: w.sql("SELECT * FROM tasks WHERE parent_task_id=? AND lifecycle='completed'", actor["task_id"]),
+    w.program("start", "daemon")
+    (child,) = w.wait(
+        "the pending event reaches a completed analysis beyond classification",
+        lambda: w.sql(
+            "SELECT t.task_id,r.consumed_event_fingerprints_json FROM tasks t "
+            "LEFT JOIN tasks classifier ON t.parent_task_id=classifier.task_id "
+            "JOIN worker_results r ON r.task_id=t.task_id "
+            "WHERE t.route_id='comment-analysis' AND t.lifecycle='completed' "
+            "AND (t.parent_task_id=? OR (classifier.parent_task_id=? AND classifier.route_id='classification-result'))",
+            actor["task_id"],
+            actor["task_id"],
+        ),
     )
-    assert len(child) == 1
+    assert "comment:1105" in json.loads(child["consumed_event_fingerprints_json"])
     assert len(w.sql("SELECT * FROM attempts WHERE task_id=?", actor["task_id"])) == 1
-    assert len(effect_rows(w, "comment")) == 2
+    effects = effect_rows(w, "comment")
+    assert len(effects) == 2
+    for task_id in (actor["task_id"], child["task_id"]):
+        assert sum(f"task_id={task_id} " in row["effect"]["body"] for row in effects) == 1
