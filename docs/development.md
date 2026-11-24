@@ -23,7 +23,7 @@ cd Robert
 python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install -e '.[dev]'
-python3 -B -m unittest discover -s tests
+python3 -B -m tests.run --workers 4
 ```
 
 Use temporary paths while developing:
@@ -63,7 +63,7 @@ python3 -m mypy src/robert_agent/cli src/robert_agent/paths.py \
   src/robert_agent/configuration src/robert_agent/execution/stages.py \
   src/robert_agent/context/skills.py src/robert_agent/adapters/services/native.py
 lint-imports --config pyproject.toml --no-cache
-python3 -B -m unittest discover -s tests
+python3 -B -m tests.run --workers 4
 python3 -B -m compileall -q src
 python3 -m build
 node --test tests/browser/*.test.cjs
@@ -81,16 +81,36 @@ python3 -m venv /tmp/robert-smoke
 Tests use isolated temporary configuration and data directories instead of
 production paths.
 
-For the same full suite with isolated module processes, use
+The default full-suite gate uses isolated module processes through
 `python3 -B -m tests.run --workers 4`. The runner uses standard unittest discovery
 and the current interpreter, keeps each module's class/module fixtures together,
 and reports every child's output and elapsed time. Import errors, empty discovery
 and any failed child make the run fail. `python3 -B -m tests.run --list` prints the
-complete discovered test IDs without executing them. The serial discovery command
-above remains available for independent validation and timing comparisons.
+complete discovered test IDs without executing them. Serial
+`python3 -B -m unittest discover -s tests` remains available for investigating
+order dependence and for timing comparisons.
 Module-level and decorator skips retain unittest semantics. Custom `load_tests`
 hooks require the serial command; the parallel runner rejects them because
 reloading test methods by name cannot preserve hook-created instances or suites.
+
+For recorded timing evidence, add `--report-json /tmp/robert-test-report.json`.
+The JSON records module durations and exit codes, source fingerprints before and
+after execution, the interpreter, installed dependency versions and temporary
+directory. A change to source, tests, packaged resources or installed dependency
+versions during the run fails verification. Custom discovery directories contribute
+their Python test files to the fingerprint. Keep report outputs outside `src/`
+and `tests/`.
+
+The runner acquires an OS lock for the resolved discovery directory before
+importing tests. A second runner on that directory exits with status 2; the lock
+is released when its owner exits. Locks live in `~/.cache/robert-test-runs/`,
+independent of a task's temporary directory. Serial unittest bypasses this lock.
+Give one agent ownership of final full-suite verification in a shared checkout,
+and freeze edits while it runs. Reuse its evidence only when tested contents and
+interpreter/dependencies are unchanged. Independent development tasks use separate
+registered worktrees under the repository's configured `worktree_root`; agents
+sharing one task checkout need explicit file ownership. Worktrees isolate Git
+files and branches; CPU, memory and installed dependencies remain shared.
 
 Keep real-time integration checks for database lock survival, HTTP backoff and
 process cleanup. Tests of repeated policy decisions can advance an explicit clock;

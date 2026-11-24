@@ -13,7 +13,13 @@ These rules apply to the entire Robert repository.
 - Do not add runtime dependencies without documenting why the standard library
   and current dependencies are insufficient.
 - Do not store GitHub or OpenClaw credentials in configuration or fixtures.
-- Run `python3 -B -m unittest discover -s tests` for code changes.
+- Run `python3 -B -m tests.run --workers 4` for code changes. This discovers the
+  complete suite; keep serial `python3 -B -m unittest discover -s tests` for
+  diagnosing order dependence or custom `load_tests` hooks.
+- Assign one full-suite runner to each worktree. Other agents in that checkout
+  use focused tests and the owner's final full-suite evidence. Freeze source
+  edits during that run; reuse evidence only for unchanged tested contents and
+  interpreter/dependency inputs. Use `--report-json` to record timings and inputs.
 - Run `python3 -m ruff check src tests` and
   `lint-imports --config pyproject.toml --no-cache` for Python or dependency changes.
 - Format Python with `python3 -m ruff format src tests`; verify with

@@ -1,5 +1,7 @@
 """Load packaged route policies and apply configured overrides."""
 
+from copy import deepcopy
+from functools import lru_cache
 from typing import TypedDict
 
 import yaml
@@ -41,7 +43,15 @@ class RoutePolicy(_RequiredRoutePolicy, total=False):
 
 
 def load_route_policies() -> list[RoutePolicy]:
-    data = yaml.safe_load(resource("routes.yml").read_text(encoding="utf-8"))
+    # Read every time so editable installs and package replacements take effect.
+    # Cache only parsing, by content, and keep caller mutations out of the cache.
+    document = resource("routes.yml").read_text(encoding="utf-8")
+    return deepcopy(_parse_route_policies(document))
+
+
+@lru_cache(maxsize=1)
+def _parse_route_policies(document: str) -> list[RoutePolicy]:
+    data = yaml.safe_load(document)
     routes = data.get("routes") if isinstance(data, dict) else None
     if not isinstance(routes, list) or not routes:
         raise ValueError("packaged routes.yml must contain routes")
