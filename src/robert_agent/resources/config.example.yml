@@ -26,6 +26,10 @@ scheduler:
   max_concurrency: 3
   # 原生 review/vote 共享模型池；每轮仍占一个任务槽位。
   model_max_concurrency: 4
+  # 每个本地调度 cycle 最多启动的任务数。
+  max_dispatches: 2
+  # 本地 loop 的发布动作预算；后台发布每仓库每批的动作数上限。
+  max_publish_actions: 5
   local_poll_seconds: 5
   lease_ttl_seconds: 540
 

@@ -11,6 +11,27 @@ from tests.support.config_v2 import ConfigV2Fixture
 
 
 class ConfigV2Tests(ConfigV2Fixture):
+    def test_scheduler_batch_defaults_overrides_and_invalid_values(self):
+        defaults = self.validate()
+        self.assertEqual(defaults["max_dispatches"], 2)
+        self.assertEqual(defaults["max_publish_actions"], 5)
+        self.config["scheduler"] = {"max_concurrency": 30, "max_dispatches": 6, "max_publish_actions": 10}
+        self.config["repos"][0]["max_concurrency"] = 10
+        result = self.validate()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            (result["max_concurrency"], result["max_dispatches"], result["max_publish_actions"]), (30, 6, 10)
+        )
+        self.assertEqual(result["repos"][0]["max_concurrency"], 10)
+        for field in ("max_dispatches", "max_publish_actions"):
+            for invalid in (0, -1, True, "6", 1.5):
+                with self.subTest(field=field, invalid=invalid):
+                    candidate = copy.deepcopy(self.config)
+                    candidate["scheduler"][field] = invalid
+                    rejected = self.validate(candidate)
+                    self.assertFalse(rejected["ok"], rejected)
+                    self.assertIn(field, rejected["safe_error"])
+
     def test_explicit_default_and_route_models(self):
         self.config["routes"] = {"new-pr": {"model": "route-model"}}
         self.config["repos"][0]["routes"] = {"new-pr": {"effort": "medium"}}

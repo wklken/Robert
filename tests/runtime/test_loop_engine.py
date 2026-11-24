@@ -63,6 +63,61 @@ repos:
         self.assertEqual(result["stop_reason"], "no_runnable_work")
         self.assertTrue(Path(result["latest_loop_path"]).is_file())
 
+    def test_configured_batches_reach_cycle_and_explicit_overrides_win(self):
+        from robert_agent.runtime import loop as loop_engine
+
+        self.config_path.write_text(
+            self.config_path.read_text().replace(
+                "  max_concurrency: 3", "  max_concurrency: 30\n  max_dispatches: 6\n  max_publish_actions: 10"
+            )
+        )
+        db_path = self._init_runnable_db()
+        for overrides, expected in (({}, (6, 10)), ({"max_dispatches": 0, "max_publish_actions": 3}, (0, 3))):
+            with self.subTest(overrides=overrides):
+                observed = []
+
+                def runner(*_args, **kwargs):
+                    observed.append((kwargs["max_dispatches"], kwargs["max_publish_actions"]))
+                    return {"ok": True, "status": "completed", "db_path": str(db_path)}
+
+                result = loop_engine.run_loop(
+                    self.config_path, dry_run=True, skip_external=True, runner=runner, **overrides
+                )
+                self.assertTrue(result["ok"], result)
+                self.assertEqual(observed, [expected])
+
+    def test_loop_cli_loads_config_budgets_and_preserves_explicit_zero(self):
+        import json
+        import subprocess
+        import sys
+
+        self.config_path.write_text(
+            self.config_path.read_text().replace(
+                "  max_concurrency: 3", "  max_concurrency: 30\n  max_dispatches: 6\n  max_publish_actions: 10"
+            )
+        )
+        for flags, expected in (([], (6, 10)), (["--max-dispatches", "0", "--max-publish-actions", "0"], (0, 0))):
+            with self.subTest(flags=flags):
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-B",
+                        "-m",
+                        "robert_agent.runtime.loop",
+                        "--config",
+                        str(self.config_path),
+                        "--dry-run",
+                        "--skip-external",
+                        *flags,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                budgets = json.loads(completed.stdout)["budgets"]
+                self.assertEqual((budgets["max_dispatches"], budgets["max_publish_actions"]), expected)
+
     def test_loop_ignores_local_work_outside_configured_repos(self):
         from robert_agent.runtime import loop as loop_engine
 

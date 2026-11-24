@@ -83,15 +83,19 @@ def run_loop(
     skip_publish=False,
     max_cycles=3,
     max_seconds=120,
-    max_dispatches=2,
-    max_publish_actions=5,
+    max_dispatches=None,
+    max_publish_actions=None,
     runner=run_once_module.run_once,
     consume_observations=False,
 ):
     started = time.monotonic()
+    db_path, repo_ids, config = load_config_scope(config_path, skip_external=skip_external, include_config=True)
+    if max_dispatches is None:
+        max_dispatches = config["max_dispatches"]
+    if max_publish_actions is None:
+        max_publish_actions = config["max_publish_actions"]
     if max_publish_actions < 0:
         raise ValueError("max_publish_actions must be at least 0")
-    db_path, repo_ids, config = load_config_scope(config_path, skip_external=skip_external, include_config=True)
     cycle_results = []
     stop_reason = "max_cycles"
     publish_actions_used = 0
@@ -211,8 +215,10 @@ def main(argv=None):
     parser.add_argument("--consume-observations", action="store_true")
     parser.add_argument("--max-cycles", type=int, default=3)
     parser.add_argument("--max-seconds", type=int, default=120)
-    parser.add_argument("--max-dispatches", type=int, default=2)
-    parser.add_argument("--max-publish-actions", type=int, default=5)
+    parser.add_argument("--max-dispatches", type=int, help="Starts per cycle; overrides scheduler.max_dispatches.")
+    parser.add_argument(
+        "--max-publish-actions", type=int, help="Loop publication budget; overrides scheduler.max_publish_actions."
+    )
     args = parser.parse_args(argv)
     try:
         result = run_loop(

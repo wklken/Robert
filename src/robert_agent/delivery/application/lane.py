@@ -58,7 +58,13 @@ def publish(config_path, *, dry_run=False):
         proposal_feedback.deliver_pending(config)
     for repo_id in repo_ids:
         results.append(
-            publisher.publish_ready_actions(config["db_path"], repo_id=repo_id, dry_run=dry_run, limit=5, config=config)
+            publisher.publish_ready_actions(
+                config["db_path"],
+                repo_id=repo_id,
+                dry_run=dry_run,
+                limit=config.get("max_publish_actions", 5),
+                config=config,
+            )
         )
     wakeup_notifier.notify(config["db_path"])
     return {
