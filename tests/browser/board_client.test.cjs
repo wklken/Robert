@@ -63,3 +63,17 @@ test('refresh retains loaded pages and deduplicates moving cards', async () => {
   assert.equal(urls[1], '/board?limit=50&cursor=cursor%2B%2F%3D');
   assert.equal(urls.length, 2);
 });
+
+test('multi-page results use head metadata and the final pagination cursor', async () => {
+  let calls = 0;
+  const api = client(async () => response(++calls === 1
+    ? {items:[{work_item_id:'a'}],next_cursor:'next',counts:{done:12},capacity:{running:2},attention_items:['fresh'],filters:{agents:['new']}}
+    : {items:[{work_item_id:'b'}],next_cursor:'last',counts:{done:11},capacity:{running:1},attention_items:['old'],filters:{agents:['old']}}));
+  const result = await api.pages('/board?limit=50',2);
+  assert.equal(result.counts.done,12);
+  assert.equal(result.capacity.running,2);
+  assert.equal(result.attention_items[0],'fresh');
+  assert.equal(result.filters.agents[0],'new');
+  assert.equal(result.next_cursor,'last');
+  assert.equal(result.items.length,2);
+});

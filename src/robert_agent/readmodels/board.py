@@ -28,6 +28,7 @@ from robert_agent.persistence.queries import (
 )
 from robert_agent.persistence.queries import wakeups as db_read_wakeups
 from robert_agent.persistence.queries import work_items as db_read_work_items
+from robert_agent.persistence.queries.readviews import board as board_queries
 from robert_agent.persistence.queries.readviews import task_history
 from robert_agent.persistence.queries.readviews import work_items as work_item_queries
 from robert_agent.persistence.rounds import review as review_store
@@ -35,6 +36,7 @@ from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.persistence.rounds import vote as vote_store
 from robert_agent.readmodels.execution import (
     attempt_history,
+    attempt_summary_from_records,
     execution_summary,
     publication_history,
     safe_text,
@@ -145,7 +147,10 @@ def _safe_http_url(value):
 
 
 def _unresolved_attention(conn, work_item_id):
-    rows = work_item_queries.unresolved_attention(conn, work_item_id, sorted(ATTENTION_EVENTS))
+    return _attention_signals(work_item_queries.unresolved_attention(conn, work_item_id, sorted(ATTENTION_EVENTS)))
+
+
+def _attention_signals(rows):
     return [
         {
             "event_id": row["event_id"],
@@ -165,13 +170,15 @@ def _latest_attempt(conn, task_id):
     return db_records.first(db_read_attempts.find_for_latest_attempt(conn, task_id))
 
 
-def _exhausted_pr_remediation(conn, pr):
+def _exhausted_pr_remediation(conn, pr, *, episodes=None):
     health = json_object(pr["metadata_json"]).get("pr_remediation_health")
     if not isinstance(health, dict):
         health = {}
     head, base = health.get("head_sha"), health.get("base_sha")
     latest = {}
-    for episode in task_history.remediation_for_workstreams(conn, [pr["workstream_id"]]):
+    if episodes is None:
+        episodes = task_history.remediation_for_workstreams(conn, [pr["workstream_id"]])
+    for episode in episodes:
         if (
             head
             and base
@@ -230,14 +237,22 @@ def _waiting_source_context(conn, task_id):
     return bool(task and not operator_queries.source_read(conn, task)[0])
 
 
-def _retrigger_pending(conn, task):
+def _retrigger_pending(conn, task, *, loaded=None):
+    if loaded is not None:
+        return loaded["retrigger_pending"]
     return bool(db_records.first(db_read_wakeups.find_for_project_item(conn, task["task_id"])))
 
 
-def _failed_task_recovery(conn, task, attention):
+def _failed_task_recovery(conn, task, attention, *, loaded=None):
     """Commands that start a new run of a failed task, or none while one is owed."""
-    binding = execution_store.get_binding(conn, "task", task["task_id"])
-    if _retrigger_pending(conn, task) or (binding and binding["binding_status"] == BindingStatus.ATTENTION):
+    binding = (
+        loaded["recovery_bindings"].get(("task", task["task_id"]))
+        if loaded is not None
+        else execution_store.get_binding(conn, "task", task["task_id"])
+    )
+    if _retrigger_pending(conn, task, loaded=loaded) or (
+        binding and binding["binding_status"] == BindingStatus.ATTENTION
+    ):
         return []
     operator_failure = json_object(task["metadata_json"]).get("trigger_work_item_event_id") and any(
         a["type"] == "execution_failed" and a["metadata"].get("task_id") == task["task_id"] for a in attention
@@ -308,7 +323,7 @@ def _summary_cause(card, facts, attention, state):
     return None
 
 
-def _status_summary(conn, card, row, *, task, facts, attention):
+def _status_summary(conn, card, row, *, task, facts, attention, loaded=None):
     """Operator-facing status shared by cards, details and attention counts.
 
     Values are codes; the web client owns their wording in each language.
@@ -347,28 +362,38 @@ def _status_summary(conn, card, row, *, task, facts, attention):
             "task": (task["expected_output"] or task["route_id"]) if task else None,
             "phase": execution.get("phase"),
         },
-        "attempts": _task_attempt_counts(conn, task["task_id"]) if task else {"total": 0, "failed": 0},
+        "attempts": loaded["attempt_counts"]
+        if loaded is not None
+        else (_task_attempt_counts(conn, task["task_id"]) if task else {"total": 0, "failed": 0}),
         "cause": _summary_cause(card, facts, attention, state),
         "primary": primary,
         "since": execution.get("finished_at") or execution.get("heartbeat_at") or row["updated_at"],
     }
 
 
-def _project_item(conn, row, *, controls=None, facts=None):
+def _project_item(conn, row, *, controls=None, facts=None, loaded=None):
     work_item_id = row["work_item_id"]
-    attention = _unresolved_attention(conn, work_item_id)
-    source = db_records.first(
-        db_read_github_sources.find_source_type_and_number_and_html_url_by_source_id(conn, row["origin_source_id"])
-    )
-    if facts is None:
-        facts = control_queries.lifecycle_facts(conn, row, controls=controls)
-    task = control_queries.current_task(conn, facts["streams"])
-    attempt = _latest_attempt(conn, task["task_id"]) if task else None
-    execution = execution_summary(conn, task["task_id"]) if task else None
+    if loaded is None:
+        attention = _unresolved_attention(conn, work_item_id)
+        source = db_records.first(
+            db_read_github_sources.find_source_type_and_number_and_html_url_by_source_id(conn, row["origin_source_id"])
+        )
+        if facts is None:
+            facts = control_queries.lifecycle_facts(conn, row, controls=controls)
+        task = control_queries.current_task(conn, facts["streams"])
+        attempt = _latest_attempt(conn, task["task_id"]) if task else None
+        execution = execution_summary(conn, task["task_id"]) if task else None
+    else:
+        attention, source, task, attempt, execution = (
+            loaded[key] for key in ("attention", "source", "task", "attempt", "execution")
+        )
+        facts = loaded["facts"]
     pr = next(iter(facts["pull_requests"]), None)
     exhausted_remediation = None
     if pr and (pr["state"] or "open").lower() == "open":
-        exhausted_remediation = _exhausted_pr_remediation(conn, pr)
+        exhausted_remediation = _exhausted_pr_remediation(
+            conn, pr, episodes=loaded["remediation"] if loaded is not None else None
+        )
     running = bool(facts["running"])
     publication_in_progress = bool(facts["actions"])
     failures = facts["publish_failures"]
@@ -392,7 +417,9 @@ def _project_item(conn, row, *, controls=None, facts=None):
         and not publication_in_progress
         and not facts["source_closed"]
     )
-    rerun_requested = bool(failed_after_completion and row["origin_type"] != "web" and _retrigger_pending(conn, task))
+    rerun_requested = bool(
+        failed_after_completion and row["origin_type"] != "web" and _retrigger_pending(conn, task, loaded=loaded)
+    )
     if row["canceled_at"]:
         column, reason_code, reason_summary = "history", "canceled", "Canceled by the operator"
     elif rerun_requested:
@@ -550,9 +577,15 @@ def _project_item(conn, row, *, controls=None, facts=None):
         "task_id": task["task_id"] if task else None,
         "task_lifecycle": task["lifecycle"] if task else None,
         "execution": execution,
-        "review": review_store.board_status(conn, task["task_id"]) if task else None,
-        "pre_pr_review": pre_pr_review.task_status(conn, task["task_id"]) if task else None,
-        "vote": vote_store.board_status(conn, task["task_id"]) if task else None,
+        "review": loaded["rounds"]["review"]
+        if loaded is not None
+        else (review_store.board_status(conn, task["task_id"]) if task else None),
+        "pre_pr_review": loaded["rounds"]["pre_pr_review"]
+        if loaded is not None
+        else (pre_pr_review.task_status(conn, task["task_id"]) if task else None),
+        "vote": loaded["rounds"]["vote"]
+        if loaded is not None
+        else (vote_store.board_status(conn, task["task_id"]) if task else None),
         "publication": {
             "failures": failures,
             "pending": len(facts["actions"]),
@@ -620,7 +653,7 @@ def _project_item(conn, row, *, controls=None, facts=None):
             ) + ["cancel"]
         elif task and task["lifecycle"] == TaskLifecycle.FAILED and not running and not publication_in_progress:
             if row["origin_type"] != "web":
-                card["valid_commands"] = _failed_task_recovery(conn, task, attention) + ["cancel"]
+                card["valid_commands"] = _failed_task_recovery(conn, task, attention, loaded=loaded) + ["cancel"]
             else:
                 card["valid_commands"] = ["retry", "cancel"]
     if not facts["approval_task_id"] and any(a["type"] == "operator_decision_required" for a in attention):
@@ -632,21 +665,90 @@ def _project_item(conn, row, *, controls=None, facts=None):
     elif failed_after_completion:
         # A rerun acts on the failed task; reopening and cancellation act on
         # the work item, retaining its prior completion evidence.
-        recovery = _failed_task_recovery(conn, task, attention) if row["origin_type"] != "web" else []
+        recovery = _failed_task_recovery(conn, task, attention, loaded=loaded) if row["origin_type"] != "web" else []
         card["valid_commands"] = [command for command in recovery if command == "retrigger"] + ["reopen", "cancel"]
     if column == "done" and facts["source_closed"]:
         card["valid_commands"] = ["cancel"]
-    card["status_summary"] = _status_summary(conn, card, row, task=task, facts=facts, attention=attention)
+    card["status_summary"] = _status_summary(
+        conn, card, row, task=task, facts=facts, attention=attention, loaded=loaded
+    )
     return card
+
+
+def _batch_projections(conn, rows, *, controls=None, workstream=False):
+    from collections import defaultdict
+
+    records = board_queries.lifecycle_records(conn, rows, controls=controls)
+    attention = defaultdict(list)
+    for event in work_item_queries.unresolved_attention_for_items(conn, records, sorted(ATTENTION_EVENTS)):
+        attention[event["work_item_id"]].append(event)
+    task_ids = [record["task"]["task_id"] for record in records.values() if record["task"]]
+    # Lifecycle callers may supply partial or overridden observations. Recovery
+    # commands retain the independent persisted-binding check of item detail.
+    recovery_bindings = execution_store.read_controls(conn, [("task", task_id) for task_id in task_ids])
+    execution = board_queries.current_execution_records(conn, task_ids)
+    rounds = board_queries.model_round_statuses(conn, task_ids)
+    remediation = defaultdict(list)
+    pull_requests = [
+        pr
+        for record in records.values()
+        for pr in record["pull_requests"][:1]
+        if (pr["state"] or "open").lower() == "open"
+    ]
+    for episode in board_queries.latest_remediation_records(conn, pull_requests):
+        remediation[episode["workstream_id"]].append(episode)
+    cards = []
+    for row in rows:
+        record = records[row["work_item_id"]]
+        relevant_controls = record["controls"]
+        if controls is not None:
+            relevant_controls = {key: controls[key] for key in relevant_controls if key in controls}
+        source = record["source"]
+        facts = control_queries.lifecycle_facts_from_records(
+            streams=record["streams"],
+            attempts=record["attempts"],
+            actions=record["actions"],
+            task_metadata=record["task_metadata"],
+            subjects=relevant_controls,
+            controls=relevant_controls,
+            source_state=source["state"] if source else None,
+            publication_retry_pending=record["publication_retry_pending"],
+            approval_task_id=record["approval_task_id"],
+            pull_requests=record["pull_requests"],
+        )
+        task = record["task"]
+        task_id = task["task_id"] if task else None
+        attempt = execution["attempts"].get(task_id)
+        loaded = {
+            "facts": facts,
+            "source": source,
+            "task": task,
+            "attempt": attempt,
+            "execution": attempt_summary_from_records(attempt, execution["phases"].get(attempt["attempt_id"]))
+            if attempt
+            else None,
+            "attention": _attention_signals(attention[row["work_item_id"]]),
+            "controls": relevant_controls,
+            "recovery_bindings": recovery_bindings,
+            "retrigger_pending": task_id in execution["retriggers"],
+            "attempt_counts": execution["counts"].get(task_id, {"total": 0, "failed": 0}),
+            "rounds": rounds.get(task_id, {"review": None, "vote": None, "pre_pr_review": None}),
+            "remediation": remediation[record["pull_requests"][0]["workstream_id"]] if record["pull_requests"] else [],
+        }
+        card = _project_item(conn, row, loaded=loaded)
+        if workstream:
+            card["operator_cancellation_settled"] = bool(row["canceled_at"]) and not any(
+                facts[key] for key in ("running", "actions", "workflow_attention", "cleanup_pending")
+            )
+        cards.append(card)
+    return cards
 
 
 def _all_projections(conn, *, repo=None, include_history=True, active_only=False, controls=None):
     rows = work_item_queries.work_items_with_repositories(
         conn, repo=repo, include_history=include_history, active_only=active_only
     )
-    if controls is None:
-        controls = execution_store.read_controls(conn) if rows else {}
-    return [_project_item(conn, row, controls=controls) for row in rows]
+    return _batch_projections(conn, rows, controls=controls)
 
 
 def workstream_projections(conn, *, workstream_ids=None, controls=None):
@@ -656,17 +758,8 @@ def workstream_projections(conn, *, workstream_ids=None, controls=None):
         workstream_ids=workstream_ids,
         attached_only=True,
     )
-    projections = {}
-    for row in rows:
-        facts = control_queries.lifecycle_facts(conn, row, controls=controls)
-        card = _project_item(conn, row, facts=facts)
-        # This shared read model stays internal to the workbench. A canceled
-        # owner must not hide unfinished execution in a derived workstream.
-        card["operator_cancellation_settled"] = bool(row["canceled_at"]) and not any(
-            facts[key] for key in ("running", "actions", "workflow_attention", "cleanup_pending")
-        )
-        projections[row["workstream_id"]] = card
-    return projections
+    cards = _batch_projections(conn, rows, controls=controls, workstream=True)
+    return {row["workstream_id"]: card for row, card in zip(rows, cards)}
 
 
 def _matches(item, *, repo, agent, priority, attention, query):
@@ -727,7 +820,6 @@ def list_board(
 
     with closing(_connect(db_path)) as conn:
         db_transactions.begin(conn)  # Historical and active partitions share one read snapshot.
-        controls = execution_store.read_controls(conn)
         terminal = work_item_queries.terminal_board_page(
             conn,
             repo=repo,
@@ -743,9 +835,7 @@ def list_board(
         )
         projections = [
             item
-            for item in _all_projections(
-                conn, repo=repo, include_history=include_history, active_only=True, controls=controls
-            )
+            for item in _all_projections(conn, repo=repo, include_history=include_history, active_only=True)
             if _matches(item, repo=repo, agent=agent, priority=priority, attention=attention, query=query)
         ]
         counts = {
@@ -775,8 +865,10 @@ def list_board(
         selected_ids = [item["work_item_id"] for item in selected if item["work_item_id"] in terminal_ids]
         historical = (
             {
-                row["work_item_id"]: _project_item(conn, row, controls=controls)
-                for row in work_item_queries.work_items_with_repositories(conn, item_ids=selected_ids)
+                card["work_item_id"]: card
+                for card in _batch_projections(
+                    conn, work_item_queries.work_items_with_repositories(conn, item_ids=selected_ids)
+                )
             }
             if selected_ids
             else {}

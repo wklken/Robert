@@ -24,6 +24,51 @@ def lifecycle_facts(conn, item, *, controls=None, parked_publication_task_id=Non
     streams = related_workstreams(conn, item["workstream_id"])
     cursor = db_read_attempts.lifecycle_facts_filtered(conn, streams)
     attempts = [dict(row) for row in cursor]
+    actions = [dict(row) for row in db_read_github_actions.lifecycle_facts_filtered(conn, streams)]
+    task_metadata = [row[0] for row in db_read_tasks.lifecycle_facts_filtered(conn, streams)]
+    subjects = set()
+    for task_id, episode_id in db_read_tasks.lifecycle_facts_filtered_2(conn, streams):
+        subjects.add(("task", task_id))
+        if episode_id:
+            subjects.add(("remediation_episode", episode_id))
+    from robert_agent.persistence import execution_control as execution_store
+
+    if controls is None:
+        controls = execution_store.read_controls(conn, subjects)
+    source = db_records.first(db_read_github_sources.find_state_by_source_id(conn, item["origin_source_id"]))
+    pending = db_records.first(db_read_wakeups.find_for_lifecycle_facts(conn, item["work_item_id"]))
+    approval_task = db_records.first(db_read_workstreams.find_for_lifecycle_facts(conn, item["workstream_id"]))
+    pull_requests = [dict(row) for row in db_read_workstreams.find_related_pull_requests(conn, item["workstream_id"])]
+    return lifecycle_facts_from_records(
+        streams=streams,
+        attempts=attempts,
+        actions=actions,
+        task_metadata=task_metadata,
+        subjects=subjects,
+        controls=controls,
+        source_state=source[0] if source else None,
+        publication_retry_pending=bool(pending),
+        approval_task_id=approval_task[0] if approval_task else None,
+        pull_requests=pull_requests,
+        parked_publication_task_id=parked_publication_task_id,
+    )
+
+
+def lifecycle_facts_from_records(
+    *,
+    streams,
+    attempts,
+    actions,
+    task_metadata,
+    subjects,
+    controls,
+    source_state,
+    publication_retry_pending,
+    approval_task_id,
+    pull_requests,
+    parked_publication_task_id=None,
+):
+    """Apply the same lifecycle policy to one caller-owned read snapshot."""
     cleanup = []
     for attempt in attempts:
         try:
@@ -46,8 +91,6 @@ def lifecycle_facts(conn, item, *, controls=None, parked_publication_task_id=Non
             "already_dead",
         }:
             cleanup.append(safe_text(termination.get("reason") or termination.get("status")))
-    cursor = db_read_github_actions.lifecycle_facts_filtered(conn, streams)
-    actions = [dict(row) for row in cursor]
     failed = []
     retry_blocked = False
     for action in actions:
@@ -91,7 +134,7 @@ def lifecycle_facts(conn, item, *, controls=None, parked_publication_task_id=Non
                 }
             )
     attention = []
-    for (encoded,) in db_read_tasks.lifecycle_facts_filtered(conn, streams):
+    for encoded in task_metadata:
         try:
             metadata = json.loads(encoded or "{}")
             stopped = metadata.get("execution_attention")
@@ -99,15 +142,6 @@ def lifecycle_facts(conn, item, *, controls=None, parked_publication_task_id=Non
             stopped = {"reason_code": "invalid_task_metadata"}
         if isinstance(stopped, dict):
             attention.append(safe_text(stopped.get("reason_code") or "Execution requires operator attention."))
-    from robert_agent.persistence import execution_control as execution_store
-
-    subjects = set()
-    for task_id, episode_id in db_read_tasks.lifecycle_facts_filtered_2(conn, streams):
-        subjects.add(("task", task_id))
-        if episode_id:
-            subjects.add(("remediation_episode", episode_id))
-    if controls is None:
-        controls = execution_store.read_controls(conn, subjects)
     for key in sorted(subjects):
         binding = controls.get(key)
         if (
@@ -117,10 +151,6 @@ def lifecycle_facts(conn, item, *, controls=None, parked_publication_task_id=Non
         ):
             metadata = json.loads(binding["metadata_json"] or "{}")
             attention.append(safe_text(metadata.get("reason_code") or "Execution requires operator attention."))
-    source = db_records.first(db_read_github_sources.find_state_by_source_id(conn, item["origin_source_id"]))
-    pending = db_records.first(db_read_wakeups.find_for_lifecycle_facts(conn, item["work_item_id"]))
-    approval_task = db_records.first(db_read_workstreams.find_for_lifecycle_facts(conn, item["workstream_id"]))
-    pull_requests = [dict(row) for row in db_read_workstreams.find_related_pull_requests(conn, item["workstream_id"])]
     open_pull_requests = [pr for pr in pull_requests if (pr["state"] or "open").lower() == "open"]
     unmerged_pull_requests = []
     for pr in pull_requests:
@@ -141,12 +171,12 @@ def lifecycle_facts(conn, item, *, controls=None, parked_publication_task_id=Non
         "running": attempts,
         "actions": actions,
         "publish_failures": failed,
-        "approval_task_id": approval_task[0] if approval_task else None,
+        "approval_task_id": approval_task_id,
         "workflow_attention": attention,
-        "publication_retry_pending": bool(pending),
+        "publication_retry_pending": publication_retry_pending,
         "publication_retry_blocked": retry_blocked,
         "cleanup_pending": cleanup,
-        "source_closed": bool(source and (source[0] or "").lower() == "closed")
+        "source_closed": bool((source_state or "").lower() == "closed")
         or any((a["source_state"] or "").lower() == "closed" for a in attempts),
     }
 

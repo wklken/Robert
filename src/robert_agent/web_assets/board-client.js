@@ -66,20 +66,23 @@ const BoardClient = (() => {
     }
   }
   async function pages(url, count = 1) {
-    let data;
+    let first;
     const items = new Map();
     let cursor;
     for (let page = 0; page < count; page++) {
-      data = await request(
+      const data = await request(
         url + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""),
       );
+      first ||= data;
       data.items.forEach((item) => {
         if (!items.has(item.work_item_id)) items.set(item.work_item_id, item);
       });
       cursor = data.next_cursor;
       if (!cursor) break;
     }
-    return { ...data, items: Array.from(items.values()) };
+    // Counts, capacity and filters belong to the head snapshot; only the
+    // continuation cursor comes from the final loaded page.
+    return { ...first, next_cursor: cursor, items: Array.from(items.values()) };
   }
   return { get: request, post, pages };
 })();

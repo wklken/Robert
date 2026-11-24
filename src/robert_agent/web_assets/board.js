@@ -909,6 +909,7 @@ const state = {
   theme: localStorage.getItem("robertWorkbenchTheme") || "system",
   boardRequest: 0,
   detailRequest: 0,
+  detailCheckedAt: 0,
   busy: false,
   composer: null,
   lastResult: null,
@@ -1925,6 +1926,7 @@ function renderSupervision(detail) {
 }
 function renderDetail(detail, { preserve = false } = {}) {
   state.detail = detail;
+  state.detailCheckedAt = Date.now();
   renderHeader(detail);
   if (preserve && $("#detail-live")) {
     const nextLive = renderLive(detail);
@@ -2259,27 +2261,118 @@ async function loadSession() {
     null,
   );
 }
-async function refreshBoard({ quiet = false, more = false } = {}) {
+let boardRefresh = null;
+let pendingBoardRefresh = null;
+let boardPollTimer = null;
+
+function boardPollDelay() {
+  const active = state.board?.capacity?.running > 0 ||
+    ["todo", "doing"].some(column => state.board?.counts?.[column] > 0) ||
+    state.detail?.execution?.status === "running" ||
+    $("#detail-agent-session")?.pollingActive;
+  return active ? 15000 : 45000;
+}
+function scheduleBoardPoll() {
+  clearTimeout(boardPollTimer);
+  boardPollTimer = null;
+  if (!state.polling || document.hidden) return;
+  let delay = boardPollDelay();
+  // Do not let a 45s idle tick extend a pending 60s freshness deadline.
+  if ((state.pageCount || 1) > 1 && state.pagesCheckedAt)
+    delay = Math.min(delay, Math.max(0, 60000 - (Date.now() - state.pagesCheckedAt)));
+  if (state.selectedItem && state.detailCheckedAt)
+    delay = Math.min(delay, Math.max(0, 60000 - (Date.now() - state.detailCheckedAt)));
+  const sessionDelay = $("#detail-agent-session")?.pollDelay;
+  if (Number.isFinite(sessionDelay)) delay = Math.min(delay, sessionDelay);
+  // Errors or paused controls should retry at the normal cadence, not spin.
+  if (delay <= 0) delay = boardPollDelay();
+  boardPollTimer = setTimeout(() => refreshBoard({ quiet: true, automatic: true }), delay);
+}
+function refreshBoard({ quiet = false, more = false, automatic = false } = {}) {
+  if (automatic && (document.hidden || state.busy || $("#new-task-dialog").open)) {
+    scheduleBoardPoll();
+    return Promise.resolve();
+  }
+  if (boardRefresh) {
+    // Periodic ticks can share the current read. User intent needs one later
+    // read, after the action/filter change, with the latest controls.
+    if (!automatic || state.boardUrl !== boardUrl()) {
+      state.boardRequest++;
+      pendingBoardRefresh = {
+        quiet: quiet && (pendingBoardRefresh?.quiet ?? true),
+        more: more && (pendingBoardRefresh?.more ?? true),
+        automatic: automatic && (pendingBoardRefresh?.automatic ?? true),
+      };
+    }
+    return boardRefresh;
+  }
+  clearTimeout(boardPollTimer);
+  boardRefresh = (async () => {
+    let options = { quiet, more, automatic };
+    do {
+      pendingBoardRefresh = null;
+      await performBoardRefresh(options);
+      options = pendingBoardRefresh;
+    } while (options);
+  })().finally(() => {
+    boardRefresh = null;
+    scheduleBoardPoll();
+  });
+  return boardRefresh;
+}
+function cardFingerprint(item) {
+  if (!item) return null;
+  // Include execution heartbeat/phase, workflow runs and attention identities;
+  // version/status alone cannot establish detail freshness.
+  return JSON.stringify([
+    item.work_item_id, item.version, item.updated_at, item.title, item.priority,
+    item.column, item.reason_code, item.reason_summary, item.routing_mode,
+    item.agent, item.task_id, item.task_lifecycle, item.execution, item.review,
+    item.pre_pr_review, item.vote, item.publication, item.action_blocked_reason,
+    item.source, item.pr, item.attention_signals, item.valid_commands, item.status_summary,
+    item.repo_id, item.repo_full_name, item.origin_type, item.branch, item.worktree_label,
+  ]);
+}
+async function performBoardRefresh({ quiet, more, automatic }) {
   const request = ++state.boardRequest;
   const url = boardUrl();
-  if (state.boardUrl !== url) state.pageCount = 1;
+  const sameQuery = state.boardUrl === url;
+  if (!sameQuery) {
+    state.pageCount = 1;
+    state.pagesCheckedAt = 0;
+    more = false;
+  }
   state.boardUrl = url;
   const cursor = more ? state.board?.next_cursor : null;
+  if (more && !cursor) return;
+  // Rebuild all loaded pages at least once a minute to bound stale retained
+  // cards and repair pagination after items move, disappear or change state.
+  const headOnly = automatic && sameQuery && state.board &&
+    Date.now() - state.pagesCheckedAt < 60000;
   $("#sync-status").textContent = t("syncing");
   $("#load-more").disabled = true;
   try {
     if (!state.session) await loadSession();
-    const data = more
+    let data = more
       ? await BoardClient.get(boardUrl(cursor))
-      : await BoardClient.pages(url, state.pageCount || 1);
-    if (request !== state.boardRequest) return;
+      : await BoardClient.pages(url, headOnly ? 1 : state.pageCount || 1);
+    if (request !== state.boardRequest || url !== boardUrl()) return;
+    const freshItems = data.items;
     if (more && state.board) {
       state.pageCount = (state.pageCount || 1) + 1;
       const merged = new Map(
         state.board.items.map((item) => [item.work_item_id, item]),
       );
       data.items.forEach((item) => merged.set(item.work_item_id, item));
-      data.items = Array.from(merged.values());
+      data = { ...state.board, items: Array.from(merged.values()), next_cursor: data.next_cursor };
+    } else if (headOnly) {
+      const freshIds = new Set(data.items.map(item => item.work_item_id));
+      data.items = [...data.items, ...state.board.items.filter(item =>
+        !freshIds.has(item.work_item_id))];
+      if ((state.pageCount || 1) > 1) data.next_cursor = state.board.next_cursor;
+    }
+    if (!more) {
+      if (!headOnly) state.pagesCheckedAt = Date.now();
     }
     state.board = data;
     renderFilters(data);
@@ -2290,7 +2383,16 @@ async function refreshBoard({ quiet = false, more = false } = {}) {
     });
     const selected = state.selectedItem;
     const selectionRequest = state.detailRequest;
-    if (selected && !state.busy) {
+    const freshSelected = freshItems.find(item => item.work_item_id === selected);
+    const detailUnchanged = automatic && freshSelected &&
+      state.detail?.work_item_id === selected &&
+      cardFingerprint(freshSelected) === cardFingerprint(state.detail) &&
+      Date.now() - state.detailCheckedAt < 60000;
+    if (selected && !state.busy && detailUnchanged) {
+      // Transcript writes can precede heartbeat changes. Keep its active poll
+      // independent of whether the much larger detail read was needed.
+      $("#detail-agent-session")?.update?.(state.detail, { poll: true });
+    } else if (selected && !state.busy) {
       try {
         const detail = await BoardClient.get(
           `/api/work-items/${encodeURIComponent(selected)}`,
@@ -2299,17 +2401,18 @@ async function refreshBoard({ quiet = false, more = false } = {}) {
           request === state.boardRequest &&
           selected === state.selectedItem &&
           selectionRequest === state.detailRequest &&
-          !state.busy
+          !state.busy && url === boardUrl()
         )
           renderDetail(detail, { preserve: true });
       } catch (error) {
-        if (selected === state.selectedItem)
+        if (request === state.boardRequest && selected === state.selectedItem &&
+            selectionRequest === state.detailRequest && !state.busy && url === boardUrl())
           feedback("#drawer-feedback", error.message);
       }
     }
     if (!quiet) showStatus(t("boardRefreshed"));
   } catch (error) {
-    if (request === state.boardRequest) {
+    if (request === state.boardRequest && url === boardUrl()) {
       feedback(
         "#board-feedback",
         t("boardRefreshFailed", { message: error.message }),
@@ -2482,7 +2585,8 @@ function bindControls() {
     }),
   );
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && !state.busy) refreshBoard({ quiet: true });
+    scheduleBoardPoll();
+    if (!document.hidden && !state.busy) return refreshBoard({ quiet: true, automatic: true });
   });
   document.addEventListener("keydown", (event) => {
     if (
@@ -2503,11 +2607,11 @@ async function start() {
   bindControls();
   renderMobileColumn();
   const selected = state.selectedItem;
+  // The initial detail belongs to openDetail, which also opens the drawer.
+  state.selectedItem = null;
   await refreshBoard({ quiet: true });
   if (selected) await openDetail(selected);
-  setInterval(() => {
-    if (!document.hidden && !state.busy && !$("#new-task-dialog").open)
-      refreshBoard({ quiet: true });
-  }, 15000);
+  state.polling = true;
+  scheduleBoardPoll();
 }
 start();

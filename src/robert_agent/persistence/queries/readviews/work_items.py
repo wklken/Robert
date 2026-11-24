@@ -12,7 +12,7 @@ from robert_agent.persistence.catalog import tables
 
 
 @cache
-def _unresolved_attention_statement():
+def _unresolved_attention_statement(batched=False):
     events = tables["work_item_events"]
     response = events.alias("response")
     has_response = (
@@ -32,13 +32,15 @@ def _unresolved_attention_statement():
             event.metadata_json,
         )
         .where(
-            event.work_item_id == bindparam("work_item_id"),
+            event.work_item_id.in_(bindparam("work_item_ids", expanding=True))
+            if batched
+            else event.work_item_id == bindparam("work_item_id"),
             event.event_type.in_(bindparam("event_types", expanding=True)),
             ~has_response,
         )
         .order_by(event.created_at.desc(), event.event_id.desc())
     )
-    return query
+    return query.add_columns(event.work_item_id) if batched else query
 
 
 def unresolved_attention(conn, work_item_id, event_types):
@@ -47,6 +49,19 @@ def unresolved_attention(conn, work_item_id, event_types):
         _unresolved_attention_statement(),
         {"work_item_id": work_item_id, "event_types": list(event_types)},
     )
+
+
+def unresolved_attention_for_items(conn, work_item_ids, event_types):
+    ids = tuple(dict.fromkeys(work_item_ids))
+    return [
+        row
+        for start in range(0, len(ids), 200)
+        for row in statements.read(
+            conn,
+            _unresolved_attention_statement(batched=True),
+            {"work_item_ids": ids[start : start + 200], "event_types": list(event_types)},
+        )
+    ]
 
 
 def _reopened_by_failure(items):

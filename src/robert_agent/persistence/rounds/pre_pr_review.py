@@ -353,11 +353,16 @@ def accept_reply(conn, entry, binding, body):
 
 
 def task_status(conn, task_id):
-    from robert_agent.security.text import safe_text
-
     entry = session(conn, task_id=task_id)
     if not entry:
         return None
+    return task_status_from_records(entry, runs(conn, entry["round_id"]), pool.status(conn))
+
+
+def task_status_from_records(entry, model_runs, process_pool):
+    """Public status from records already loaded for this request."""
+    from robert_agent.security.text import safe_text
+
     return {
         "round_id": entry["round_id"],
         "status": entry["status"],
@@ -365,7 +370,7 @@ def task_status(conn, task_id):
         "head_sha": entry["manifest"].get("head_sha"),
         "final_sha": entry["proof"].get("head_sha"),
         "next_retry_at": entry["next_retry_at"],
-        "process_pool": pool.status(conn),
+        "process_pool": process_pool,
         "runs": [
             {
                 "run_id": run["run_id"],
@@ -377,6 +382,6 @@ def task_status(conn, task_id):
                 "attempt_no": run["attempt_no"],
                 "can_abandon": can_abandon(run),
             }
-            for run in runs(conn, entry["round_id"])
+            for run in model_runs
         ],
     }

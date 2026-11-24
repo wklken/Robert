@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+from _thread import LockType
 from getpass import GetPassWarning, getpass
 from dataclasses import dataclass, field
 import hashlib
@@ -11,12 +12,15 @@ import os
 from pathlib import Path
 import secrets
 import stat
+from threading import Lock
+from time import monotonic
 import warnings
 
 
 ITERATIONS = 600_000
 MAX_FILE_BYTES = 16_384
 MAX_CREDENTIAL_BYTES = 4096
+SUCCESS_CACHE_TTL_SECONDS = 60
 
 
 def _valid_username(username):
@@ -29,12 +33,43 @@ def _valid_username(username):
     )
 
 
+@dataclass(eq=False, repr=False)
+class _SuccessfulVerificationCache:
+    secret: bytes = field(default_factory=lambda: secrets.token_bytes(32), repr=False)
+    lock: LockType = field(default_factory=Lock, repr=False)
+    success: tuple[bytes, float] | None = field(default=None, repr=False)
+
+    def contains(self, fingerprint):
+        with self.lock:
+            if self.success is None:
+                return False
+            cached_fingerprint, expires_at = self.success
+            if monotonic() >= expires_at:
+                self.success = None
+                return False
+            return hmac.compare_digest(fingerprint, cached_fingerprint)
+
+    def remember(self, fingerprint):
+        with self.lock:
+            now = monotonic()
+            if self.success is not None:
+                cached_fingerprint, expires_at = self.success
+                if now < expires_at and hmac.compare_digest(fingerprint, cached_fingerprint):
+                    return
+            # One immutable verifier accepts one credential pair. Keep one entry;
+            # overlapping validations must not extend an existing success's TTL.
+            self.success = (fingerprint, now + SUCCESS_CACHE_TTL_SECONDS)
+
+
 @dataclass(frozen=True)
 class BasicAuth:
     username: str
     salt: bytes = field(repr=False)
     password_hash: bytes = field(repr=False)
     iterations: int
+    _cache: _SuccessfulVerificationCache = field(
+        default_factory=_SuccessfulVerificationCache, init=False, repr=False, compare=False
+    )
 
     def authorized(self, authorization):
         if not isinstance(authorization, str) or len(authorization) > MAX_FILE_BYTES:
@@ -51,9 +86,15 @@ class BasicAuth:
             return False
         if not separator:
             return False
+        fingerprint = hmac.digest(self._cache.secret, decoded, "sha256")
+        if self._cache.contains(fingerprint):
+            return True
         candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), self.salt, self.iterations)
         user_matches = hmac.compare_digest(username.encode("utf-8"), self.username.encode("utf-8"))
-        return hmac.compare_digest(candidate, self.password_hash) and user_matches
+        authorized = hmac.compare_digest(candidate, self.password_hash) and user_matches
+        if authorized:
+            self._cache.remember(fingerprint)
+        return authorized
 
 
 def write_basic_auth_file(path, username, password):
