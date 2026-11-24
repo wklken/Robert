@@ -765,13 +765,14 @@ def matches_review_completion(entry, proof):
 
 
 def _matches_review_publication(entry):
-    plan = entry["request"].get("plan", {})
+    request = entry.get("request", {})
+    plan = request.get("plan", {})
     proof = entry["proof"]
     if plan.get("review_publication") != ReviewPublicationMode.PR_FIRST_V1:
         return "publication" not in proof
     if entry["status"] == "waiting_for_user":
         return True
-    state = entry["request"].get("review_publication") or {}
+    state = request.get("review_publication") or {}
     publication = proof.get("publication")
     initial = state.get("pr")
     return bool(

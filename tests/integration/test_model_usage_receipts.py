@@ -24,7 +24,10 @@ class ModelUsageIntegrationTests(ReviewCoordinatorFixture):
             with database.connect(self.db) as conn:
                 pending = json.loads(model_usage.get(conn, "stage", call_id)["usage_json"])
             self.assertEqual(pending["measurement_status"], "pending")
-            self.assertTrue(pending["segments"][call_id]["launched"])
+            segment = pending["segments"][call_id]
+            self.assertFalse(segment["launched"])
+            self.assertIn("launch_requested", segment["events"])
+            self.assertNotIn("started", segment["events"])
             result = original_launcher(**kwargs)
             path = Path(kwargs["log_dir"]) / "stdout.log"
             path.write_text(
@@ -44,7 +47,10 @@ class ModelUsageIntegrationTests(ReviewCoordinatorFixture):
             complete = json.loads(model_usage.get(conn, "stage", run["run_id"])["usage_json"])
         self.assertEqual(complete["measurement_status"], "complete")
         self.assertEqual(complete["source"], "claude_stream_json")
-        self.assertIn("process_exit_observed", complete["segments"][run["run_id"]]["events"])
+        segment = complete["segments"][run["run_id"]]
+        self.assertTrue(segment["launched"])
+        self.assertIn("started", segment["events"])
+        self.assertIn("process_exit_observed", segment["events"])
         launches = len(self.calls)
         driver.review()
         driver.review()
