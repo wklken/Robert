@@ -223,6 +223,11 @@ to match the current configuration. Delivery and readiness exclude mismatched
 cards before the queue limit, so they cannot hold up new notices. The saved
 receipt remains intact; restoring the destination permits retries within the
 existing budgets. Older receipts without a saved target withhold card retries.
+When `ROBERT_NOTIFICATION_COMMAND` or an explicit notification command is active,
+delivery and readiness exclude saved cards before ordering and limiting candidates.
+Ordinary notification bodies keep the configured repository and `send_after` filters.
+Disabling the command restores native card retries under the existing destination
+and retry-budget checks.
 A timeout, missing acknowledgement or interrupted card send remains `unknown`
 and withholds automatic card retries until the remote effect can be reconciled.
 The delivered body stays answerable in all these cases. No second transport is

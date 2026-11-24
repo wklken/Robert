@@ -320,7 +320,7 @@ def _active_remediation_notice():
     return or_(notice.c.notification_type.not_in(sorted(PR_REMEDIATION_NOTIFICATION_TYPES)), ~canceled)
 
 
-def _delivery_candidates(now, repo_ids, messaging_repo_ids, messaging_settings):
+def _delivery_candidates(now, repo_ids, messaging_repo_ids, messaging_settings, *, include_cards):
     """Separate indexed body and card candidates; filter both before the shared limit."""
     notification = tables["notifications"]
     scope = (
@@ -332,6 +332,8 @@ def _delivery_candidates(now, repo_ids, messaging_repo_ids, messaging_settings):
         _pending_delivery(now, repo_ids),
         *scope,
     )
+    if not include_cards:
+        return bodies.subquery()
     cards = select(notification.c.notification_id, notification.c.created_at).where(
         _pending_delivery(now, repo_ids, card_only=True),
         _card_endpoint(messaging_settings),
@@ -354,9 +356,13 @@ def _card_endpoint(settings):
     )
 
 
-def find_for_deliver_pending(conn, now, limit, repo_ids=None, *, messaging_repo_ids=None, messaging_settings=None):
+def find_for_deliver_pending(
+    conn, now, limit, repo_ids=None, *, messaging_repo_ids=None, messaging_settings=None, include_cards=True
+):
     sqlite.register_timestamp_after(conn)
-    candidates = _delivery_candidates(now, repo_ids, messaging_repo_ids, messaging_settings)
+    candidates = _delivery_candidates(
+        now, repo_ids, messaging_repo_ids, messaging_settings, include_cards=include_cards
+    )
     stmt = (
         select(candidates.c.notification_id)
         .order_by(candidates.c.created_at, candidates.c.notification_id)
@@ -435,9 +441,13 @@ def update_failure(conn, kind, key):
     return statements.read(conn, query1, {"p0": kind, "p1": key})
 
 
-def has_pending_local_delivery_filtered(conn, repo_ids, now, *, messaging_repo_ids=None, messaging_settings=None):
+def has_pending_local_delivery_filtered(
+    conn, repo_ids, now, *, messaging_repo_ids=None, messaging_settings=None, include_cards=True
+):
     sqlite.register_timestamp_after(conn)
-    candidates = _delivery_candidates(now, repo_ids, messaging_repo_ids, messaging_settings)
+    candidates = _delivery_candidates(
+        now, repo_ids, messaging_repo_ids, messaging_settings, include_cards=include_cards
+    )
     stmt = select(sql_constant(1)).select_from(candidates)
     return statements.read(conn, stmt.limit(1))
 

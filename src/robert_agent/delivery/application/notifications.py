@@ -135,6 +135,7 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
                 repo_ids,
                 messaging_repo_ids=messages.delivery_repo_ids(conn, config),
                 messaging_settings=config.get("messaging", {}) if config is not None else None,
+                include_cards=not bool(command),
             )
         ]
     processed = 0

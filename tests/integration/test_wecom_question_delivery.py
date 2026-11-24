@@ -14,6 +14,7 @@ from robert_agent.delivery.application import notifications
 from robert_agent.execution import notifications as execution_notifications
 from robert_agent.integrations.openclaw import write_plugin
 from robert_agent.persistence import database
+from robert_agent.persistence.stores import notifications as notification_store
 from robert_agent.work.application import messaging
 from robert_agent.work.errors import WorkItemValidationError
 from tests.support.work_items import WorkItemCommandFixture, example_choices
@@ -276,6 +277,103 @@ await handler({ params, respond: (ok, payload, error) => console.log(JSON.string
 
     def test_changed_target_card_does_not_block_new_questions(self):
         self._assert_changed_destination_does_not_block_new_questions("target", "another-operator")
+
+    def test_environment_command_does_not_let_old_cards_block_new_bodies(self):
+        self._assert_custom_command_does_not_block_new_bodies("custom-notifier", None)
+
+    def test_explicit_command_does_not_let_old_cards_block_new_bodies(self):
+        self._assert_custom_command_does_not_block_new_bodies(None, ["custom-notifier"])
+
+    def test_explicit_command_overrides_environment_without_old_card_work(self):
+        self._assert_custom_command_does_not_block_new_bodies("other-notifier", ["custom-notifier"])
+
+    def _assert_custom_command_does_not_block_new_bodies(self, environment_command, command):
+        self.outcome = "failed"
+        self.deliver()
+        old_state = self.state()
+        self.assertEqual(old_state["card"]["status"], "failed")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            # Keep queue ordering independent of the fixture's wall clock.
+            conn.execute(
+                "UPDATE notifications SET created_at=? WHERE notification_id=?",
+                ("2026-07-19T01:00:00+00:00", self.notice),
+            )
+        with closing(database.connect(self.db_path)) as conn, conn:
+            for identifier, created, repo_id in (
+                ("history-body", "2026-07-17T01:00:00+00:00", "repo-1"),
+                ("denied-body", "2026-07-19T01:01:00+00:00", "denied"),
+            ):
+                notification_store.record_notification(
+                    conn,
+                    identifier,
+                    None,
+                    "worker_stale",
+                    "local",
+                    "recorded",
+                    created,
+                    json.dumps({"repo_id": repo_id}),
+                )
+        payloads = []
+
+        def custom_runner(argv, **kwargs):
+            self.assertEqual(argv, ["custom-notifier"])
+            payloads.append(json.loads(kwargs["input"]))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        environment = {"ROBERT_NOTIFICATION_COMMAND": environment_command} if environment_command else {}
+        with patch.dict(os.environ, environment, clear=True):
+            for sequence, now in (
+                (1, "2026-07-19T02:00:06+00:00"),
+                (2, "2026-07-19T02:11:00+00:00"),
+            ):
+                with self.subTest(now=now):
+                    with closing(database.connect(self.db_path)) as conn, conn:
+                        self.assertFalse(
+                            execution_notifications.has_pending_local_delivery(
+                                conn, ["repo-1"], now, config=self.config, command=command
+                            )
+                        )
+                        notification_store.record_notification(
+                            conn,
+                            f"new-body-{sequence}",
+                            None,
+                            "worker_stale",
+                            "local",
+                            "recorded",
+                            f"2026-07-19T01:0{sequence + 1}:00+00:00",
+                            json.dumps({"repo_id": "repo-1"}),
+                        )
+                        self.assertTrue(
+                            execution_notifications.has_pending_local_delivery(
+                                conn, ["repo-1"], now, config=self.config, command=command
+                            )
+                        )
+                    self.assertEqual(
+                        notifications.deliver_pending(
+                            self.db_path,
+                            config=self.config,
+                            command=command,
+                            runner=custom_runner,
+                            now=now,
+                            limit=1,
+                            repo_ids=["repo-1"],
+                        )["sent"],
+                        1,
+                    )
+                    self.assertEqual(self.state(), old_state)
+                    with closing(database.connect(self.db_path)) as conn:
+                        self.assertFalse(
+                            execution_notifications.has_pending_local_delivery(
+                                conn, ["repo-1"], now, config=self.config, command=command
+                            )
+                        )
+        self.assertEqual([payload["notification_id"] for payload in payloads], ["new-body-1", "new-body-2"])
+        self.assertEqual(self.kinds(), ["text", "card"])
+        # Disabling the command restores the existing native card retry path.
+        self.outcome = "sent"
+        self.deliver("2026-07-19T02:00:06+00:00", limit=1)
+        self.assertEqual(self.kinds(), ["text", "card", "card"])
+        self.assertEqual(self.quote()["notification_id"], self.notice)
 
     def _assert_changed_destination_does_not_block_new_questions(self, field, value):
         self.outcome = "failed"
