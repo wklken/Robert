@@ -76,7 +76,9 @@ def _aggregate(value, segments):
     }
     launched = [segment for segment in segments.values() if segment.get("launched")]
     statuses = [_status(segment) for segment in launched]
-    if not statuses or "pending" in statuses:
+    if not statuses:
+        status = "unavailable" if any(_status(segment) == "unavailable" for segment in segments.values()) else "pending"
+    elif "pending" in statuses:
         status = "pending"
     elif all(status == "complete" for status in statuses):
         status = "complete"

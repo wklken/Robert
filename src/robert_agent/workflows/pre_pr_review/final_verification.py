@@ -81,15 +81,15 @@ def _registered_inputs(coordinator, inputs):
     return None
 
 
-def verify(coordinator, report, report_sha, finding_ids, disposition):
+def verify(coordinator, report, report_sha, finding_ids, disposition, *, reasons=()):
     head, final = coordinator.manifest["head_sha"], disposition["head"]
-    if head == final and not finding_ids:
+    if head == final and not finding_ids and not reasons:
         return None
     coordinator.stage = "verify_final"
     coordinator.phase(coordinator.stage)
-    # Addressing has already waited for the writer and its process group to
-    # exit. Reuse that round-owned checkout instead of creating another one.
-    tree = coordinator.address_workspace(disposition["run_id"])
+    # Reuse the round-owned checkout after any repair has exited.
+    run_id = disposition.get("run_id")
+    tree = coordinator.address_workspace(run_id) if run_id else coordinator.manifest["worktree_path"]
     if clean_head(tree) != final:
         raise StageSuperseded("final reviewer checkout changed")
     # Renderer versions may relocate an otherwise identical public report.
@@ -113,6 +113,7 @@ def verify(coordinator, report, report_sha, finding_ids, disposition):
     }
     inputs = {
         **identity,
+        **({"risk_reasons": list(reasons)} if reasons else {}),
         "finding_ids": finding_ids,
         "report_path": str(pinned_report),
         "dispositions_path": disposition["dispositions_path"],

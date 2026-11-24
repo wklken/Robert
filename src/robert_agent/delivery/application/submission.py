@@ -487,11 +487,13 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
         )
         if reviewed:
             pre_pr_review.bind_result(conn, reviewed["round_id"], result_id)
+        publication = reviewed["proof"].get("publication") if reviewed else None
         for index, action in enumerate(actions):
             action_created_at = (created_at + timedelta(microseconds=index)).isoformat()
+            action_id = f"action-{uuid4().hex[:12]}"
             db_write_github_actions.record_result_db(
                 conn,
-                f"action-{uuid4().hex[:12]}",
+                action_id,
                 result_id,
                 payload["task_id"],
                 action["type"],
@@ -500,6 +502,18 @@ def _record_result_db(db_path, payload, *, notifier=None, busy_timeout_ms=5000, 
                 action_created_at,
                 json.dumps(action, sort_keys=True),
             )
+            if publication and action["type"] in {GitHubActionType.OPEN_PR, GitHubActionType.PUSH_EXISTING_PR}:
+                pr = publication["initial"]
+                opened = action["type"] == GitHubActionType.OPEN_PR
+                db_write_github_actions.mark_published(
+                    conn,
+                    str(pr["number"]) if opened else pr["branch"],
+                    pr["url"] if opened else "",
+                    json.dumps(
+                        {**action, "review_publication_receipt": pr if opened else publication["push"]}, sort_keys=True
+                    ),
+                    action_id,
+                )
         cur = db_write_attempts.record_result_db(
             conn, result_created_at, result_created_at, payload["attempt_id"], payload["task_id"]
         )

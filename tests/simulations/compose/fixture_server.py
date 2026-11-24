@@ -115,7 +115,7 @@ def _options_for_api(argv):
 
 
 def _endpoint(path, method):
-    if path in {"rate_limit", "notifications", "graphql"}:
+    if path in {"rate_limit", "notifications", "graphql", "user"}:
         allowed = "POST" if path == "graphql" else "GET"
         if method != allowed:
             raise ValueError(f"unsupported method for {path}")
@@ -131,6 +131,7 @@ def _endpoint(path, method):
         operations = {
             ("issues", None, "GET"): "issue",
             ("pulls", None, "GET"): "pull",
+            ("pulls", None, "PATCH"): "pr_body_edit",
             ("issues", "comments", "GET"): "issue_comments",
             ("issues", "comments", "POST"): "comment",
             ("issues", "timeline", "GET"): "timeline",
@@ -169,7 +170,7 @@ def _parse_api(argv):
         raise ValueError("unsupported gh API URL")
     options, fields, headers = _options_for_api(argv[1:])
     method = options.get("--method") or options.get("-X") or ("POST" if fields else "GET")
-    if method not in {"GET", "POST"}:
+    if method not in {"GET", "POST", "PATCH"}:
         raise ValueError("unsupported gh API method")
     operation, entity = _endpoint(parsed.path.lstrip("/"), method)
     params = {}
@@ -216,6 +217,7 @@ def _parse_api(argv):
         raise ValueError("unsupported gh pagination")
     expected = {
         "comment": {"body"},
+        "pr_body_edit": {"body"},
         "pr_review": {"body", "event", "commit_id"},
         "graphql": {"query", "id"},
     }.get(operation, set())
@@ -229,7 +231,9 @@ def _parse_api(argv):
         raise ValueError("unsupported PR review event")
     if "body" in fields:
         entity["body_sha256"] = hashlib.sha256(fields["body"].encode()).hexdigest()
-    return Call(operation, entity, options, params, headers, fields, method == "POST" and operation != "graphql")
+    return Call(
+        operation, entity, options, params, headers, fields, method in {"POST", "PATCH"} and operation != "graphql"
+    )
 
 
 def parse_call(payload):
@@ -257,8 +261,12 @@ def parse_call(payload):
     if argv[:1] == ["pr"] and len(argv) >= 2:
         action = argv[1]
         if action == "list":
-            options = _args(argv[2:], {"--repo", "--head", "--state", "--json"})
-            if options.get("--state") != "open" or not options.get("--head"):
+            options = _args(argv[2:], {"--repo", "--head", "--state", "--json", "--limit"})
+            if (
+                options.get("--state") not in {"open", "all"}
+                or not options.get("--head")
+                or not 1 <= int(options.get("--limit", "30")) <= 100
+            ):
                 raise ValueError("unsupported PR list")
             options["columns"] = _select(options.get("--json", ""), _PR_FIELDS)
             return Call("pr_list", {"repo": _repo(options["--repo"]), "branch": options["--head"]}, options)
@@ -489,6 +497,10 @@ def _record_write(call, world, repository, raw, git_root):
         value = _pull(world, git_root, repo, number, data)
         return _result(value["html_url"] + "\n"), value
     number = call.entity["number"]
+    if op == "pr_body_edit":
+        raw["body"] = call.fields["body"]
+        value = _pull(world, git_root, repo, number, raw)
+        return _http(call, 200, value), value
     comment_id = world["_next_id"]
     world["_next_id"] += 1
     data = {
@@ -525,9 +537,10 @@ def _read_repository(call, world, repository, git_root):
         values = [
             _pr_view(world, git_root, repo, int(n), raw, call.options["columns"])
             for n, raw in repository.get("pulls", {}).items()
-            if raw.get("state", "open") == "open" and raw.get("head", {}).get("ref") == entity["branch"]
+            if (call.options["--state"] == "all" or raw.get("state", "open") == "open")
+            and raw.get("head", {}).get("ref") == entity["branch"]
         ]
-        return _http(call, 200, values)
+        return _http(call, 200, values[: int(call.options.get("--limit", "30"))])
     if op == "permission":
         permission = repository.get("permissions", {}).get(entity["login"], "none")
         return _http(call, 200, {"permission": permission, "user": {"login": entity["login"]}})
@@ -581,6 +594,8 @@ def _execute(call, world, git_root):
         return _result(stderr=f"Logged in to github.com as {world['account']} (fixture)\n"), None
     if op == "version":
         return _result("gh version 0.0.0-fixture\n"), None
+    if op == "user":
+        return _http(call, 200, {"login": world["account"]}), None
     if op == "rate_limit":
         reset = int(time.time()) + 60
         resource = {"remaining": 5000, "limit": 5000, "reset": reset}
@@ -599,8 +614,8 @@ def _execute(call, world, git_root):
     if not call.write:
         return _read_repository(call, world, repository, git_root), None
     raw = None
-    if op in {"comment", "pr_review"}:
-        raw, _ = _source(repository, call.entity["number"], pull=op == "pr_review")
+    if op in {"comment", "pr_review", "pr_body_edit"}:
+        raw, _ = _source(repository, call.entity["number"], pull=op != "comment")
         if raw is None:
             return _http(call, 404), None
     return _record_write(call, world, repository, raw, git_root)

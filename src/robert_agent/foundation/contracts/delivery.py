@@ -78,6 +78,11 @@ class ReviewAction(StrEnum):
 
 
 @unique
+class ReviewPublicationMode(StrEnum):
+    PR_FIRST_V1 = "pr_first_v1"
+
+
+@unique
 class VerificationStatus(StrEnum):
     PASSED = "passed"
     FAILED = "failed"

@@ -19,7 +19,9 @@ from tests.support.tapd_cycle import TAPD_CONFIG
 
 
 class PrePRReviewFixture(ReviewCoordinatorFixture):
-    def start(self, workers, *, local=False, tapd=False, github_comment=False, legacy=True, legacy_report=True):
+    def start(
+        self, workers, *, local=False, tapd=False, github_comment=False, legacy=True, legacy_report=True, pr_first=False
+    ):
         config = yaml.safe_load(self.config_path.read_text())
         config["repos"][0]["routes"] = {"new-pr": {"pre_pr_review": {"workers": workers}}}
         if tapd:
@@ -85,7 +87,9 @@ class PrePRReviewFixture(ReviewCoordinatorFixture):
                 plan.pop("review_policy", None)
             if legacy_report:
                 plan.pop("review_report_mode", None)
-            if legacy or legacy_report:
+            if not pr_first:
+                plan.pop("review_publication", None)
+            if legacy or legacy_report or not pr_first:
                 store.update(conn, saved["round_id"], request_json=json.dumps(saved["request"], sort_keys=True))
         self.assertIsNotNone(saved)
         self.verification = [_verification_evidence()]
@@ -141,8 +145,11 @@ class PrePRReviewFixture(ReviewCoordinatorFixture):
             self.launches["verify_final"] += 1
             value = json.loads(Path(kwargs["trusted_environment"]["ROBERT_PRE_PR_FINAL_REVIEW_INPUT"]).read_text())
             self.assertEqual(git(tree, "rev-parse", "HEAD"), value["final_sha"])
-            self.assertIn("value = 4", (tree / "source.py").read_text())
-            self.assertIn("value = 3", Path(value["additional_diff_path"]).read_text())
+            if value["final_sha"] != value["candidate_sha"]:
+                self.assertIn("value = 4", (tree / "source.py").read_text())
+                self.assertIn("value = 3", Path(value["additional_diff_path"]).read_text())
+            else:
+                self.assertEqual(Path(value["additional_diff_path"]).read_text(), "")
             if self.final_review_mode == "failed":
                 return {"ok": True, "process_exited": True, "returncode": 1, "pid": 1073741824}
             result = {

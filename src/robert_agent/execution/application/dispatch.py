@@ -629,6 +629,11 @@ def dispatch_queued_locked(
                         sys.executable,
                         "-m",
                         "robert_agent.workflows.pre_pr_review.coordinator",
+                        *(
+                            ["--config", str(Path(config_result["config_path"]).resolve())]
+                            if (config_result or {}).get("config_path")
+                            else []
+                        ),
                         "--db",
                         str(Path(db_path).resolve()),
                         "--task-id",
@@ -715,6 +720,7 @@ def dispatch_queued_locked(
                             "model": model,
                             "model_coordinator": bool(native_review or candidate_review),
                         },
+                        confirmed=False,
                     )
         with dispatch.defer_termination():
             try:
@@ -768,6 +774,15 @@ def dispatch_queued_locked(
             with closing(db_database.connect(db_path)) as conn, conn:
                 db_sqlite.configure(conn, foreign_keys=True)
                 db_sqlite.configure(conn, busy_timeout_ms=5000)
+                if dispatch_result.get("pid") or dispatch_result.get("process_exited"):
+                    start_call(
+                        conn,
+                        Path(db_path).parent,
+                        "worker",
+                        task_info["attempt_id"],
+                        task_info["task_id"],
+                        dispatch_result,
+                    )
                 if dispatch_result.get("process_exited") and dispatch_result.get("pid"):
                     record_dispatch_usage(
                         conn,

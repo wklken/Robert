@@ -15,13 +15,14 @@ from robert_agent.context.native_prompts import address_findings_input
 from robert_agent.context.prompts import render_prompt
 from robert_agent.delivery import contract
 from robert_agent.delivery.base_revisions import compatibility_refresh
-from robert_agent.delivery.application import submission, validation, audit
+from robert_agent.delivery.application import submission, validation, audit, review_publication
 from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import retry, stage_evidence
 from robert_agent.execution.budgets import pipeline_timeout
 from robert_agent.execution.stages import StageStopped, StageSuperseded, attempt_is_active, terminate_children
 from robert_agent.foundation import question_choices
 from robert_agent.foundation.contracts.execution import ModelRunStatus, ReviewReportMode
+from robert_agent.paths import default_config_path
 from robert_agent.persistence import transactions
 from robert_agent.persistence.stores import artifacts as db_write_artifacts
 from robert_agent.persistence.rounds import pre_pr_review as store
@@ -32,7 +33,7 @@ from robert_agent.workflows.review import files, workspace, report_checkpoint
 from robert_agent.workflows.review.coordinator import ReviewStages
 from robert_agent.workflows.pre_pr_review import base_impact, final_verification, handoff_repair, final_repair
 from robert_agent.workflows.pre_pr_review.verification import final_verification_checks
-from robert_agent.workflows.pre_pr_review import decisions, single_round
+from robert_agent.workflows.pre_pr_review import decisions, single_round, targeted
 
 
 def _append_finding_ids(body, items):
@@ -71,7 +72,7 @@ class Coordinator(ReviewStages):
     artifact_kinds = (*ReviewStages.artifact_kinds, "candidate", "dispositions", "final_verification")
     stage = "implement"
 
-    def __init__(self, db_path, task_id, attempt_id, *, observe_base=remote_branch_sha, **kwargs):
+    def __init__(self, db_path, task_id, attempt_id, *, observe_base=remote_branch_sha, config_path=None, **kwargs):
         super().__init__(db_path, task_id, attempt_id, **kwargs)
         self.plan = self.request["plan"]
         if self.plan.get("review_policy") not in (None, single_round.POLICY):
@@ -79,6 +80,8 @@ class Coordinator(ReviewStages):
         self.request = {**self.request, "workers": self.plan["workers"]}
         self.repo = self.request["repo"]
         self.observe_base = observe_base
+        self.publication_runner = None
+        self.publication_config = config_path or default_config_path()
         with store.connect(db_path) as conn:
             settings, rejected = validation.context(conn, task_id, attempt_id)
         if rejected:
@@ -924,12 +927,14 @@ class Coordinator(ReviewStages):
             raise ValueError(reason)
         return normalized
 
-    def single_round_disclosure(self, disposition):
+    def single_round_disclosure(self, disposition, targeted_review=None):
+        if targeted_review:
+            return "评审策略：一轮 review、一轮处理，已通过定向复核。触发原因：" + ", ".join(targeted_review["reasons"])
         if disposition.get("run_id") is None:
             return "评审策略：一轮 review。实施验证适用于送审提交，本轮无需整改。"
         return "评审策略：一轮 review、一轮整改；未执行独立的最终模型复核。"
 
-    def finalize(self, report, report_sha, disposition):
+    def finalize(self, report, report_sha, disposition, *, risk_reasons=()):
         head, final = self.manifest["head_sha"], disposition["head"]
         if (
             store.digest(report) != report_sha
@@ -940,6 +945,7 @@ class Coordinator(ReviewStages):
         draft = self.candidate_submission()
         response = json.loads(Path(disposition["dispositions_path"]).read_text(encoding="utf-8"))
         finding_ids = [item["id"] for item in response["dispositions"]]
+        targeted_review = None
         if single_round.enabled(self):
             if (
                 response.get("candidate_sha") != head
@@ -949,6 +955,12 @@ class Coordinator(ReviewStages):
                 raise StageStopped("single-round final handoff identity changed")
             final_verification_checks(response["verification"])
             completion = single_round.completion(self, report_sha, disposition)
+            if risk_reasons:
+                artifact = final_verification.verify(
+                    self, report, report_sha, finding_ids, disposition, reasons=risk_reasons
+                )
+                targeted_review = {"reasons": list(risk_reasons), "artifact": artifact}
+                completion["targeted_verification"] = targeted_review
             verification = None
         else:
             verification = final_verification.verify(self, report, report_sha, finding_ids, disposition)
@@ -1010,7 +1022,11 @@ class Coordinator(ReviewStages):
                     "## Review 报告",
                     f"送审提交：`{head}`",
                     f"最终提交：`{final}`",
-                    *([self.single_round_disclosure(disposition)] if single_round.enabled(self) else []),
+                    *(
+                        [self.single_round_disclosure(disposition, targeted_review)]
+                        if single_round.enabled(self)
+                        else []
+                    ),
                     "",
                     body,
                     "",
@@ -1101,6 +1117,38 @@ class Coordinator(ReviewStages):
                 "fingerprint": fingerprint,
                 "body_sha256": hashlib.sha256(normalized_pr["body"].encode()).hexdigest(),
             }
+            if review_publication.enabled(getattr(self, "plan", {})):
+                with store.connect(self.db_path) as conn:
+                    entry = store.session(conn, round_id=self.round_id)
+                if not store.matches_review_completion(entry, proof):
+                    raise StageStopped("review completion proof did not match the registered stages")
+                self.stage = "publishing_review_completion"
+                self.phase(self.stage)
+                summary = "\n".join(
+                    [
+                        "## 第一轮处理结果",
+                        "",
+                        f"送审提交 `{head}`，最终提交 `{final}`。",
+                        self.single_round_disclosure(disposition, targeted_review),
+                        "",
+                        "### 已修复",
+                        *(fixed or ["无。"]),
+                        "",
+                        "### 未修复及原因",
+                        *(deferred or ["无。"]),
+                        "",
+                        "### 验证",
+                        *(f"- {check['status']} · {check['purpose']}" for check in normalized["verification"]),
+                    ]
+                )
+                proof["publication"] = self.publication().finish_locked(
+                    normalized,
+                    final,
+                    proof,
+                    report_sha=report_sha,
+                    dispositions_sha=disposition["dispositions_sha256"],
+                    summary=summary,
+                )
             with store.connect(self.db_path) as conn:
                 transactions.begin(conn, immediate=True)
                 if not attempt_is_active(conn, self.task_id, self.attempt_id):
@@ -1181,21 +1229,95 @@ class Coordinator(ReviewStages):
                 self.stopping.wait(delay)
                 self.check_active()
 
+    def publication(self):
+        return review_publication.Publication(
+            self.db_path,
+            self.round_id,
+            self.task_id,
+            self.attempt_id,
+            check_active=self.check_active,
+            config_path=self.publication_config,
+            runner=self.publication_runner,
+        )
+
+    def preliminary_publication(self):
+        self.stage = "preliminary_publication"
+        self.phase(self.stage)
+        draft = self.candidate_submission()
+        final_verification_checks(draft["verification"])
+        action = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
+        action["body"] += "\n\n本 PR 等待第一轮评审。评审报告和后续处置见评论。"
+        if "issue_resolution" in action:
+            action.update(issue_resolution="partial", remaining_scope="第一轮评审及必要整改")
+        normalized = self.validate_submission(draft)
+        manifest = self.manifest
+        candidate = manifest["candidate"]
+        with store.connect(self.db_path) as conn:
+            implementation = next(
+                (run for run in store.runs(conn, self.round_id) if run["run_id"] == candidate["run_id"]),
+                None,
+            )
+        if (
+            not implementation
+            or implementation["stage"] != "implement"
+            or implementation["slot_reserved"]
+            or not artifact_available(implementation)
+            or implementation["artifact"].get("head") != manifest["head_sha"]
+            or implementation["artifact"].get("candidate_sha256") != candidate["candidate_sha256"]
+            or implementation["dispatch"].get("result_checkpoint", {}).get("worktree_head") != manifest["head_sha"]
+        ):
+            raise StageStopped("preliminary publication requires implementation verification for the reviewed SHA")
+        return self.publication().preliminary(
+            normalized,
+            manifest["snapshot_id"],
+            manifest["head_sha"],
+            manifest["base_sha"],
+            candidate_evidence={key: manifest["candidate"][key] for key in ("candidate_sha256", "run_id")},
+        )
+
     def advance_stages(self):
         """Keep question handoffs inside the same base/ownership recovery boundary."""
+        pr_first = review_publication.enabled(getattr(self, "plan", {}))
         try:
             self.reconcile_running()
             self.prepare()
+            if pr_first:
+                self.preliminary_publication()
             self.stage = "review"
             records = self.review()
             report, sha, ids, requires_followup = self.report(records)
+            if pr_first:
+                self.stage = "publishing_review_report"
+                self.phase(self.stage)
+                self.publication().report(self.manifest["head_sha"], sha, report.read_text(encoding="utf-8"))
             disposition = None if requires_followup else self.no_repair_disposition(sha)
             if disposition is None:
                 disposition = self.address(report, sha, ids)
+            if pr_first:
+                response = json.loads(Path(disposition["dispositions_path"]).read_text(encoding="utf-8"))
+                pending = [item for item in response["dispositions"] if item["status"] == "needs_decision"]
+                if pending:
+                    head = self.manifest["head_sha"]
+                    summary = "\n".join(
+                        ["## 第一轮处理待决定", "", f"送审提交 `{head}`。", ""]
+                        + [f"- {item['id']} · {item['reason']}" for item in pending]
+                    )
+                    self.publication().blocked(head, summary)
+                    raise StageStopped("first-round dispositions require an operator decision; draft retained")
+                reasons = targeted.reasons(self, records, disposition)
+                return self.finalize(report, sha, disposition, risk_reasons=reasons)
             return self.finalize(report, sha, disposition)
         except ReviewDecisionRequired as exc:
             return self.wait_for_decision(exc, locals().get("sha"))
         except final_verification.FinalReviewBlocked as exc:
+            if pr_first:
+                head = self.manifest["head_sha"]
+                summary = "\n".join(
+                    ["## 第一轮处理待决定", "", f"送审提交 `{head}`，定向复核未通过。"]
+                    + [f"- {item}" for item in exc.value["blocking_findings"]]
+                )
+                self.publication().blocked(head, summary)
+                raise StageStopped("targeted final review blocked the update; draft and evidence retained") from exc
             if single_round.enabled(self):
                 raise StageStopped("single-round policy cannot enter final model review or repair") from exc
             decision = final_repair.handle(self, exc)
@@ -1209,8 +1331,9 @@ def main(argv=None):
     parser.add_argument("--db", required=True)
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--attempt-id", required=True)
+    parser.add_argument("--config")
     args = parser.parse_args(argv)
-    coordinator = Coordinator(args.db, args.task_id, args.attempt_id)
+    coordinator = Coordinator(args.db, args.task_id, args.attempt_id, config_path=args.config)
     signal.signal(signal.SIGTERM, lambda *_args: coordinator.stopping.set())
     coordinator.run()
     return 0

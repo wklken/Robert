@@ -161,6 +161,7 @@ def _stream_usage(events, *, agent, baseline=None, counter_scope=None, truncated
     turns, snapshots, messages, results = [], [], {}, []
     seen = set()
     source_offsets = []
+    receipt_ids = []
     open_turn = False
     completed_at = None
     for offset, event in events:
@@ -176,6 +177,8 @@ def _stream_usage(events, *, agent, baseline=None, counter_scope=None, truncated
             if key in seen:
                 continue
             seen.add(key)
+            if isinstance(identity, str):
+                receipt_ids.append({"kind": event_type, "id": identity})
             open_turn = False
             stamp = event.get("timestamp")
             completed_at = stamp if utc_timestamp(stamp) else None
@@ -183,7 +186,16 @@ def _stream_usage(events, *, agent, baseline=None, counter_scope=None, truncated
             source_offsets.append(offset)
         elif agent in {"codex", "tcodex"} and event_type == "event_msg":
             payload = event.get("payload")
-            if not isinstance(payload, dict) or payload.get("type") != "token_count":
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("type") == "task_started":
+                open_turn = True
+                completed_at = None
+            elif payload.get("type") == "task_complete":
+                open_turn = False
+                stamp = event.get("timestamp")
+                completed_at = stamp if utc_timestamp(stamp) else None
+            if payload.get("type") != "token_count":
                 continue
             info = payload.get("info")
             counters = _tokens(info.get("total_token_usage")) if isinstance(info, dict) else {}
@@ -210,7 +222,7 @@ def _stream_usage(events, *, agent, baseline=None, counter_scope=None, truncated
         mode, scope, complete = "cumulative", "session" if counter_scope == "session" else "launch", True
     elif snapshots:
         totals, resets = _cumulative(snapshots, baseline)
-        mode, scope, complete = "cumulative", "session", bool(turns)
+        mode, scope, complete = "cumulative", "session", bool(turns or completed_at)
     elif turns:
         for turn in turns:
             _add_blocks(totals, turn)
@@ -232,6 +244,7 @@ def _stream_usage(events, *, agent, baseline=None, counter_scope=None, truncated
         "counter_scope": scope,
         "counter_resets": resets,
         "source_offsets": source_offsets,
+        **({"receipt_ids": receipt_ids} if receipt_ids else {}),
         **({"baseline": baseline} if baseline and mode == "cumulative" and scope == "session" else {}),
         **({"unknown_reason": "bounded_log_scan"} if truncated else {}),
         **(
@@ -331,6 +344,68 @@ def read_legacy_log(path):
 
 def dispatch_sidecar(stdout):
     return Path(stdout).with_suffix(".usage.json")
+
+
+def _native_file(binding, stream):
+    info = os.fstat(stream.fileno())
+    if binding.get("history_identity") != {"dev": info.st_dev, "ino": info.st_ino}:
+        raise ValueError("native usage history identity changed")
+    return info.st_size
+
+
+def native_resume_usage_cursor(binding):
+    """Pin the exact stopped session boundary before a new continuation starts."""
+    try:
+        with session_history.open_history(binding["history_root"], binding["history_path"]) as stream:
+            size = _native_file(binding, stream)
+            if session_history.complete_end(stream, size) != size:
+                return None
+            baseline = None
+            if binding["agent"] in {"codex", "tcodex"}:
+                for _, line in session_history.reverse_lines(stream, size):
+                    event = session_history.json_object(line) if line else {}
+                    payload = event.get("payload") or {}
+                    if event.get("type") == "event_msg" and payload.get("type") == "token_count":
+                        baseline = _tokens((payload.get("info") or {}).get("total_token_usage"))
+                        if baseline:
+                            break
+                if baseline is None:
+                    return None  # A whole-session counter has no trustworthy starting point.
+            return {"offset": size, "baseline": {"usage": baseline} if baseline else None}
+    except (OSError, TypeError, ValueError, KeyError, AttributeError):
+        return None
+
+
+def read_bound_resume_usage(dispatch):
+    """Read only new native receipts from one stopped continuation, with no stdout addition."""
+    binding, cursor = dispatch.get("native_session"), dispatch.get("native_usage_cursor")
+    if not isinstance(binding, dict) or not isinstance(cursor, dict) or not dispatch.get("native_resume"):
+        return {}
+    try:
+        with session_history.open_history(binding["history_root"], binding["history_path"]) as stream:
+            size = _native_file(binding, stream)
+            start = cursor["offset"]
+            if type(start) is not int or not 0 <= start < size:
+                return {}
+            stream.seek(start)
+            content = stream.read(session_history.PAGE_SCAN_BYTES)
+            last = content.rfind(b"\n")
+            if last < 0:
+                return {}
+            events = (
+                (index, session_history.json_object(line)) for index, line in enumerate(content[:last].splitlines())
+            )
+            result = _stream_usage(
+                events,
+                agent=binding["agent"],
+                baseline=cursor.get("baseline"),
+                truncated=start + last + 1 < size,
+            )
+            if result:
+                result["observation_source"] = "bound_native_resume_history"
+            return result
+    except (OSError, TypeError, KeyError, ValueError, AttributeError):
+        return {}
 
 
 def read_dispatch(root, dispatch):

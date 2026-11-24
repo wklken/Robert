@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 
+from robert_agent.foundation.contracts.delivery import ReviewPublicationMode
 from robert_agent.foundation.contracts.execution import ReviewReportMode
 
 
@@ -21,7 +22,7 @@ def pipeline_timeout(plan: Mapping) -> int:
 
     Each stage uses its recorded worker timeout. Reviews overlap; the first
     reviewer owns synthesis for historical report plans. A single-round plan
-    reserves implementation and one address pass, with no final model verification.
+    reserves implementation, one address pass and, for PR-first plans, one targeted review.
     Historical plans retain two address and two verification passes. Each write
     pass reserves at most three artifact-only repairs, capped at 120 seconds.
     Pool waiting shares one allowance, capped at an hour and at the plan timeout.
@@ -47,7 +48,8 @@ def pipeline_timeout(plan: Mapping) -> int:
     write_passes = 2 if policy else 3
     mode = ReviewReportMode(plan.get("review_report_mode", ReviewReportMode.MODEL_SYNTHESIS))
     synthesis_passes = int(mode == ReviewReportMode.MODEL_SYNTHESIS)
-    reviewer_passes = synthesis_passes + (0 if policy else 2)
+    targeted_pass = plan.get("review_publication") == ReviewPublicationMode.PR_FIRST_V1
+    reviewer_passes = synthesis_passes + (int(targeted_pass) if policy else 2)
     handoff_repairs = write_passes * MAX_HANDOFF_REPAIR_ATTEMPTS * min(implement, MAX_HANDOFF_REPAIR_SECONDS)
     return (
         write_passes * implement

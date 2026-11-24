@@ -9,7 +9,7 @@ from robert_agent.persistence.rounds.records import artifact_available
 
 
 POLICY = "single_review_single_repair"
-PHASES = {"review", "synthesis", "address_findings"}
+PHASES = {"review", "synthesis", "address_findings", "verify_final"}
 
 
 def enabled(driver):
@@ -20,7 +20,11 @@ def review_started(driver):
     if not enabled(driver):
         return False
     with store.connect(driver.db_path) as conn:
-        return any(run["stage"] in PHASES for run in store.runs(conn, driver.round_id))
+        entry = store.session(conn, round_id=driver.round_id)
+        return bool(
+            entry["request"].get("review_publication")
+            or any(run["stage"] in PHASES for run in store.runs(conn, driver.round_id))
+        )
 
 
 def preserve_snapshot(driver):

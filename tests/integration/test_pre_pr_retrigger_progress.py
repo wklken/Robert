@@ -69,6 +69,7 @@ class PrePRRetriggerProgressTests(ReviewCoordinatorFixture):
         with fixture_database.connect(self.db) as conn:
             registered = store.session(conn, task_id=task)
             registered["request"]["plan"].pop("review_report_mode", None)
+            registered["request"]["plan"].pop("review_publication", None)
             if legacy_snapshot:
                 # These cases recover rounds frozen before the single-round policy.
                 registered["request"]["plan"].pop("review_policy")

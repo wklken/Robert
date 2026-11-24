@@ -480,13 +480,23 @@ class StageCoordinator:
                             recorded = dict(run["dispatch"] or {})
                             recorded["launch_checkpoint"] = checkpoint
                             recorded.update(
-                                worker_agent=worker["agent"], worker_name=worker["name"], model=run["model"]
+                                worker_agent=worker["agent"],
+                                worker_name=worker["name"],
+                                model=run["model"],
+                                logical_execution_id=f"{self.round_id}:{run['stage']}:{worker['name']}:{run['prompt_sha256']}",
                             )
                             if native_home:
                                 recorded["native_home"] = native_home
                             store.update_run(conn, run["run_id"], dispatch_json=json.dumps(recorded))
                             start_call(
-                                conn, self.data_dir, "stage", run["run_id"], self.task_id, recorded, stage=run["stage"]
+                                conn,
+                                self.data_dir,
+                                "stage",
+                                run["run_id"],
+                                self.task_id,
+                                recorded,
+                                stage=run["stage"],
+                                confirmed=False,
                             )
                     if acquired:
                         resume = recorded.get("native_resume")
@@ -516,6 +526,16 @@ class StageCoordinator:
                         if process is not None:
                             self.processes[launched["pid"]] = process
                         with store.connect(self.db_path) as conn:
+                            if launched.get("pid") or launched.get("process_exited"):
+                                start_call(
+                                    conn,
+                                    self.data_dir,
+                                    "stage",
+                                    run["run_id"],
+                                    self.task_id,
+                                    launched,
+                                    stage=run["stage"],
+                                )
                             store.update_run(
                                 conn,
                                 run["run_id"],
@@ -1009,6 +1029,8 @@ class StageCoordinator:
                     "usage_segment_id": run["run_id"],
                     "native_home": descriptor["native_home"],
                 }
+                if cursor := model_usage.native_resume_usage_cursor(binding):
+                    recorded["native_usage_cursor"] = cursor
                 raw_dispatch = {key: value for key, value in source_run["dispatch"].items() if key != "usage_baseline"}
                 original_usage = model_usage.read_dispatch(self.data_dir, raw_dispatch)
                 if (

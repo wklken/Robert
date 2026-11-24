@@ -16,7 +16,7 @@
 | [Proposer](proposer.md) | 主动发现单据、提案审核、入队和回评 |
 | [TAPD 来源](tapd.md) | @ 触发、标签选仓库、回评、澄清回复与单据结束 |
 | [操作员消息](operator-messaging.md) | OpenClaw 通知、提问、受认证回复与渠道接入边界 |
-| [新 PR 发布前 Review](pre-pr-review.md) | 按仓库启用、审查恢复、意见处理和发布门禁 |
+| [新 PR 的首轮 Review](pre-pr-review.md) | 草稿先行、归并报告、同一 PR 的定向修复和发布门禁 |
 | [多模型 PR 评审](multi-model-review.md) | 作者白名单、并发、文件交接、审查与恢复 |
 | [项目记忆与证据阶段](project-memory.md) | 技术提示、审计、发布回执与部署证明 |
 | [多 Agent 投票](multi-agent-vote.md) | 显式触发、澄清、独立选票、汇总与发布 |

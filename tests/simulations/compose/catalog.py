@@ -31,7 +31,13 @@ class Case:
 
 CASES = (
     Case("T01.01", "TAPD mention opens one GitHub PR and reconciles a lost ticket reply", tapd.lost_comment, 210),
-    Case("N07.01", "One pre-PR review and repair precede audited push", pre_pr.single_review_repair, 240, smoke=True),
+    Case(
+        "N07.01",
+        "Verified draft precedes review and repair updates the same PR",
+        pre_pr.single_review_repair,
+        240,
+        smoke=True,
+    ),
     Case(
         "O04.01.provider",
         "Chat rejects the wrong provider",

@@ -46,6 +46,10 @@ class PrePRDeadlineResumeTests(ReviewCoordinatorFixture):
             ]
         )
         self.task, self.attempt = self.current()
+        with database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=self.task)
+            entry["request"]["plan"].pop("review_publication", None)
+            store.update(conn, entry["round_id"], request_json=json.dumps(entry["request"]))
         self.stage_calls = []
         self.driver = Coordinator(self.db, self.task, self.attempt, launcher=self.launch_stage, poll_seconds=0.01)
         git(

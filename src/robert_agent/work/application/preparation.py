@@ -1,6 +1,6 @@
 """Prepare an attempt with durable inputs, a workspace and a prompt."""
 
-from robert_agent.foundation.contracts.delivery import OutputType
+from robert_agent.foundation.contracts.delivery import OutputType, ReviewPublicationMode
 from robert_agent.foundation.contracts.execution import AttemptStatus, ReviewReportMode, RoundStatus
 from robert_agent.foundation.contracts.work import (
     REMEDIATION_TASK_KINDS,
@@ -455,6 +455,7 @@ def bind_pre_pr_review(
                 **review_plan,
                 "review_policy": "single_review_single_repair",
                 "review_report_mode": ReviewReportMode.DETERMINISTIC_V1.value,
+                "review_publication": ReviewPublicationMode.PR_FIRST_V1.value,
             }
             pre_pr_review.create(conn, task_id, request)
 

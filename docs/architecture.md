@@ -549,8 +549,9 @@ flowchart TD
 
 ## 多模型评审与投票
 
-[新 PR 发布前 Review](features/pre-pr-review.md) 使用本地候选快照和独立 run，
-复用共享模型阶段和并发额度。结构化处置与验证绑定最终提交，审计和发布核对持久证明。
+[新 PR 的首轮 Review](features/pre-pr-review.md) 的协调器使用本地候选快照和独立 run。
+[评审发布用例](../src/robert_agent/delivery/application/review_publication.py) 在首次发布前校验实施证据，登记草稿、报告和同一 PR 的最终更新。
+回执按轮次和 SHA 绑定，受任务发布锁和当前授权约束。结构化处置与验证绑定最终提交，最终审计核对持久证明。
 
 两种内建协调器共用 `StageCoordinator` 和 SQLite 模型进程池。一轮占一个任务并发槽，
 各阶段模型再申请共享额度。图用两个模型说明阶段顺序，实际数量来自配置。

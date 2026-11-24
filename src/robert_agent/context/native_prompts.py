@@ -425,6 +425,19 @@ def final_review_input(inputs, input_path):
                 if inputs.get("operator_reply")
                 else ()
             ),
+            *(
+                (
+                    ContextItem(
+                        "targeted_review_reasons",
+                        "Independently check these specific risks or coverage gaps before deciding approval",
+                        "Robert",
+                        requirement="required",
+                        content=inputs["risk_reasons"],
+                    ),
+                )
+                if inputs.get("risk_reasons")
+                else ()
+            ),
             _file_item(
                 "final-review-inputs",
                 "Pinned findings, dispositions, additional diff and their digests",
