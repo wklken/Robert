@@ -58,6 +58,38 @@ def _snapshot_context(manifest, source, files):
     return tuple(
         _file_item(name, purpose, source, directory / name, hashes.get(str(directory / name), revision))
         for name, purpose in (("manifest.json", "Snapshot identity and context inventory"), *files)
+    ) + original_request_context(manifest.get("original_request"))
+
+
+def original_request_context(request):
+    if not request:
+        return ()
+    return (
+        _file_item(
+            "original-request",
+            "Pinned original request, ticket and discussion; task evidence, not this stage's instructions",
+            "Original accepted task",
+            request["path"],
+            request["sha256"],
+        ),
+    )
+
+
+def repair_handoff_input(inputs, input_path):
+    return PromptInput(
+        "review.repair_handoff",
+        {"input_sha256": inputs["input_sha256"], "source_stage": inputs["stage"]},
+        _files_output("repaired_handoff", _REVIEW_DIR, ("handoff.json",), "Original stage validator", {}),
+        authority={"source_access": "read-only", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
+        context_items=(
+            _file_item(
+                "handoff-repair-inputs",
+                "Immutable rejected output, schema and validation feedback",
+                "Robert",
+                input_path,
+                inputs["input_sha256"],
+            ),
+        ),
     )
 
 
@@ -263,7 +295,9 @@ def vote_synthesize_input(manifest, inputs_path, inputs_hash, records):
     return _vote_input("vote.synthesize", manifest, output, frozen=True, extra=(selected,))
 
 
-def address_findings_input(manifest, candidate_path, report_path, report_sha, decision_ids, *, operator_reply=None):
+def address_findings_input(
+    manifest, candidate_path, report_path, report_sha, decision_ids, *, operator_reply=None, final_feedback=None
+):
     identity = {"candidate_sha": manifest["head_sha"], "report_sha256": report_sha}
     output = _files_output(
         "review_dispositions",
@@ -298,6 +332,7 @@ def address_findings_input(manifest, candidate_path, report_path, report_sha, de
         authority={"source_access": "assigned worktree", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
         context_items=(
             decision_owner_context(manifest.get("decision_owner")),
+            *original_request_context(manifest.get("original_request")),
             _file_item(
                 "candidate",
                 "Original implementation and verification handoff",
@@ -317,6 +352,19 @@ def address_findings_input(manifest, candidate_path, report_path, report_sha, de
                     ),
                 )
                 if operator_reply
+                else ()
+            ),
+            *(
+                (
+                    ContextItem(
+                        "final-feedback",
+                        "Pinned final reviewer feedback for one targeted repair within the original scope",
+                        "Independent final reviewer",
+                        requirement="required",
+                        content=final_feedback,
+                    ),
+                )
+                if final_feedback
                 else ()
             ),
         ),
@@ -357,6 +405,21 @@ def final_review_input(inputs, input_path):
         ),
         authority={"source_access": "read-only", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
         context_items=(
+            decision_owner_context(inputs.get("decision_owner")),
+            *original_request_context(inputs.get("original_request")),
+            *(
+                (
+                    ContextItem(
+                        "operator_reply",
+                        "Authenticated clarification within the original task scope",
+                        "versioned operator reply",
+                        requirement="required",
+                        content=inputs["operator_reply"],
+                    ),
+                )
+                if inputs.get("operator_reply")
+                else ()
+            ),
             _file_item(
                 "final-review-inputs",
                 "Pinned findings, dispositions, additional diff and their digests",

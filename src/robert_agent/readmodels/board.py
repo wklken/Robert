@@ -30,6 +30,7 @@ from robert_agent.persistence.queries import wakeups as db_read_wakeups
 from robert_agent.persistence.queries import work_items as db_read_work_items
 from robert_agent.persistence.queries.readviews import board as board_queries
 from robert_agent.persistence.queries.readviews import task_history
+from robert_agent.persistence.queries.readviews import board_delivery
 from robert_agent.persistence.queries.readviews import work_items as work_item_queries
 from robert_agent.persistence.rounds import review as review_store
 from robert_agent.persistence.rounds import pre_pr_review
@@ -44,6 +45,7 @@ from robert_agent.readmodels.execution import (
 from robert_agent.work.messaging import selectable_choices
 from robert_agent.work import control_queries
 from robert_agent.work import inputs as work_items
+from robert_agent.work import queries as work_queries
 
 COLUMNS = (
     ("backlog", "Backlog"),
@@ -280,6 +282,7 @@ WAITING_STATES = {
 }
 REVIEW_STATES = {
     "open_pr": ("in_review", "info", "github"),
+    "analysis_delivered": ("analysis_delivered", "success", "none"),
     "unmerged_pr_closed": ("pr_closed", "attention", "operator"),
 }
 PRIMARY_COMMANDS = ("retrigger", "retry", "retry_publish", "reply", "approve", "start", "reopen")
@@ -293,15 +296,43 @@ def _task_attempt_counts(conn, task_id):
 def _summary_cause(card, facts, attention, state):
     """The single most specific operator-facing reason, with where it came from."""
     execution = card.get("execution") or {}
-    review = card.get("vote") or card.get("review") or {}
     candidates = []
     if card["reason_code"] == "pr_remediation_exhausted":
         candidates.append(("remediation", card["reason_summary"], None))
     if state in {"failed", "worker_unavailable"}:
-        candidates += [
-            ("review", review.get("error"), execution.get("finished_at")),
-            ("attempt", execution.get("failure"), execution.get("finished_at")),
-        ]
+        for source in ("pre_pr_review", "vote", "review"):
+            review = card.get(source) or {}
+            error = review.get("error")
+            stage = None
+            if not error:
+                # Later successful retries supersede a failed run of the same stage and worker.
+                latest = {}
+                for run in review.get("runs", []):
+                    key = (run.get("stage"), run.get("worker_id"))
+                    if run.get("attempt_no", 0) >= latest.get(key, {}).get("attempt_no", 0):
+                        latest[key] = run
+                failed = next(
+                    (
+                        run
+                        for run in reversed(list(latest.values()))
+                        if run.get("error") and run.get("status") in {"failed", "interrupted", "attention"}
+                    ),
+                    None,
+                )
+                error, stage = (failed.get("error"), failed.get("stage")) if failed else (None, None)
+            if error:
+                return {
+                    "text": error,
+                    "source": source,
+                    "at": execution.get("finished_at"),
+                    "attempt_no": execution.get("attempt_no"),
+                    "round_id": review.get("round_id"),
+                    "stage": stage,
+                    "process_observation": execution.get("failure")
+                    if "process_missing_or_zombie" in (execution.get("failure") or "")
+                    else None,
+                }
+        candidates.append(("attempt", execution.get("failure"), execution.get("finished_at")))
     if state == "publish_failed":
         failure = (card["publication"]["failures"] or [{}])[0]
         candidates.append(("publication", failure.get("reason"), failure.get("failed_at")))
@@ -347,6 +378,8 @@ def _status_summary(conn, card, row, *, task, facts, attention, loaded=None):
     primary = next((command for command in PRIMARY_COMMANDS if command in commands), None)
     if state == "in_review" and card.get("pr") and card["pr"].get("url"):
         primary = "open_pr"
+    elif state == "analysis_delivered" and (card.get("source") or {}).get("url"):
+        primary = "open_source"
     elif reason == "pr_remediation_exhausted" and "request_changes" in commands:
         primary = "request_changes"
     elif state in {"completed", "canceled", "queued", "running", "publishing"}:
@@ -367,7 +400,77 @@ def _status_summary(conn, card, row, *, task, facts, attention, loaded=None):
         else (_task_attempt_counts(conn, task["task_id"]) if task else {"total": 0, "failed": 0}),
         "cause": _summary_cause(card, facts, attention, state),
         "primary": primary,
-        "since": execution.get("finished_at") or execution.get("heartbeat_at") or row["updated_at"],
+        "since": ((card["publication"].get("delivery") or {}).get("published_at"))
+        or execution.get("finished_at")
+        or execution.get("heartbeat_at")
+        or row["updated_at"],
+    }
+
+
+def _analysis_delivery(conn, task, facts, attention):
+    if (
+        not task
+        or task["lifecycle"] != TaskLifecycle.COMPLETED
+        or task["expected_output"] != "comment_analysis"
+        or attention
+        or facts["running"]
+        or facts["actions"]
+        or facts["cleanup_pending"]
+        or facts["workflow_attention"]
+        or facts["source_closed"]
+        or facts["pull_requests"]
+        or work_queries.waiting_delivery_context(conn, task["task_id"])
+    ):
+        return None
+    result = db_records.first(board_delivery.analysis_result(conn, task, facts["streams"]))
+    audit = json_object(result["metadata_json"]).get("audit") if result else None
+    if not isinstance(audit, dict) or audit.get("status") != "accepted":
+        return None
+    attempt_metadata = json_object(result["attempt_metadata_json"])
+    termination = attempt_metadata.get("termination", {})
+    supervision = attempt_metadata.get("supervise", {})
+    if (
+        not isinstance(termination, dict)
+        or termination.get("status") not in {None, "terminated", "not_found", "already_dead"}
+        or not isinstance(supervision, dict)
+        or supervision.get("status") == "worker_identity_attention"
+    ):
+        return None
+    actions = board_delivery.analysis_actions(conn, result["result_id"])
+    if not actions or not any(action["action_type"] == "comment" for action in actions):
+        return None
+    receipts = []
+    for action in actions:
+        publication = json_object(action["metadata_json"]).get("publish", {})
+        if (
+            action["task_id"] != task["task_id"]
+            or action["audit_status"] != "accepted"
+            or action["publish_status"] != "published"
+            or action["intent_status"] not in {None, "published"}
+            or not isinstance(publication, dict)
+            or publication.get("status") not in {None, "published"}
+        ):
+            return None
+        receipts.append(
+            {
+                "action_id": action["action_id"],
+                "action_type": action["action_type"],
+                "status": "published",
+                "audit_status": "accepted",
+                "url": _safe_http_url(action["target_url"]),
+                "external_id": safe_text(action["external_id"]),
+                "published_at": safe_text(publication.get("published_at")),
+                "created_at": action["created_at"],
+            }
+        )
+    return {
+        "task_id": task["task_id"],
+        "result_id": result["result_id"],
+        "attempt_id": result["attempt_id"],
+        "published_at": next(
+            (receipt["published_at"] for receipt in reversed(receipts) if receipt["published_at"]), None
+        ),
+        "receipts": receipts,
     }
 
 
@@ -397,6 +500,7 @@ def _project_item(conn, row, *, controls=None, facts=None, loaded=None):
     running = bool(facts["running"])
     publication_in_progress = bool(facts["actions"])
     failures = facts["publish_failures"]
+    delivery = _analysis_delivery(conn, task, facts, attention)
     unavailable = next(
         (
             a
@@ -551,6 +655,12 @@ def _project_item(conn, row, *, controls=None, facts=None, loaded=None):
         )
     elif pr and (pr["state"] or "open").lower() == "open":
         column, reason_code, reason_summary = "review", "open_pr", f"PR #{pr['number']} is open"
+    elif delivery:
+        column, reason_code, reason_summary = (
+            "review",
+            "analysis_delivered",
+            "Analysis was accepted and published; awaiting your next instruction.",
+        )
     elif not row["activated_at"]:
         column, reason_code, reason_summary = "backlog", "draft", "Requirement is editable"
     else:
@@ -587,6 +697,7 @@ def _project_item(conn, row, *, controls=None, facts=None, loaded=None):
         if loaded is not None
         else (vote_store.board_status(conn, task["task_id"]) if task else None),
         "publication": {
+            "delivery": delivery,
             "failures": failures,
             "pending": len(facts["actions"]),
             "retry_pending": facts["publication_retry_pending"],
@@ -619,6 +730,8 @@ def _project_item(conn, row, *, controls=None, facts=None, loaded=None):
     card["valid_commands"] = _valid_commands(column, attention, running=running, publishing=publication_in_progress)
     if reason_code == "pr_remediation_exhausted":
         card["valid_commands"] = ["request_changes", "cancel"]
+    elif reason_code == "analysis_delivered":
+        card["valid_commands"] = ["cancel"]
     if not row["canceled_at"] and not row["completed_at"]:
         if facts["source_closed"] or facts["cleanup_pending"]:
             card["valid_commands"] = ["cancel"]
@@ -672,6 +785,8 @@ def _project_item(conn, row, *, controls=None, facts=None, loaded=None):
     card["status_summary"] = _status_summary(
         conn, card, row, task=task, facts=facts, attention=attention, loaded=loaded
     )
+    if (card["status_summary"]["cause"] or {}).get("round_id"):
+        card["reason_summary"] = card["status_summary"]["cause"]["text"]
     return card
 
 

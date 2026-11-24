@@ -1,6 +1,6 @@
 """Plugin loader for DD GitHub worker launch adapters."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import import_module
 from pathlib import Path
 import shlex
@@ -16,6 +16,7 @@ class WorkerLaunch:
     environment_allowlist: tuple[str, ...] = ()
     timeout_seconds: int = 3600
     environment: tuple[tuple[str, str], ...] = ()
+    resume: dict | None = None
 
     def metadata(self):
         return {
@@ -26,6 +27,7 @@ class WorkerLaunch:
             "environment_allowlist": list(self.environment_allowlist),
             "timeout_seconds": self.timeout_seconds,
             **({"environment": dict(self.environment)} if self.environment else {}),
+            **({"resume": dict(self.resume)} if self.resume is not None else {}),
         }
 
 
@@ -110,6 +112,7 @@ def build_worker_launch(
     worker_command=None,
     worker_agent="cbc",
     worker_agent_config=None,
+    resume=None,
 ):
     prompt_path = Path(prompt_path)
     config = normalize_worker_agent_config(
@@ -120,7 +123,7 @@ def build_worker_launch(
         }
     )
     adapter = _load_adapter(config["agent"])
-    return adapter.build_launch(
+    options = dict(
         command_argv=config["command_argv"],
         prompt_path=prompt_path,
         worktree_path=worktree_path,
@@ -130,3 +133,27 @@ def build_worker_launch(
         environment_allowlist=config.get("environment_allowlist", []),
         timeout_seconds=config.get("timeout_seconds", 3600),
     )
+    if resume is not None:
+        from robert_agent.worker_adapters._session import NATIVE_HOME_VARIABLES, validate_resume
+
+        if not callable(getattr(adapter, "build_resume_launch", None)):
+            raise ValueError(f"worker_agent {config['agent']} does not support native resume")
+        descriptor = validate_resume(
+            resume,
+            agent=config["agent"],
+            prompt_path=prompt_path,
+            cwd=worktree_path or prompt_path.parent,
+        )
+        launch = adapter.build_resume_launch(**options, resume=descriptor)
+        # Dispatcher applies adapter-owned values after the current trusted
+        # environment. A controller reload cannot redirect this resumed session
+        # to a different provider home from the saved native binding.
+        environment = dict(launch.environment)
+        environment[NATIVE_HOME_VARIABLES[descriptor["provider"]]] = descriptor["native_home"]
+        return replace(launch, environment=tuple(environment.items()))
+    return adapter.build_launch(**options)
+
+
+def supports_native_resume(agent):
+    """Adapters opt in only when they implement an explicit native resume argv."""
+    return callable(getattr(_load_adapter(agent), "build_resume_launch", None))

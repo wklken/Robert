@@ -51,3 +51,48 @@ def build_launch(
         # the model, leaving unattended reviews without their result artifact.
         environment=(("TCLAUDE_SKIP_UPDATE", "1"),),
     )
+
+
+def build_resume_launch(
+    command_argv,
+    prompt_path,
+    worktree_path,
+    model,
+    reasoning_effort,
+    prompt_transport="stdin",
+    environment_allowlist=(),
+    timeout_seconds=3600,
+    *,
+    resume,
+):
+    command = [*command_argv, "-p", "--resume", resume["session_id"]]
+    if model != "default":
+        command.extend(["--model", model])
+    if reasoning_effort != "default":
+        command.extend(["--effort", reasoning_effort])
+    command.extend(
+        [
+            "--permission-mode",
+            "bypassPermissions",
+            "--disallowedTools",
+            DEFAULT_DISALLOWED_WORKER_TOOLS,
+            "--input-format",
+            "text",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+        ]
+    )
+    for directory in resume["add_dirs"]:
+        command.extend(["--add-dir", directory])
+    return WorkerLaunch(
+        agent=AGENT_NAME,
+        command=command,
+        cwd=resume["cwd"],
+        stdin_path=str(prompt_path),
+        stdout_format="stream-json",
+        environment_allowlist=tuple(environment_allowlist),
+        timeout_seconds=int(timeout_seconds),
+        resume=resume,
+        environment=(("TCLAUDE_SKIP_UPDATE", "1"),),
+    )

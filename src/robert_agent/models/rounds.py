@@ -38,6 +38,36 @@ class ReviewSession(Base):
     )
 
 
+class ReviewExecution(Base):
+    __tablename__ = "review_executions"
+
+    canonical_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    round_id: Mapped[str] = mapped_column(Text, ForeignKey("review_sessions.round_id"), unique=True)
+    identity_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+
+
+class ReviewTrigger(Base):
+    __tablename__ = "review_triggers"
+
+    repo: Mapped[str] = mapped_column(Text, primary_key=True)
+    pr_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    trigger_fingerprint: Mapped[str] = mapped_column(Text, primary_key=True)
+    round_id: Mapped[str] = mapped_column(Text, ForeignKey("review_sessions.round_id"))
+    workstream_id: Mapped[str] = mapped_column(Text)
+    request_json: Mapped[str] = mapped_column(Text)
+    authorization_json: Mapped[str] = mapped_column(Text)
+    task_id: Mapped[str | None] = mapped_column(Text, ForeignKey("tasks.task_id"))
+    status: Mapped[str] = mapped_column(Text, server_default="accepted")
+    result_id: Mapped[str | None] = mapped_column(Text, ForeignKey("worker_results.result_id"))
+    action_id: Mapped[str | None] = mapped_column(Text, ForeignKey("github_actions.action_id"))
+    completion_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (Index("review_triggers_round", "round_id", "created_at"),)
+
+
 class ReviewRun(Base):
     __tablename__ = "review_runs"
 
@@ -187,7 +217,9 @@ class PrePrReviewRun(Base):
     updated_at: Mapped[str] = mapped_column(Text)
 
     __table_args__ = (
-        CheckConstraint("stage IN ('implement','prepare','review','synthesis','address_findings','verify_final')"),
+        CheckConstraint(
+            "stage IN ('implement','prepare','review','synthesis','address_findings','verify_final','repair_handoff')"
+        ),
         UniqueConstraint("round_id", "stage", "worker_id", "attempt_no"),
         Index("pre_pr_review_runs_reserved", "slot_reserved", sqlite_where=text("slot_reserved=1")),
     )

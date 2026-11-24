@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 from robert_agent.adapters.processes import session_history
+from robert_agent.foundation.timestamps import utc_timestamp
 
 
 SIDECAR_ENV = "ROBERT_MODEL_USAGE_FILE"
@@ -24,18 +25,40 @@ _TOKEN_KEYS = (
     "cache_write_input_tokens",
     "reasoning_output_tokens",
 )
+_ALIASES = {
+    "inputTokens": "input_tokens",
+    "outputTokens": "output_tokens",
+    "cacheReadInputTokens": "cache_read_input_tokens",
+    "cached_input_tokens": "cache_read_input_tokens",
+    "cacheCreationInputTokens": "cache_creation_input_tokens",
+    "cache_write_input_tokens": "cache_creation_input_tokens",
+}
 
 
 def _tokens(value):
-    return (
-        {key: value[key] for key in _TOKEN_KEYS if key in value and type(value[key]) is int and value[key] >= 0}
-        if isinstance(value, dict)
-        else {}
-    )
+    if not isinstance(value, dict):
+        return {}
+    counters = {}
+    for key in _TOKEN_KEYS:
+        count = value.get(key)
+        if type(count) is int and count >= 0:
+            counters.setdefault(_ALIASES.get(key, key), count)
+    return counters
 
 
 def _usd(value):
     return value if type(value) in (int, float) and 0 <= value <= sys.float_info.max else None
+
+
+def source_for_agent(agent, event_type=None):
+    """Use the registered adapter, retaining labels for old unregistered logs."""
+    if agent in {"claude", "tclaude"}:
+        return "claude_stream_json"
+    if agent in {"codex", "tcodex"} or event_type == "turn.completed":
+        return "codex_json"
+    if agent in {"opencode", "command"}:
+        return "opencode" if agent == "opencode" else "gateway"
+    return "cbc_stream_json" if agent in {None, "cbc"} else agent
 
 
 def gateway_usage(response):
@@ -73,7 +96,7 @@ def report_sidecar(usage):
             pass
 
 
-def event_usage(event):
+def event_usage(event, *, agent=None):
     if not event:
         return {"usage_available": False, "source": "no_result_event"}
     provider = event.get("providerData")
@@ -84,12 +107,138 @@ def event_usage(event):
     cost = _usd(event.get("total_cost_usd"))
     return {
         "usage_available": bool(counters or usage or raw or cost is not None),
-        "source": "codex_json" if event.get("type") == "turn.completed" else "cbc_stream_json",
+        "source": source_for_agent(agent, event.get("type")),
         "usage": counters,
         "provider_usage": usage,
         "provider_raw_usage": raw,
         "total_cost_usd": cost,
         **{key: event[key] for key in ("duration_ms", "num_turns") if type(event.get(key)) is int},
+    }
+
+
+def _add_blocks(target, incoming):
+    for block in ("usage", "provider_usage", "provider_raw_usage"):
+        for key, value in incoming.get(block, {}).items():
+            target.setdefault(block, {})[key] = target.get(block, {}).get(key, 0) + value
+    cost = _usd(incoming.get("total_cost_usd"))
+    if cost is not None and cost <= sys.float_info.max - (target.get("total_cost_usd") or 0):
+        target["total_cost_usd"] = (target.get("total_cost_usd") or 0) + cost
+
+
+def _cumulative(events, baseline):
+    """Convert ordered scope snapshots into increments, including explicit resets.
+
+    Reset detection belongs to the provider stream normalization, not the
+    durable upsert, which only merges already normalized receipt contributions.
+    """
+    totals, previous, resets = {}, baseline or {}, 0
+    for incoming in events:
+        delta = {}
+        reset = any(
+            value < previous.get(block, {}).get(key, 0)
+            for block in ("usage", "provider_usage", "provider_raw_usage")
+            for key, value in incoming.get(block, {}).items()
+        ) or (
+            _usd(incoming.get("total_cost_usd")) is not None
+            and _usd(previous.get("total_cost_usd")) is not None
+            and incoming["total_cost_usd"] < previous["total_cost_usd"]
+        )
+        if reset:
+            previous = {}
+            resets += 1
+        for block in ("usage", "provider_usage", "provider_raw_usage"):
+            for key, value in incoming.get(block, {}).items():
+                delta.setdefault(block, {})[key] = max(0, value - previous.get(block, {}).get(key, 0))
+        cost = _usd(incoming.get("total_cost_usd"))
+        if cost is not None:
+            delta["total_cost_usd"] = max(0, cost - (_usd(previous.get("total_cost_usd")) or 0))
+        _add_blocks(totals, delta)
+        previous = {**previous, **incoming}
+    return totals, resets
+
+
+def _stream_usage(events, *, agent, baseline=None, counter_scope=None, truncated=False):
+    turns, snapshots, messages, results = [], [], {}, []
+    seen = set()
+    source_offsets = []
+    open_turn = False
+    completed_at = None
+    for offset, event in events:
+        event_type = event.get("type")
+        if event_type in {"turn.started", "turn.failed"}:
+            open_turn = True
+        if event_type in {"turn.completed", "result"}:
+            receipt = event_usage(event, agent=agent)
+            if not receipt.get("usage_available"):
+                continue
+            identity = event.get("turn_id") or event.get("uuid") or event.get("id")
+            key = (event_type, identity) if isinstance(identity, str) else (event_type, offset)
+            if key in seen:
+                continue
+            seen.add(key)
+            open_turn = False
+            stamp = event.get("timestamp")
+            completed_at = stamp if utc_timestamp(stamp) else None
+            (turns if event_type == "turn.completed" else results).append(receipt)
+            source_offsets.append(offset)
+        elif agent in {"codex", "tcodex"} and event_type == "event_msg":
+            payload = event.get("payload")
+            if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                continue
+            info = payload.get("info")
+            counters = _tokens(info.get("total_token_usage")) if isinstance(info, dict) else {}
+            if counters:
+                snapshots.append({"usage": counters})
+                source_offsets.append(offset)
+        elif agent in {"claude", "tclaude"} and event_type == "assistant":
+            message = event.get("message")
+            if not isinstance(message, dict) or not isinstance(message.get("id"), str):
+                continue
+            counters = _tokens(message.get("usage"))
+            if counters:
+                # Claude can emit updated envelopes for the same message.
+                previous = messages.get(message["id"], {})
+                messages[message["id"]] = {
+                    key: max(previous.get(key, 0), value) for key, value in {**previous, **counters}.items()
+                }
+                source_offsets.append(offset)
+    totals, resets = {}, 0
+    if results:
+        # result is authoritative launch cumulative, replacing assistant deltas.
+        totals, resets = _cumulative(results, baseline if counter_scope == "session" else None)
+        totals.update({key: results[-1][key] for key in ("duration_ms", "num_turns") if key in results[-1]})
+        mode, scope, complete = "cumulative", "session" if counter_scope == "session" else "launch", True
+    elif snapshots:
+        totals, resets = _cumulative(snapshots, baseline)
+        mode, scope, complete = "cumulative", "session", bool(turns)
+    elif turns:
+        for turn in turns:
+            _add_blocks(totals, turn)
+        mode, scope, complete = "delta", "turn", True
+    elif messages:
+        for counters in messages.values():
+            _add_blocks(totals, {"usage": counters})
+        mode, scope, complete = "delta", "request", False
+    else:
+        return {}
+    return {
+        **totals,
+        "usage_available": True,
+        "source": source_for_agent(agent, "turn.completed" if turns or snapshots else None),
+        "measurement_status": "complete" if complete and not truncated and not open_turn else "partial",
+        "partial": not complete or truncated or open_turn,
+        "partial_cost": truncated,
+        "counter_mode": mode,
+        "counter_scope": scope,
+        "counter_resets": resets,
+        "source_offsets": source_offsets,
+        **({"baseline": baseline} if baseline and mode == "cumulative" and scope == "session" else {}),
+        **({"unknown_reason": "bounded_log_scan"} if truncated else {}),
+        **(
+            {"events": {"model_completed": {"at": completed_at, "source": "provider", "precision": "reported"}}}
+            if completed_at and not open_turn
+            else {}
+        ),
     }
 
 
@@ -143,7 +292,7 @@ def _opencode(events):
     }
 
 
-def read_log(root, path, *, agent=None, complete_lines=True):
+def read_log(root, path, *, agent=None, complete_lines=True, baseline=None, counter_scope=None):
     """Read only registered stdout under the runtime root."""
     if not isinstance(path, str) or not path:
         return {}
@@ -157,13 +306,17 @@ def read_log(root, path, *, agent=None, complete_lines=True):
                 result = _opencode(events)
                 if result and end > session_history.PAGE_SCAN_BYTES:
                     result.update(partial=True, partial_cost=True)
+                if result:
+                    result["measurement_status"] = "partial" if result.get("partial") else "complete"
                 return result
-            for _, line in lines:
-                if line is None:
-                    continue
-                event = session_history.json_object(line)
-                if event.get("type") in {"result", "turn.completed"}:
-                    return event_usage(event)
+            events = [(offset, session_history.json_object(line)) for offset, line in lines if line is not None]
+            return _stream_usage(
+                reversed(events),
+                agent=agent,
+                baseline=baseline,
+                counter_scope=counter_scope,
+                truncated=end > session_history.PAGE_SCAN_BYTES,
+            )
     except (OSError, ValueError):
         pass
     return {}
@@ -185,4 +338,10 @@ def read_dispatch(root, dispatch):
     if dispatch.get("worker_agent") == "command" and isinstance(path, str) and path:
         if measured := read_sidecar(root, dispatch_sidecar(path)):
             return measured
-    return read_log(root, path, agent=dispatch.get("worker_agent"))
+    return read_log(
+        root,
+        path,
+        agent=dispatch.get("worker_agent"),
+        baseline=dispatch.get("usage_baseline"),
+        counter_scope=dispatch.get("usage_counter_scope"),
+    )

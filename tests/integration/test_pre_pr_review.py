@@ -1,4 +1,3 @@
-from collections import Counter
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,233 +6,190 @@ from unittest.mock import patch
 import yaml
 
 from robert_agent.adapters.git.review_revision import git
-from robert_agent.configuration import validation as config_validation
 from robert_agent.delivery import queries
 from robert_agent.delivery.application import publish, submission, validation
 from robert_agent.execution import capacity, rounds
 from robert_agent.execution.stages import StageStopped
 from robert_agent.persistence.rounds import pool
-from robert_agent.work.application import commands, tapd_scan
+from robert_agent.work.application import commands
 from robert_agent.persistence.rounds import pre_pr_review as store
 from robert_agent.workflows.pre_pr_review.coordinator import Coordinator
 from robert_agent.workflows.review import workspace as review_workspace
 from tests.support.work_items import example_choices
 from tests.support import database as fixture_database
-from tests.support.repository_cycle import _new_pr_actions, _verification_evidence
-from tests.support.review_coordinator import ReviewCoordinatorFixture
-from tests.support.tapd import STORY, FakeClient, comment
-from tests.support.tapd_cycle import TAPD_CONFIG
+from tests.support.repository_cycle import _verification_evidence
+from tests.support.pre_pr_review import PrePRReviewFixture
+from tests.support.tapd import STORY
 
 
-class PrePublicationReviewTests(ReviewCoordinatorFixture):
-    def start(self, workers, *, local=False, tapd=False, github_comment=False):
-        config = yaml.safe_load(self.config_path.read_text())
-        config["repos"][0]["routes"] = {"new-pr": {"pre_pr_review": {"workers": workers}}}
-        if tapd:
-            config.update(yaml.safe_load(TAPD_CONFIG.format(trusted="alice")))
-        self.config_path.write_text(yaml.safe_dump(config))
-        if tapd:
-            self.cycle([])
-            settings = config_validation.validate_config(self.config_path, skip_external=True)
-            client = FakeClient()
-            client.comments.append(comment("2", "@robert-wklken please fix this bug"))
-            tapd_scan.scan_project(
-                self.db,
-                settings["tapd"],
-                settings["tapd"]["projects"][0],
-                {repo["full_name"]: repo for repo in settings["repos"]},
-                client,
-                now="2026-11-20T03:00:00+00:00",
-            )
-            self.cycle([])
-        elif local:
-            self.cycle([])
-            context = commands.CommandContext(
-                "operator", "owner", frozenset({"repo:example/backend"}), frozenset({"codex", "claude"})
-            )
-            commands.create_work_item(
-                self.db,
-                context=context,
-                repo_id="repo:example/backend",
-                title="Fix example bug",
-                description="Please fix this bug in the source file.",
-                priority="P1",
-                routing_mode="manual",
-                requested_worker="codex",
-                start=True,
-                idempotency_key="local-question-source",
-            )
-            self.cycle([])
-        else:
-            self.cycle(
-                [
-                    {
-                        "id": "implement",
-                        "number": 42,
-                        "source_type": "issue",
-                        "event_type": "comment" if github_comment else "assigned",
-                        "actor_login": "maintainer",
-                        "assigned_to": "robert-bot",
-                        "assignment_actor_login": "maintainer",
-                        "body": "@robert-bot update the example" if github_comment else "Update the example",
-                        "intent": "small_change",
-                        "title": "Update example",
-                        "state": "open",
-                        "html_url": "https://github.com/example/backend/issues/42"
-                        + ("#issuecomment-123" if github_comment else ""),
-                    }
-                ]
-            )
-        task, attempt = self.current()
+class PrePublicationReviewTests(PrePRReviewFixture):
+    def test_report_cookie_example_can_pass_original_submission_audit(self):
+        from robert_agent.workflows.pre_pr_review import coordinator as module
+
+        driver = self.start(["claude"])
+        example = "响应头 Set-Cookie: session=<redacted>; Path=/，仍需校验会话处理。"
+        render = module.files.render_individual
+        with patch.object(module.files, "render_individual", side_effect=lambda *args: render(*args) + "\n" + example):
+            result = driver.run()
+        self.assertTrue(result["ok"], result)
         with fixture_database.connect(self.db) as conn:
-            saved = store.session(conn, task_id=task)
-        self.assertIsNotNone(saved)
-        self.verification = [_verification_evidence()]
-        self.submission = {
-            "planned_github_actions": _new_pr_actions(),
-            "verification": self.verification,
-            "used_skills": [],
-            "consumed_event_fingerprints": [saved["request"]["event"]["event_fingerprint"]] if not local else [],
-            "handoff": "Update example and verify the result.",
-        }
-        if tapd:
-            self.submission["planned_github_actions"].append({"type": "comment", "body": "Updated the example."})
-        if local:
-            with fixture_database.connect(self.db) as conn:
-                self.submission["consumed_work_item_event_ids"] = [
-                    row[0] for row in conn.execute("SELECT event_id FROM work_item_events")
-                ]
-        driver = Coordinator(self.db, task, attempt, launcher=self.launch_pr_stage, poll_seconds=0.01)
-        if not Path(driver.assigned_path).exists():
-            Path(driver.assigned_path).parent.mkdir(parents=True, exist_ok=True)
-            git(
-                driver.repo["repo_root"],
-                "worktree",
-                "add",
-                "-b",
-                driver.branch,
-                driver.assigned_path,
-                self.git_fixture.base,
-            )
-        git(driver.assigned_path, "config", "user.name", "Test")
-        git(driver.assigned_path, "config", "user.email", "test@example.invalid")
-        self.fail_synthesis = False
-        self.fail_disposition = False
-        self.with_finding = False
-        self.needs_decision = False
-        self.question_choices = example_choices()
-        self.launches = Counter()
-        self.final_review_mode = "approved"
-        return driver
+            entry = store.session(conn, task_id=driver.task_id)
+            self.assertIn(example, Path(entry["report_path"]).read_text())
+            (metadata,) = conn.execute(
+                "SELECT metadata_json FROM github_actions WHERE action_type='open_pr'"
+            ).fetchone()
+            body = json.loads(metadata)["body"]
+            self.assertIn("仍需校验会话处理", body)
+            self.assertIn("Set-Cookie", body)
 
-    def launch_pr_stage(self, **kwargs):
-        prompt = Path(kwargs["prompt_path"])
-        output = Path(kwargs["log_dir"])
-        tree = Path(kwargs["worktree_path"])
-        if "ROBERT_PRE_PR_CANDIDATE_DIR" in kwargs["trusted_environment"]:
-            self.launches["implement"] += 1
-            (tree / "source.py").write_text("value = 3\n")
-            git(tree, "commit", "-am", "implement")
-            (output / "candidate.json").write_text(json.dumps(self.submission))
-        elif prompt.name.startswith("verify-final-"):
-            self.launches["verify_final"] += 1
-            value = json.loads(Path(kwargs["trusted_environment"]["ROBERT_PRE_PR_FINAL_REVIEW_INPUT"]).read_text())
-            self.assertEqual(git(tree, "rev-parse", "HEAD"), value["final_sha"])
-            self.assertIn("value = 4", (tree / "source.py").read_text())
-            self.assertIn("value = 3", Path(value["additional_diff_path"]).read_text())
-            if self.final_review_mode == "failed":
-                return {"ok": True, "process_exited": True, "returncode": 1, "pid": 1073741824}
-            result = {
-                key: value[key]
-                for key in (
-                    "round_id",
-                    "snapshot_id",
-                    "candidate_sha",
-                    "final_sha",
-                    "report_sha256",
-                    "dispositions_sha256",
-                    "additional_diff_sha256",
-                )
-            }
-            result.update(
-                schema_version=1,
-                recommendation="approved",
-                blocking_findings=[],
-                checked_findings=[
-                    {"id": item, "status": "resolved", "reason": "Verified final code and new diff"}
-                    for item in value["finding_ids"]
-                ],
-            )
-            if self.final_review_mode == "wrong_sha":
-                result["final_sha"] = value["candidate_sha"]
-            elif self.final_review_mode in {"blocked", "unknown"}:
-                result["recommendation"] = self.final_review_mode
-            elif self.final_review_mode == "blocking_approval":
-                result["checked_findings"][0]["status"] = "blocking"
-            (output / "final-verification.json").write_text(json.dumps(result))
-        elif prompt.name.startswith("address-"):
-            self.launches["address"] += 1
-            if not self.fail_disposition:
-                report_sha = prompt.stem.removeprefix("address-").split("-")[0]
-                candidate_sha = git(tree, "rev-parse", "HEAD")
-                decisions = []
-                if self.with_finding:
-                    (tree / "source.py").write_text("value = 4\n")
-                    git(tree, "commit", "-am", "address finding")
-                    decisions = [
-                        {"id": "F1", "status": "fixed", "reason": "Updated the value and verified its consumer."}
-                    ]
-                if self.needs_decision:
-                    decisions = [
-                        {
-                            "id": "F1",
-                            "status": "needs_decision",
-                            "reason": "Confirm expected value within the original scope.",
-                        }
-                    ]
-                (output / "dispositions.json").write_text(
-                    json.dumps(
-                        {
-                            "candidate_sha": candidate_sha,
-                            "final_sha": git(tree, "rev-parse", "HEAD"),
-                            "report_sha256": report_sha,
-                            "dispositions": decisions,
-                            **({"choices": self.question_choices} if self.needs_decision else {}),
-                            "verification": self.verification,
-                            "body": "Updated example.\n\n## Assumptions and decisions\nNone.",
-                        }
-                    )
-                )
-        else:
-            if prompt.name.startswith("synthesis-"):
-                self.launches["synthesis"] += 1
-                if self.fail_synthesis:
-                    self.fail_synthesis = False
-                    with fixture_database.connect(self.db) as conn:
-                        self.assertEqual(queries.ready_actions(conn, 10), [])
-                        self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
-                    return {"ok": True, "process_exited": True, "returncode": 1, "pid": 1073741824}
-            else:
-                self.launches[prompt.name] += 1
-            launched = self.launcher(**kwargs)
-            if self.with_finding and prompt.name == "reviewer-prompt.md":
-                path = output / "result.json"
-                value = json.loads(path.read_text())
-                value["findings"] = [
-                    {
-                        "id": "F1",
-                        "title": "Unexpected value",
-                        "severity": "medium",
-                        "location": {"path": "source.py", "line": 1},
-                        "trigger": "Loading the module",
-                        "impact": "The example value differs",
-                        "evidence": "The assignment uses the wrong value",
-                        "suggestion": "Use the expected value",
-                    }
-                ]
-                path.write_text(json.dumps(value))
-            return launched
-        return {"ok": True, "process_exited": True, "returncode": 0, "pid": 1073741824}
+    def test_invalid_handoff_repairs_only_the_artifact_and_reuses_implementation(self):
+        driver = self.start(["claude"])
+        launch = driver.launcher
+        repairs = []
+
+        def malformed_then_correct(**kwargs):
+            prompt = Path(kwargs["prompt_path"])
+            output = Path(kwargs["log_dir"])
+            if prompt.name.startswith("repair-handoff-"):
+                repairs.append(prompt)
+                self.fail("deterministic handoff correction must not launch a model")
+            result = launch(**kwargs)
+            if "ROBERT_PRE_PR_CANDIDATE_DIR" in kwargs["trusted_environment"]:
+                path = output / "candidate.json"
+                payload = json.loads(path.read_text())
+                payload["unexpected_program_field"] = True
+                path.write_text(json.dumps(payload))
+            return result
+
+        driver.launcher = malformed_then_correct
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.launches["implement"], 1)
+        self.assertEqual(len(repairs), 0)
+        corrected = list((driver.root / driver.round_id).glob("corrected-handoffs/*/*/candidate.json"))
+        self.assertEqual(len(corrected), 1)
+        with fixture_database.connect(self.db) as conn:
+            runs = store.runs(conn, driver.round_id)
+            original = next(run for run in runs if run["stage"] == "implement")
+            pin = original["dispatch"]["handoff_repair_checkpoint"]
+            original_path = Path(pin["handoff_path"])
+            self.assertEqual(store.digest(original_path), pin["handoff_sha256"])
+            expected = json.loads(original_path.read_text())
+            self.assertTrue(expected.pop("unexpected_program_field"))
+            self.assertEqual(json.loads(corrected[0].read_text()), expected)
+            self.assertFalse(any(run["stage"] == "repair_handoff" for run in runs))
+
+    def test_one_targeted_repair_after_final_blocker_then_delivers(self):
+        driver = self.start(["claude"])
+        self.with_finding = True
+        launch = driver.launcher
+
+        def blocker_then_approved(**kwargs):
+            result = launch(**kwargs)
+            prompt = Path(kwargs["prompt_path"])
+            output = Path(kwargs["log_dir"])
+            if prompt.name.startswith("verify-final-") and self.launches["verify_final"] == 1:
+                payload = json.loads((output / "final-verification.json").read_text())
+                payload["recommendation"] = "blocked"
+                payload["blocking_findings"] = ["source.py still requires the scoped guard"]
+                (output / "final-verification.json").write_text(json.dumps(payload))
+            return result
+
+        driver.launcher = blocker_then_approved
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.launches["implement"], 1)
+        self.assertEqual(self.launches["address"], 2)
+        self.assertEqual(self.launches["verify_final"], 2)
+        with fixture_database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=driver.task_id)
+            self.assertEqual(entry["request"]["final_repair_count"], 1)
+            self.assertTrue(all(run["status"] != "running" for run in store.runs(conn, driver.round_id)))
+
+    def test_original_request_is_pinned_for_review_address_and_final_verification(self):
+        driver = self.start(["claude"])
+        original = Path(driver.request["prompt_path"])
+        original.write_text(original.read_text() + "\nOriginal acceptance: keep original error observable.\n")
+        driver.request["prompt_sha256"] = store.digest(original)
+        self.with_finding = True
+        seen = {}
+        launch = driver.launcher
+
+        def check_context(**kwargs):
+            prompt = Path(kwargs["prompt_path"])
+            if "ROBERT_PRE_PR_CANDIDATE_DIR" not in kwargs["trusted_environment"]:
+                text = prompt.read_text()
+                self.assertIn("original-request", text)
+                pinned = driver.manifest["original_request"]
+                self.assertIn(pinned["path"], text)
+                self.assertEqual(store.digest(pinned["path"]), pinned["sha256"])
+                self.assertIn("keep original error observable", Path(pinned["path"]).read_text())
+                seen[prompt.name.split("-")[0]] = True
+            return launch(**kwargs)
+
+        driver.launcher = check_context
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(set(seen), {"reviewer", "address", "verify"})
+
+    def test_unrelated_base_advance_preserves_completed_reviews_and_repairs(self):
+        driver = self.start(["claude"])
+        self.with_finding = True
+        launch = driver.launcher
+        changed = []
+
+        def advance_base(**kwargs):
+            result = launch(**kwargs)
+            if Path(kwargs["prompt_path"]).name.startswith("verify-final-") and not changed:
+                root = self.git_fixture.upstream
+                git(root, "checkout", "main")
+                (root / "docs").mkdir(exist_ok=True)
+                (root / "docs" / "unrelated.md").write_text("unrelated upstream documentation\n")
+                git(root, "add", "docs/unrelated.md")
+                git(root, "commit", "-m", "advance base independently")
+                changed.append(git(root, "rev-parse", "HEAD"))
+            return result
+
+        driver.launcher = advance_base
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.launches["reviewer-prompt.md"], 1)
+        self.assertEqual(self.launches["address"], 1)
+        self.assertEqual(self.launches["verify_final"], 1)
+        with fixture_database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=driver.task_id)
+            self.assertEqual(entry["proof"]["base_sha"], changed[0])
+            self.assertEqual(entry["proof"]["base_refresh"]["reviewed_base_sha"], driver.manifest["base_sha"])
+
+    def test_related_base_advance_re_reviews_and_preserves_repaired_commit(self):
+        driver = self.start(["claude"])
+        self.with_finding = True
+        launch = driver.launcher
+        changed = []
+
+        def advance_related_base(**kwargs):
+            result = launch(**kwargs)
+            if Path(kwargs["prompt_path"]).name.startswith("verify-final-") and not changed:
+                root = self.git_fixture.upstream
+                git(root, "checkout", "main")
+                (root / "consumer.py").write_text("from source import value\nbase_feature = True\n")
+                git(root, "add", "consumer.py")
+                git(root, "commit", "-m", "related upstream change")
+                changed.append(git(root, "rev-parse", "HEAD"))
+                self.with_finding = False
+            return result
+
+        driver.launcher = advance_related_base
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.launches["implement"], 1)
+        self.assertEqual(self.launches["reviewer-prompt.md"], 2)
+        with fixture_database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=driver.task_id)
+            self.assertEqual(entry["request"]["base_refresh_count"], 1)
+            self.assertEqual(entry["manifest"]["base_sha"], changed[0])
+            self.assertIn("value = 4", Path(driver.assigned_path, "source.py").read_text())
+            self.assertIn("base_feature = True", Path(driver.assigned_path, "consumer.py").read_text())
 
     def test_review_decision_records_only_a_bound_question(self):
         driver = self.start(["claude"])
@@ -351,28 +307,6 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
         self.assertEqual(self.launches["implement"], 1)
         self.assertEqual(self.launches["reviewer-prompt.md"], 1)
         self.assertEqual(self.launches["address"], 2)
-
-    def finish_review_question(self):
-        driver = self.start(["claude"])
-        self.with_finding = self.needs_decision = True
-        recorded = driver.run()
-        with fixture_database.connect(self.db) as conn:
-            conn.execute(
-                "UPDATE github_actions SET publish_status='published' WHERE result_id=?", (recorded["result_id"],)
-            )
-        self.cycle([])
-        with fixture_database.connect(self.db) as conn:
-            item = conn.execute("SELECT work_item_id,version FROM work_items").fetchone()
-            question = conn.execute(
-                "SELECT event_id,metadata_json FROM work_item_events WHERE event_type='operator_question'"
-            ).fetchone()
-            lifecycle = conn.execute("SELECT lifecycle FROM tasks WHERE task_id=?", (driver.task_id,)).fetchone()[0]
-        self.assertEqual(lifecycle, "waiting_for_user")
-        self.assertEqual(json.loads(question[1])["pre_pr_review"]["round_id"], driver.round_id)
-        context = commands.CommandContext(
-            "operator", "owner", frozenset({"repo:example/backend"}), frozenset({"codex", "claude"})
-        )
-        return driver, item, question, context
 
     def test_authenticated_reply_reuses_review_and_resumes_only_address(self):
         driver, item, question, context = self.finish_review_question()
@@ -750,11 +684,21 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
         driver = self.start(["claude"])
         self.with_finding = True
         self.final_review_mode = mode
-        with patch.object(driver.stopping, "wait", return_value=False), self.assertRaises(RuntimeError):
-            driver.run()
+        if mode in {"blocked", "unknown", "blocking_approval"}:
+            with patch.object(driver.stopping, "wait", return_value=False):
+                result = driver.run()
+            self.assertTrue(result["ok"], result)
+            with fixture_database.connect(self.db) as conn:
+                self.assertEqual(store.session(conn, task_id=driver.task_id)["status"], "waiting_for_user")
+        else:
+            with patch.object(driver.stopping, "wait", return_value=False), self.assertRaises(RuntimeError):
+                driver.run()
         with fixture_database.connect(self.db) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM github_actions WHERE action_type='open_pr'").fetchone()[0], 0
+            )
+            if mode not in {"blocked", "unknown", "blocking_approval"}:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
         self.assertLessEqual(self.launches["verify_final"], 3)
 
     def test_wrong_sha_cannot_release_a_result(self):
@@ -898,3 +842,75 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             self.assertEqual(address["status"], "succeeded")
         self.assertEqual(Path(driver.final_review["worktree_path"]), driver.address_workspace(address["run_id"]))
         self.assertFalse((Path(driver.repo["worktree_root"]) / "pre-pr-final").exists())
+
+    def test_native_address_resume_keeps_original_writer_and_final_verification_tree(self):
+        import os
+
+        driver = self.start(["claude"])
+        self.with_finding = True
+        launch = driver.launcher
+        addresses = []
+        sid = "01a1f6d9-45c5-7670-8957-9abde29f8db4"
+
+        def interrupted_address(**kwargs):
+            result = launch(**kwargs)
+            prompt = Path(kwargs["prompt_path"])
+            if not prompt.name.startswith("address-"):
+                return result
+            addresses.append(kwargs)
+            if len(addresses) > 1:
+                return result
+            output, tree = Path(kwargs["log_dir"]), str(kwargs["worktree_path"])
+            (output / "dispositions.json").unlink()
+            agent = kwargs["worker_agent_config"]["agent"]
+            if agent in {"codex", "tcodex"}:
+                from datetime import datetime, timezone
+
+                root = self.root / ("." + agent) / "sessions" / datetime.now(timezone.utc).strftime("%Y/%m/%d")
+                history = root / f"rollout-2026-11-24T00-00-00-{sid}.jsonl"
+                rows = [
+                    {"type": "session_meta", "payload": {"id": sid, "source": "exec", "cwd": tree}},
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "message", "role": "user", "content": [{"text": prompt.read_text()}]},
+                    },
+                ]
+                stdout = {"type": "thread.started", "thread_id": sid}
+            else:
+                import re
+
+                root = self.root / ("." + agent) / "projects" / re.sub(r"[^a-zA-Z0-9]", "-", tree)
+                history = root / f"{sid}.jsonl"
+                rows = [
+                    {
+                        "type": "user",
+                        "sessionId": sid,
+                        "cwd": tree,
+                        "message": {"role": "user", "content": prompt.read_text()},
+                    }
+                ]
+                stdout = {"type": "system", "subtype": "init", "session_id": sid}
+            root.mkdir(parents=True, exist_ok=True)
+            history.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            log = output / "stdout.log"
+            log.write_text(json.dumps(stdout) + "\n")
+            return {**result, "returncode": 1, "stdout_path": str(log)}
+
+        driver.launcher = interrupted_address
+        native_home = self.root / ".codex"
+        native_home.mkdir(exist_ok=True)
+        with (
+            patch("pathlib.Path.home", return_value=self.root),
+            patch.dict(os.environ, {"CODEX_HOME": str(native_home)}),
+        ):
+            result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(addresses), 2)
+        with fixture_database.connect(self.db) as conn:
+            address_runs = [r for r in store.runs(conn, driver.round_id) if r["stage"] == "address_findings"]
+        self.assertIn("resume", addresses[1], [r["dispatch"].get("resume_fallback_reason") for r in address_runs])
+        self.assertEqual(addresses[0]["worktree_path"], addresses[1]["worktree_path"])
+        self.assertEqual(driver.final_review["worktree_path"], addresses[0]["worktree_path"])
+        self.assertEqual(self.launches["implement"], 1)
+        self.assertEqual(self.launches["reviewer-prompt.md"], 1)
+        self.assertEqual(self.launches["verify_final"], 1)

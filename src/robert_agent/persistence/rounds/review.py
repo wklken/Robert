@@ -1,6 +1,11 @@
 """Durable file handoffs for native PR review rounds (SQLite, no agent framework)."""
 
-from robert_agent.foundation.contracts.execution import ModelRunStatus
+from robert_agent.foundation.contracts.execution import BindingStatus, ModelRunStatus, RoundStatus
+from robert_agent.foundation.contracts.work import LIVE_TASK_LIFECYCLES
+from robert_agent.persistence.rounds.review_stop import decode_round_stop
+from robert_agent.persistence import execution_control
+from robert_agent.persistence.queries import tasks as task_queries
+from robert_agent.persistence.queries import attempts as attempt_queries
 from robert_agent.persistence.rounds import records as round_records
 
 from robert_agent.persistence import database as db_database
@@ -14,6 +19,11 @@ from robert_agent.persistence.stores import (
 )
 from robert_agent.persistence.stores import review_runs as db_write_review_runs
 from robert_agent.persistence.stores import review_sessions as db_write_review_sessions
+from robert_agent.persistence.queries import review_executions as execution_queries
+from robert_agent.persistence.stores import review_executions as execution_store
+from robert_agent.persistence.stores import task_events
+from robert_agent.persistence.queries import github_events
+from robert_agent.persistence import transactions
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import hashlib
@@ -44,7 +54,46 @@ def decode(row):
     for field in ("request_json", "manifest_json", "dispatch_json", "artifact_json"):
         if field in result:
             result[field[:-5]] = json.loads(result.pop(field) or "{}")
+    if result.get("status") == RoundStatus.SUPERSEDED:
+        stop = decode_round_stop(result.get("error"))
+        if stop:
+            result["stop_reason"] = stop
+            result["error"] = stop["safe_error"]
     return result
+
+
+def advanceable(conn, entry):
+    """Reuse the original owner while its existing scheduling contract can advance."""
+    if not entry or entry["status"] in {RoundStatus.CANCELED, RoundStatus.SUPERSEDED, RoundStatus.ATTENTION}:
+        return False
+    if not entry["task_id"]:
+        return entry["status"] == RoundStatus.QUEUED
+    binding = execution_control.get_binding(conn, "task", entry["task_id"])
+    if not binding or binding["binding_status"] != BindingStatus.ACTIVE:
+        return False
+    task = db_records.first(
+        task_queries.find_task_kind_and_lifecycle_and_metadata_json_by_task_id(conn, entry["task_id"])
+    )
+    if not task:
+        return False
+    metadata = json.loads(task[2] or "{}")
+    if metadata.get("execution_attention") or metadata.get("audit_retry_required"):
+        return False
+    latest = db_records.first(attempt_queries.find_for_latest_attempt_for_task(conn, entry["task_id"]))
+    if not latest or latest["status"] == "canceled":
+        return False
+    if latest["status"] == "failed":
+        failure = json.loads(latest["failure_json"] or "{}")
+        return (
+            task[1] in LIVE_TASK_LIFECYCLES | {"failed"}
+            and binding["recovery_attempts"] == 0
+            and failure.get("status")
+            in {
+                "failed_timeout",
+                "waiting_for_model_decision",
+            }
+        )
+    return task[1] in LIVE_TASK_LIFECYCLES
 
 
 def session(conn, *, round_id=None, task_id=None):
@@ -55,7 +104,7 @@ def session(conn, *, round_id=None, task_id=None):
     return decode(dict(row)) if row is not None else None
 
 
-def enqueue(conn, repo, event, route, workers, *, recovery_key=None):
+def enqueue(conn, repo, event, route, workers, *, recovery_key=None, canonical_identity=None):
     trigger = event["event_fingerprint"] + (":recovery:" + recovery_key if recovery_key else "")
     key = f"{repo['full_name']}:{event['number']}:{trigger}"
     round_id = "review-" + hashlib.sha256(key.encode()).hexdigest()[:24]
@@ -65,7 +114,40 @@ def enqueue(conn, repo, event, route, workers, *, recovery_key=None):
         "route": dict(route),
         "workers": [dict(worker) for worker in workers],
     }
+    if canonical_identity:
+        request["canonical_identity"] = canonical_identity["identity"]
     timestamp = now()
+    # A write lock is acquired before the first identity lookup, preserving
+    # scanner races and caller transaction ownership. No network runs here.
+    if not conn.in_transaction:
+        transactions.begin_immediate(conn)
+    association = execution_queries.trigger(conn, repo["full_name"], event["number"], trigger)
+    if association:
+        return session(conn, round_id=association["round_id"])
+    canonical = canonical_identity if not recovery_key else None
+    if canonical:
+        encoded_identity = json.dumps(canonical["identity"], ensure_ascii=False, sort_keys=True)
+        execution = execution_queries.by_key(conn, canonical["key"])
+        if execution:
+            if execution["identity_json"] != encoded_identity:
+                raise ValueError("canonical review identity conflict")
+            existing = session(conn, round_id=execution["round_id"])
+            published = bool(existing and existing["status"] == RoundStatus.PUBLISHED)
+            reusable = (
+                complete_triggers(conn, existing["round_id"])
+                if published and event.get("event_type") != "comment"
+                else advanceable(conn, existing)
+            )
+            if (event.get("event_type") == "comment" and published) or not reusable:
+                # A new request needs a real owner after the previous execution
+                # ended. Re-polling its fingerprint preserves the association.
+                request["canonical_identity"] = canonical["identity"]
+                canonical = None
+            else:
+                round_id = execution["round_id"]
+        else:
+            round_id = "review-" + hashlib.sha256(canonical["key"].encode()).hexdigest()[:24]
+            request["canonical_identity"] = canonical["identity"]
     db_write_review_sessions.insert_for_enqueue(
         conn,
         round_id,
@@ -77,7 +159,117 @@ def enqueue(conn, repo, event, route, workers, *, recovery_key=None):
         timestamp,
         timestamp,
     )
+    if canonical:
+        execution_store.register(conn, canonical["key"], round_id, encoded_identity, timestamp)
+    execution_store.attach(
+        conn,
+        repo=repo["full_name"],
+        number=event["number"],
+        fingerprint=trigger,
+        round_id=round_id,
+        workstream_id=event["workstream_id"],
+        request_json=json.dumps(request, ensure_ascii=False, sort_keys=True),
+        authorization_json=json.dumps(
+            {
+                key: event.get(key)
+                for key in (
+                    "authorization_status",
+                    "drives_execution",
+                    "actor_login",
+                    "requester_login",
+                    "authorization_lookup_complete",
+                    "body_authorization_complete",
+                )
+            },
+            sort_keys=True,
+        ),
+        now=timestamp,
+    )
+    bind_triggers(conn, round_id)
     return session(conn, round_id=round_id)
+
+
+def trigger_associations(conn, round_id):
+    result = []
+    for row in execution_queries.triggers(conn, round_id):
+        item = dict(row)
+        for field in ("request_json", "authorization_json", "completion_json"):
+            item[field[:-5]] = json.loads(item.pop(field) or "{}")
+        result.append(item)
+    return result
+
+
+def bind_triggers(conn, round_id):
+    entry = session(conn, round_id=round_id)
+    if not entry or not entry["task_id"]:
+        return
+    execution_store.bind(conn, round_id, entry["task_id"], now())
+    for trigger in trigger_associations(conn, round_id):
+        fingerprint = trigger["request"]["event"]["event_fingerprint"]
+        event_id = "event:" + fingerprint
+        if github_events.find_event_at_by_event_id(conn, event_id):
+            # Associations explicitly distinguish accepted/bound from completed.
+            # This relationship excludes a late equivalent trigger from pending
+            # input refresh while retaining durable source/task lineage.
+            task_events.insert_for_append_event_to_active_task(conn, entry["task_id"], event_id, "consumed", now())
+
+
+def complete_triggers(conn, round_id):
+    """Link every trigger to the original, audited publication receipt only."""
+    entry = session(conn, round_id=round_id)
+    if not entry or entry["status"] != "published" or not entry["task_id"]:
+        return False
+    manifest = entry["manifest"]
+    try:
+        if digest(entry["report_path"]) != entry["report_sha256"]:
+            return False
+    except (OSError, TypeError):
+        return False
+    for row in execution_queries.published_actions(conn, entry["task_id"]):
+        action = dict(row)
+        try:
+            metadata = json.loads(action["metadata_json"])
+            receipt = metadata["publish"]["receipt"]
+            scope = receipt["scope"]
+            result_metadata = json.loads(action["result_metadata_json"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (
+            (result_metadata.get("audit") or {}).get("status") == "accepted"
+            and receipt.get("action_id") == action["action_id"]
+            and receipt.get("result_id") == action["result_id"]
+            and receipt.get("task_id") == entry["task_id"]
+            and receipt.get("external_id")
+            and receipt.get("confirmed_at")
+            and scope.get("review_round_id") == round_id
+            and scope.get("review_head_sha") == manifest.get("head_sha")
+            and scope.get("review_base_sha") == manifest.get("base_sha")
+            and scope.get("review_base_ref") == manifest.get("base_ref")
+            and scope.get("review_report_path") == entry["report_path"]
+            and scope.get("review_report_sha256") == entry["report_sha256"]
+        ):
+            continue
+        bind_triggers(conn, round_id)
+        completion = {
+            "round_id": round_id,
+            "task_id": entry["task_id"],
+            "attempt_id": action["attempt_id"],
+            "result_id": action["result_id"],
+            "action_id": action["action_id"],
+            "report_sha256": entry["report_sha256"],
+            "receipt": receipt,
+        }
+        execution_store.complete(
+            conn,
+            round_id,
+            entry["task_id"],
+            action["result_id"],
+            action["action_id"],
+            json.dumps(completion, ensure_ascii=False, sort_keys=True),
+            now(),
+        )
+        return True
+    return False
 
 
 def update(conn, round_id, **fields):
@@ -164,7 +356,9 @@ def release_slot(conn, run_id):
 
 
 def can_abandon(run):
-    return run["status"] == ModelRunStatus.STARTING and not run["dispatch"] and bool(run.get("slot_reserved"))
+    return (
+        run["status"] == ModelRunStatus.STARTING and not run["dispatch"].get("pid") and bool(run.get("slot_reserved"))
+    )
 
 
 def task_status(conn, task_id):
@@ -192,13 +386,14 @@ def board_status_from_records(entry, model_runs, process_pool):
     from robert_agent.security.text import safe_text
 
     manifest = entry["manifest"]
+    stop = decode_round_stop(entry.get("error")) if entry["status"] == RoundStatus.SUPERSEDED else None
     return {
         "round_id": entry["round_id"],
         "status": entry["status"],
         "process_pool": process_pool,
         "head_sha": manifest.get("head_sha"),
         "base_ref": manifest.get("base_ref"),
-        "error": safe_text(entry["error"] or ""),
+        "error": safe_text(stop["safe_error"] if stop else entry["error"] or ""),
         "runs": [
             {
                 "run_id": run["run_id"],

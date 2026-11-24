@@ -249,7 +249,9 @@ class WorkerLivenessTests(RepositoryCycleFixture):
                 "SELECT usage_json FROM model_usage WHERE kind='worker' AND call_id=?", (attempt_id,)
             ).fetchone()
             self.assertIsNotNone(usage)
-            self.assertEqual(json.loads(usage[0])["usage"]["cached_input_tokens"], 6)
+            receipt = json.loads(usage[0])
+            self.assertEqual(receipt["usage"]["cache_read_input_tokens"], 6)
+            self.assertEqual(receipt["measurement_status"], "complete")
             attempt_status, failure_json = conn.execute(
                 "SELECT status, failure_json FROM attempts WHERE attempt_id = ?",
                 (attempt_id,),

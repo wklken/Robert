@@ -22,6 +22,7 @@ from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence import transactions as db_transactions
 from robert_agent.persistence.queries import scheduling
+from robert_agent.persistence.queries import review_executions
 from robert_agent.persistence.queries import task_events as db_read_task_events
 from robert_agent.persistence.queries import tasks as db_read_tasks
 from robert_agent.persistence.queries import wakeups as db_read_wakeups
@@ -674,6 +675,15 @@ def prepare_github_retrigger_tasks(
         if not related_events:
             continue
         task_event = related_events[0]
+        candidate_review = pre_pr_review.session(conn, task_id=parent_task_id)
+        candidate_context = preparation.pre_pr_retrigger_context(conn, candidate_review, related_events)
+        if candidate_context and candidate_review["request"]["repo"] == {
+            key: repo[key]
+            for key in ("full_name", "repo_root", "worktree_root", "default_base_branch", "github_account")
+        }:
+            task_event, related_events = candidate_context
+        else:
+            candidate_context = None
         route_result = workflow_routing.effective_route(
             config_result,
             repo,
@@ -697,7 +707,11 @@ def prepare_github_retrigger_tasks(
             )
         try:
             conn.commit()  # External Git I/O must not retain the SQLite writer lock.
-            worktree_result = assigned_workspace.prepare_worktree(repo, task_event, route_result, dry_run)
+            worktree_result = (
+                preparation.prepare_pre_pr_retrigger_worktree(repo, candidate_review, task_event, route_result, dry_run)
+                if candidate_context
+                else assigned_workspace.prepare_worktree(repo, task_event, route_result, dry_run)
+            )
         except ControlDeadlineExceeded:
             raise
         except (OSError, subprocess.SubprocessError) as exc:
@@ -760,6 +774,11 @@ def prepare_queued_reviews(
     config_result=None,
 ):
     kind = "vote" if round_store is vote_store else "review"
+    if round_store is review_store:
+        # Retries after a crash between publishing and completion only attach
+        # the existing receipt; they never dispatch another model or action.
+        for pending_round in review_executions.pending_trigger_rounds(conn, repo["full_name"]):
+            round_store.complete_triggers(conn, pending_round)
     for round_id in scheduling.queued_round_ids(conn, kind, repo["full_name"]):
         entry = round_store.session(conn, round_id=round_id)
         if round_store is review_store:
@@ -808,4 +827,6 @@ def prepare_queued_reviews(
             native_round_id=round_id,
         )
         if task_info:
+            if round_store is review_store:
+                round_store.bind_triggers(conn, round_id)
             dispatcher.queue_dispatch(dispatch_queue, task_info, None, dispatch_budget, repo_id=repo_id, repo=repo)

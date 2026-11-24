@@ -2,6 +2,7 @@
 
 import json
 import sys
+import subprocess
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -9,7 +10,7 @@ import yaml
 
 from robert_agent.adapters.processes import attempt as attempt_process
 from robert_agent.configuration.command import validate_config
-from robert_agent.execution.application import monitor
+from robert_agent.execution.application import evidence, monitor
 from robert_agent.foundation import values
 from robert_agent.supervision import decisions
 from robert_agent.work.application import preparation
@@ -33,10 +34,15 @@ class SupersededReviewRecoveryTests(ReviewCoordinatorFixture):
             )
         return now
 
-    def observe(self, now):
+    def observe(self, now, pr=None):
         config = validate_config(self.config_path, skip_external=True)
         with database.connect(self.db) as conn:
-            with patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}):
+            with (
+                patch.object(attempt_process, "dispatch_status", return_value={"status": "dead"}),
+                patch.object(
+                    evidence, "read_pr", side_effect=lambda repo, number: self.pr(repo, number) if pr is None else pr
+                ),
+            ):
                 monitor.supervise_running_attempts(
                     conn,
                     "repo:example/backend",
@@ -121,7 +127,7 @@ class SupersededReviewRecoveryTests(ReviewCoordinatorFixture):
         with database.connect(self.db) as conn:
             now = original.store.now()
             conn.execute("UPDATE attempts SET status='running',started_at=?,heartbeat_at=?", (now, now))
-        self.observe(now)
+        self.observe(now, original.fetch_pr(None, None))
         recovered = self.coordinator()
         recovered.fetch_pr = original.fetch_pr
         recovered.prepare()
@@ -186,3 +192,24 @@ class SupersededReviewRecoveryTests(ReviewCoordinatorFixture):
         with database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT binding_status FROM execution_subjects").fetchone()[0], "attention")
+
+    def test_unavailable_current_pr_returns_safe_evidence_without_a_recovery_grant(self):
+        self.cycle([self.event()])
+        original = self.coordinator()
+        self.supersede(original)
+        with database.connect(self.db) as conn:
+            for error in (
+                subprocess.CalledProcessError(1, ["gh", "api"], stderr="private diagnostics"),
+                OSError("private filesystem diagnostics"),
+                ValueError("private malformed response"),
+            ):
+                with self.subTest(error=type(error).__name__), patch.object(evidence, "read_pr", side_effect=error):
+                    recovery = evidence.inspect_attempt_recovery(conn, original.attempt_id, original.task_id, None)
+                    self.assertEqual(recovery["status"], "unrecoverable")
+                    self.assertEqual(recovery["reason_code"], "review_source_observation_failed")
+                    self.assertNotIn("private", json.dumps(recovery))
+                    self.assertNotIn("review_source", recovery)
+                    self.assertEqual(conn.execute("SELECT recovery_attempts FROM execution_subjects").fetchone()[0], 0)
+            with patch.object(evidence, "read_pr", side_effect=subprocess.TimeoutExpired(["gh"], 60)):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    evidence.inspect_attempt_recovery(conn, original.attempt_id, original.task_id, None)

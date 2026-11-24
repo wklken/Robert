@@ -1,9 +1,31 @@
 """Shared review/vote record access with fixed table and field contracts."""
 
+import hashlib
+import json
+
 from sqlalchemy import select, update
 
 from robert_agent.persistence import records, statements
 from robert_agent.persistence.catalog import tables
+
+
+def artifact_available(run):
+    """A validated adoption retains the original invocation failure history."""
+    if run.get("status") == "succeeded":
+        return True
+    receipt = (run.get("dispatch") or {}).get("artifact_adoption")
+    if run.get("status") not in {"failed", "interrupted"} or not isinstance(receipt, dict):
+        return False
+    artifact = run.get("artifact")
+    return bool(
+        isinstance(artifact, dict)
+        and artifact
+        and receipt.get("run_id") == run.get("run_id")
+        and receipt.get("prompt_sha256") == run.get("prompt_sha256")
+        and receipt.get("original_status") == run.get("status")
+        and receipt.get("original_error") == run.get("error")
+        and receipt.get("artifact_sha256") == hashlib.sha256(json.dumps(artifact, sort_keys=True).encode()).hexdigest()
+    )
 
 
 def round_table(name):

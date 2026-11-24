@@ -111,8 +111,11 @@ print(json.dumps({"type": "result", "usage": {"input_tokens": 4, "output_tokens"
             observed = conn.execute(
                 "SELECT usage_json FROM model_usage WHERE kind='stage' AND scope_id=?", (self.driver.task_id,)
             ).fetchall()
-            self.assertEqual(len(observed), 2)
-            self.assertTrue(all(json.loads(row[0])["total_cost_usd"] == 0.013 for row in observed))
+            receipts = [json.loads(row[0]) for row in observed]
+            voters = [r for r in receipts if any(s.get("stage") == "vote" for s in r["segments"].values())]
+            self.assertEqual(len(voters), 2)
+            self.assertTrue(all(r["total_cost_usd"] == 0.013 for r in voters))
+            self.assertEqual(len(receipts), 3)  # Preparation has its own durable call receipt.
         self.assertEqual({r["adapter"] for r in records}, {"codex", "claude"})
 
     def test_cancel_stops_both_registered_voters_and_does_not_seal_votes(self):

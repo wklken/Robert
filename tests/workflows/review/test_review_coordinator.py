@@ -298,7 +298,10 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
             self.assertEqual(recovery["reason_code"], "redaction_blocked")
         # Explicit retry after repairing the cause reuses every sealed model stage.
         counts = Counter((call[0], call[1]) for call in self.calls)
-        self.coordinator().run()
+        # A repaired renderer is a different code version. Patching a function
+        # alone does not change the real module bytes used as the version pin.
+        with patch.object(review_coordinator.report_checkpoint, "code_version", return_value="repaired-renderer-v2"):
+            self.coordinator().run()
         self.assertEqual(Counter((call[0], call[1]) for call in self.calls), counts)
 
     def test_daemon_preserves_submission_rejection_in_task_failure_and_notification(self):
@@ -738,9 +741,9 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         )
         self.assertNotEqual(rounds[0][0].manifest["head_sha"], rounds[1][0].manifest["head_sha"])
         self.assertNotEqual(rounds[0][0].manifest["worktree_path"], rounds[1][0].manifest["worktree_path"])
-        self.assertEqual(
-            Path(rounds[0][0].manifest["artifact_root"], "synthesis", "merged-review.md").read_bytes(), rounds[0][1]
-        )
+        with fixture_database.connect(self.db) as conn:
+            report = review_store.session(conn, round_id=rounds[0][0].round_id)["report_path"]
+        self.assertEqual(Path(report).read_bytes(), rounds[0][1])
 
     def test_stdout_only_and_wrong_round_never_publish(self):
         self.cycle([self.event()])
@@ -1059,7 +1062,7 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
 
         def fail_synthesis(**kwargs):
             if Path(kwargs["prompt_path"]).name.startswith("synthesis-prompt-"):
-                return {"ok": False, "safe_error": "synthesis unavailable"}
+                return {"ok": False, "status": "failed_dispatch", "safe_error": "synthesis unavailable"}
             return original(**kwargs)
 
         driver.launcher = fail_synthesis
@@ -1115,7 +1118,11 @@ save('observed.json',dict(identity,stage=stage,source=source,prompt_sha256=hashl
         driver = self.coordinator()
         driver.prepare()
         records = driver.review()
-        driver.launcher = lambda **kwargs: {"ok": False, "safe_error": "synthesis unavailable"}
+        driver.launcher = lambda **kwargs: {
+            "ok": False,
+            "status": "failed_dispatch",
+            "safe_error": "synthesis unavailable",
+        }
         with self.assertRaisesRegex(RuntimeError, "synthesis unavailable"):
             driver.synthesize(records)
         original = Path(driver.manifest["artifact_root"], "synthesis", "inputs.json").read_bytes()

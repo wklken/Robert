@@ -59,7 +59,8 @@ class OperatorViewIntegrationTests(SummaryFixture):
         self.assertEqual(metrics["published_actions"], 1)
         self.assertEqual(metrics["deduplicated_actions"], 1)
         self.assertTrue(metrics["usage_available"])
-        self.assertEqual(metrics["total_input_tokens"], 10)
+        # Claude input_tokens excludes separately reported cache reads/writes.
+        self.assertEqual(metrics["total_input_tokens"], 15)
         self.assertEqual(metrics["total_output_tokens"], 5)
         self.assertEqual(metrics["total_cache_creation_input_tokens"], 2)
         self.assertEqual(metrics["total_cache_read_input_tokens"], 3)

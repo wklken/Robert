@@ -157,7 +157,9 @@ def release_slot(conn, run_id):
 
 
 def can_abandon(run):
-    return run["status"] == ModelRunStatus.STARTING and not run["dispatch"] and bool(run.get("slot_reserved"))
+    return (
+        run["status"] == ModelRunStatus.STARTING and not run["dispatch"].get("pid") and bool(run.get("slot_reserved"))
+    )
 
 
 def task_status(conn, task_id):

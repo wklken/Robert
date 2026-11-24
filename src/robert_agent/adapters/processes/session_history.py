@@ -1,4 +1,4 @@
-"""Bounded, read-only access to local Codex histories and registered JSONL logs."""
+"""Bounded, read-only access to provider histories and registered JSONL logs."""
 
 from contextlib import contextmanager
 from datetime import timedelta
@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 import stat
 from uuid import UUID
+
+from robert_agent.worker_adapters._session import native_prompt_binding
 
 
 HEADER_BYTES = 524288
@@ -85,15 +87,24 @@ def valid_session_id(value):
         return None
 
 
-def stdout_session_id(root, path):
+def stdout_session_id(root, path, *, agent="tcodex", trusted_root_alias=True):
     if not path:
         return None
     try:
-        with open_history(root, path, trusted_root_alias=True) as fh:
-            for line in fh.read(65536).splitlines():
+        with open_history(root, path, trusted_root_alias=trusted_root_alias) as fh:
+            ids = set()
+            for line in fh.read(HEADER_BYTES).split(b"\n")[:-1]:
                 event = json_object(line)
-                if event.get("type") == "thread.started":
-                    return valid_session_id(event.get("thread_id"))
+                if agent in {"tcodex", "codex"} and event.get("type") == "thread.started":
+                    sid = valid_session_id(event.get("thread_id"))
+                elif agent in {"tclaude", "claude"} and (event.get("type"), event.get("subtype")) == ("system", "init"):
+                    sid = valid_session_id(event.get("session_id"))
+                else:
+                    continue
+                if not sid:
+                    return None
+                ids.add(sid)
+            return next(iter(ids)) if len(ids) == 1 else None
     except (OSError, ValueError):
         pass
     return None
@@ -138,20 +149,47 @@ def session_binding(fh, task_id, attempt_id, session_id, *, prompt_sha256=None):
     return False, modern
 
 
-def find_native_history(agent, started_at, task_id, attempt_id, session_id=None, *, prompt_sha256=None):
+def find_native_history(
+    agent,
+    started_at,
+    task_id,
+    attempt_id,
+    session_id=None,
+    *,
+    prompt_sha256=None,
+    cwd=None,
+    strict_root=False,
+    native_home=None,
+):
     """Search only the launch's date directories; return no unbound history."""
+    if agent in {"claude", "tclaude"}:
+        return _find_claude_history(agent, task_id, attempt_id, session_id, prompt_sha256, cwd, native_home)
+    if agent == "command" and not strict_root and native_home is None:
+        # Legacy coordinator read models have no provider stored at attempt
+        # level. This read-only lookup cannot authorize native resume.
+        for provider in ("tcodex", "codex"):
+            found = _find_native_history(provider, started_at, task_id, attempt_id, session_id, prompt_sha256, False)
+            if found:
+                return found
+        return None
+    if agent not in {"tcodex", "codex"} or started_at is None:
+        return None
+    return _find_native_history(
+        agent, started_at, task_id, attempt_id, session_id, prompt_sha256, strict_root, native_home
+    )
+
+
+def _find_native_history(
+    agent, started_at, task_id, attempt_id, session_id, prompt_sha256, strict_root, native_home=None
+):
     if started_at is None:
         return None
-    agents = [agent] if agent in {"tcodex", "codex"} else ["tcodex", "codex"]
-    for candidate_agent in agents:
-        found = _find_native_history(candidate_agent, started_at, task_id, attempt_id, session_id, prompt_sha256)
-        if found:
-            return found
-    return None
-
-
-def _find_native_history(agent, started_at, task_id, attempt_id, session_id, prompt_sha256):
-    home = Path.home().resolve() / (".tcodex" if agent == "tcodex" else ".codex")
+    home = (
+        Path(native_home)
+        if native_home is not None
+        else (Path.home().absolute() if strict_root else Path.home().resolve())
+        / (".tcodex" if agent == "tcodex" else ".codex")
+    )
     root = home / "sessions"
     for day_offset in (0, 1, -1):
         day = started_at + timedelta(days=day_offset)
@@ -159,6 +197,8 @@ def _find_native_history(agent, started_at, task_id, attempt_id, session_id, pro
         candidates = []
         try:
             # Refuse symlink directories before discovery as well as when opening.
+            if home.is_symlink():
+                raise ValueError("symlink provider root")
             current = home
             for part in ("sessions", *day.strftime("%Y/%m/%d").split("/")):
                 current = current / part
@@ -184,6 +224,28 @@ def _find_native_history(agent, started_at, task_id, attempt_id, session_id, pro
                     continue
         except (OSError, ValueError):
             continue
+    return None
+
+
+def _find_claude_history(agent, task_id, attempt_id, session_id, prompt_sha256, cwd, native_home=None):
+    # Claude histories are project-scoped. An explicit ID, cwd and prompt are
+    # required; never scan unrelated projects or another provider's storage.
+    if not valid_session_id(session_id) or not cwd or not prompt_sha256:
+        return None
+    home = (
+        Path(native_home)
+        if native_home is not None
+        else Path.home().absolute() / (".tclaude" if agent == "tclaude" else ".claude")
+    )
+    root = home / "projects"
+    project = re.sub(r"[^a-zA-Z0-9]", "-", str(cwd))
+    path = root / project / f"{session_id}.jsonl"
+    try:
+        with open_history(root, path) as fh:
+            if native_prompt_binding(fh, agent, session_id, prompt_sha256, str(cwd)):
+                return {"root": root, "path": path, "session_id": session_id, "modern": False}
+    except (OSError, ValueError):
+        pass
     return None
 
 

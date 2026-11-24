@@ -112,7 +112,9 @@ def release_observed_slots(conn, task_id, observation):
         for run in runs:
             if run["slot_reserved"] and run["run_id"] in stopped:
                 if database:
-                    record_dispatch_usage(conn, database.parent, "stage", run["run_id"], task_id, run["dispatch"])
+                    record_dispatch_usage(
+                        conn, database.parent, "stage", run["run_id"], task_id, run["dispatch"], terminal=True
+                    )
                 store.release_finished_slot(conn, run)
     return True
 

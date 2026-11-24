@@ -21,6 +21,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import threading
 import time
 from typing import Any, ContextManager, Protocol
@@ -28,11 +29,17 @@ from typing import Any, ContextManager, Protocol
 from robert_agent.adapters.processes import worker as dispatch
 from robert_agent.persistence import execution_control as execution_store
 from robert_agent.adapters.processes import environment as model_environment
+from robert_agent.adapters.processes import model_usage
 from robert_agent.execution import retry as retry_policy
 from robert_agent.adapters.processes import identity as worker_identity
 from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import progress as snapshot
-from robert_agent.execution.usage import record_dispatch_usage
+from robert_agent.execution.usage import record_dispatch_usage, start_call, record_call_event
+from robert_agent.execution import stage_evidence
+from robert_agent.persistence.rounds.records import artifact_available
+from robert_agent.adapters.processes import session_resume
+from robert_agent.worker_adapters import supports_native_resume
+from robert_agent.worker_adapters._session import native_home_from_environment
 
 
 class StageStore(Protocol):
@@ -147,15 +154,48 @@ def attempt_is_active(conn, task_id, attempt_id):
     )
 
 
+def _stopped_dispatch(run, *, observe_source):
+    """Record proven group exit without replacing original launch/source pins."""
+    recorded = dict(run["dispatch"])
+    recorded.update(process_exited=True, group_exit_confirmed=True)
+    if run["status"] in {ModelRunStatus.STARTING, ModelRunStatus.RUNNING}:
+        recorded["interrupted"] = True
+        recorded.setdefault("failure_kind", "interrupted")
+    launch = recorded.get("launch_checkpoint")
+    if observe_source and launch:
+        try:
+            path = launch["worktree_path"]
+            if recorded.get("worktree_path", path) != path:
+                raise ValueError("stopped source worktree changed")
+            manifest = {key: launch.get(key) for key in ("snapshot_id", "head_sha", "base_sha")}
+            manifest["implementing"] = run["stage"] == "implement"
+            manifest["files"] = launch.get("context_files", {})
+            checkpoint = stage_evidence.observe_source(run, manifest, path)
+            saved = recorded.get("result_checkpoint")
+            if saved and saved != checkpoint:
+                raise ValueError("stopped source checkpoint changed")
+            recorded["result_checkpoint"] = checkpoint
+        except (OSError, ValueError, subprocess.SubprocessError):
+            recorded["resume_fallback_reason"] = "stopped_source_unavailable"
+    return recorded
+
+
+def _stop_snapshot(record):
+    """Ignore heartbeat timestamps, preserving every ownership and result fact."""
+    return {key: value for key, value in record.items() if key != "updated_at"} if record is not None else None
+
+
 def terminate_children(conn, task_id, *, store: StageStore):
     """Cancel all model process groups before allowing another attempt to start."""
     review = store.session(conn, task_id=task_id)
     if not review:
         return "already_dead"
+    binding = execution_store.get_binding(conn, "task", task_id)
     outcomes = []
     updates: list[tuple[str, dict[str, Any]]] = []
     finished = {}
-    for run in store.runs(conn, review["round_id"]):
+    runs = store.runs(conn, review["round_id"])
+    for run in runs:
         if run["status"] in {ModelRunStatus.PREPARED, ModelRunStatus.WAITING} and not run["slot_reserved"]:
             updates.append(
                 (
@@ -168,7 +208,12 @@ def terminate_children(conn, task_id, *, store: StageStore):
             continue
         recorded = run["dispatch"]
         if _launch_failed_without_process(recorded):
-            updates.append((run["run_id"], {"slot_reserved": 0}))
+            fields: dict[str, Any] = {"slot_reserved": 0}
+            if run["status"] in {ModelRunStatus.STARTING, ModelRunStatus.RUNNING}:
+                fields.update(
+                    status=ModelRunStatus.FAILED.value, error=recorded.get("safe_error", "review launch failed")
+                )
+            updates.append((run["run_id"], fields))
             outcomes.append("already_dead")
             continue
         if run["status"] == ModelRunStatus.FAILED and not recorded.get("pid"):
@@ -177,7 +222,6 @@ def terminate_children(conn, task_id, *, store: StageStore):
             continue
         if _group_finished(recorded):
             finished[run["run_id"]] = recorded
-            updates.append((run["run_id"], {"slot_reserved": 0}))
             outcomes.append("already_dead")
             continue
         if recorded.get("process_exited") or (
@@ -186,7 +230,6 @@ def terminate_children(conn, task_id, *, store: StageStore):
             exited = _wait_for_group_exit(recorded)
             if exited:
                 finished[run["run_id"]] = recorded
-                updates.append((run["run_id"], {"slot_reserved": 0}))
             outcomes.append("already_dead" if exited else "attention")
             continue
         if not recorded:
@@ -198,17 +241,32 @@ def terminate_children(conn, task_id, *, store: StageStore):
         outcomes.append(result["status"])
         if result["status"] != "attention":
             finished[run["run_id"]] = recorded
-            updates.append(
-                (
-                    run["run_id"],
-                    {"status": ModelRunStatus.INTERRUPTED.value, "slot_reserved": 0, "error": "coordinator stopped"},
-                )
-            )
     # Observe/stop every child before opening our write transaction. In
     # particular, stopping the second child must not hold the first's update.
+    # A canceled command already holds its writer and is terminal. Recovery
+    # callers observe stopped writer progress before beginning any writes.
+    for run in runs:
+        if run["run_id"] not in finished:
+            continue
+        recorded = _stopped_dispatch(run, observe_source=not conn.in_transaction)
+        finished[run["run_id"]] = recorded
+        fields = {"dispatch_json": json.dumps(recorded), "slot_reserved": 0}
+        if run["status"] in {ModelRunStatus.STARTING, ModelRunStatus.RUNNING}:
+            fields.update(status=ModelRunStatus.INTERRUPTED.value, error="coordinator stopped")
+        updates.append((run["run_id"], fields))
+    if updates:
+        if not conn.in_transaction:
+            db_transactions.begin(conn, immediate=True)
+        if (
+            _stop_snapshot(store.session(conn, task_id=task_id)) != _stop_snapshot(review)
+            or [_stop_snapshot(run) for run in store.runs(conn, review["round_id"])]
+            != [_stop_snapshot(run) for run in runs]
+            or _stop_snapshot(execution_store.get_binding(conn, "task", task_id)) != _stop_snapshot(binding)
+        ):
+            return "attention"
     if finished and (database := db_sqlite.main_database_path(conn)):
         for run_id, recorded in finished.items():
-            record_dispatch_usage(conn, database.parent, "stage", run_id, task_id, recorded)
+            record_dispatch_usage(conn, database.parent, "stage", run_id, task_id, recorded, terminal=True)
     for run_id, fields in updates:
         store.update_run(conn, run_id, **fields)
     return "attention" if "attention" in outcomes else "terminated"
@@ -310,7 +368,7 @@ class StageCoordinator:
         workers = self.recovery_workers()
         pending = []
         for run in previous:
-            if run["status"] == ModelRunStatus.STARTING and not run["dispatch"]:
+            if run["status"] == ModelRunStatus.STARTING and not run["dispatch"].get("pid"):
                 raise StageStopped("model launch outcome unknown; inspect before retry")
             if run["status"] == ModelRunStatus.RUNNING:
                 pending.append(run)
@@ -318,7 +376,8 @@ class StageCoordinator:
         def reconcile(run):
             try:
                 self._wait(run, run["dispatch"], workers[run["worker_id"]]["timeout_seconds"])
-            except StageStopped:
+            except StageStopped as exc:
+                self.checkpoint_stopped_run(run, exc)
                 raise
             except RuntimeError as exc:
                 with store.connect(self.db_path) as conn:
@@ -348,7 +407,7 @@ class StageCoordinator:
     def release_slot(self, run, launched):
         store = self.store
         with store.connect(self.db_path) as conn:
-            record_dispatch_usage(conn, self.data_dir, "stage", run["run_id"], self.task_id, launched)
+            record_dispatch_usage(conn, self.data_dir, "stage", run["run_id"], self.task_id, launched, terminal=True)
             store.release_slot(conn, run["run_id"])
 
     def reclaim_finished_slots(self):
@@ -367,6 +426,8 @@ class StageCoordinator:
                     run_store.release_finished_slot(conn, run)
 
     def stage_worktree(self, run):
+        if resume := (run.get("dispatch") or {}).get("native_resume"):
+            return resume["cwd"]
         return self.manifest["worktree_path"]
 
     def stage_environment(self, run):
@@ -386,12 +447,49 @@ class StageCoordinator:
                 if locked:
                     self.check_active()
                     worktree = self.stage_worktree(run)
+                    if parent_id := (run.get("dispatch") or {}).get("parent_run_id"):
+                        with store.connect(self.db_path) as conn:
+                            parent = next(
+                                (r for r in store.runs(conn, self.round_id) if r["run_id"] == parent_id), None
+                            )
+                        if not parent or not _group_finished(parent["dispatch"]):
+                            raise StageStopped("native resume source process changed before launch")
+                        pinned = parent["dispatch"].get("result_checkpoint") or parent["dispatch"].get(
+                            "launch_checkpoint"
+                        )
+                        if not pinned or pinned.get("source_pin_error"):
+                            raise StageStopped("native resume source checkpoint incomplete before launch")
+                        if pinned != self.source_checkpoint(parent):
+                            raise StageStopped("native resume source changed before launch")
+                    checkpoint = self.source_checkpoint(run)
+                    resume = (run.get("dispatch") or {}).get("native_resume")
+                    if resume and checkpoint.get("source_pin_error"):
+                        raise StageStopped("native resume launch source checkpoint incomplete")
+                    native_home = resume["native_home"] if resume else None
+                    if not resume and supports_native_resume(worker["agent"]):
+                        try:
+                            native_home = native_home_from_environment(worker["agent"], environment)
+                        except (OSError, ValueError):
+                            pass  # A missing home does not prevent a fresh CLI from initializing it.
                     with store.connect(self.db_path) as conn:
                         db_transactions.begin(conn, immediate=True)
                         if not attempt_is_active(conn, self.task_id, self.attempt_id):
                             raise StageStopped("review attempt is no longer current")
                         acquired = store.reserve_slot(conn, run["run_id"])
+                        if acquired:
+                            recorded = dict(run["dispatch"] or {})
+                            recorded["launch_checkpoint"] = checkpoint
+                            recorded.update(
+                                worker_agent=worker["agent"], worker_name=worker["name"], model=run["model"]
+                            )
+                            if native_home:
+                                recorded["native_home"] = native_home
+                            store.update_run(conn, run["run_id"], dispatch_json=json.dumps(recorded))
+                            start_call(
+                                conn, self.data_dir, "stage", run["run_id"], self.task_id, recorded, stage=run["stage"]
+                            )
                     if acquired:
+                        resume = recorded.get("native_resume")
                         launched = self.launcher(
                             task_id=self.task_id,
                             attempt_id=run["run_id"],
@@ -403,7 +501,15 @@ class StageCoordinator:
                             trusted_environment=environment,
                             log_dir=run["output_dir"],
                             dry_run=False,
+                            **({"resume": resume} if resume else {}),
                         )
+                        launched = {
+                            **recorded,
+                            **launched,
+                            "prompt_path": str(prompt_path),
+                            "worktree_path": str(worktree),
+                        }
+                        self.bind_native_session(run, launched, worker, prompt_path)
                         # Retain our Popen even when another thread's dispatch
                         # reaps the shared registry before this waiter polls it.
                         process = dispatch.tracked_process(launched.get("pid"))
@@ -430,12 +536,30 @@ class StageCoordinator:
             db_transactions.begin(conn, immediate=True)
             if not attempt_is_active(conn, self.task_id, self.attempt_id):
                 raise StageStopped("review attempt is no longer current")
-            store.update_run(
+            fields = {"artifact_json": json.dumps(artifact)}
+            if run["status"] in {ModelRunStatus.FAILED, ModelRunStatus.INTERRUPTED}:
+                recorded = dict(run["dispatch"])
+                receipt = recorded.get("artifact_adoption") or {
+                    "run_id": run["run_id"],
+                    "prompt_sha256": run["prompt_sha256"],
+                    "original_status": run["status"],
+                    "original_error": run["error"],
+                    "artifact_sha256": hashlib.sha256(json.dumps(artifact, sort_keys=True).encode()).hexdigest(),
+                    "registered_at": store.now(),
+                    "result_checkpoint": recorded.get("result_checkpoint"),
+                }
+                recorded["artifact_adoption"] = receipt
+                fields["dispatch_json"] = json.dumps(recorded)
+            else:
+                fields.update(status=ModelRunStatus.SUCCEEDED.value, error=None)
+            store.update_run(conn, run["run_id"], **fields)
+            record_call_event(
                 conn,
+                "stage",
                 run["run_id"],
-                status=ModelRunStatus.SUCCEEDED.value,
-                artifact_json=json.dumps(artifact),
-                error=None,
+                self.task_id,
+                "artifact_adopted" if "dispatch_json" in fields else "registered",
+                stage=run["stage"],
             )
             for kind in self.artifact_kinds:
                 path = artifact.get(kind + "_path")
@@ -453,6 +577,176 @@ class StageCoordinator:
                     store.now(),
                 )
         return {**artifact, "run_id": run["run_id"], "worker_id": run["worker_id"]}
+
+    def source_checkpoint(self, run):
+        """Observe the immutable stage inputs and the writer's resulting source."""
+        recorded = run.get("dispatch") or {}
+        saved = recorded.get("result_checkpoint") or recorded.get("launch_checkpoint") or {}
+        path = recorded.get("worktree_path") or saved.get("worktree_path") or self.stage_worktree(run)
+        if saved.get("worktree_path") and str(path) != saved["worktree_path"]:
+            raise StageStopped("registered stage source worktree changed")
+        try:
+            return stage_evidence.observe_source(run, self.manifest, path)
+        except stage_evidence.SourcePinUnavailable as exc:
+            # Ordinary execution still validates the frozen snapshot and output.
+            # This provenance cannot prove source compatibility for recovery.
+            return exc.checkpoint
+        except ValueError as exc:
+            raise StageStopped(str(exc)) from exc
+
+    def checkpoint_result(self, run, *, failure_kind=None):
+        """Persist completed source evidence before validating or registering files."""
+        checkpoint = self.source_checkpoint(run)
+        self.workspace.verify_snapshot(self.manifest)
+        with self.store.connect(self.db_path) as conn:
+            current = next(r for r in self.store.runs(conn, self.round_id) if r["run_id"] == run["run_id"])
+            recorded = dict(current["dispatch"])
+            saved = recorded.get("result_checkpoint")
+            if saved and saved.get("source_pin_error"):
+                # A later complete observation cannot retrospectively prove
+                # the inputs of the execution whose first result pin failed.
+                identity = {key: value for key, value in saved.items() if key != "source_pin_error"}
+                if any(checkpoint.get(key) != value for key, value in identity.items()):
+                    raise StageStopped("completed model source checkpoint changed")
+                checkpoint = saved
+            if saved and saved != checkpoint:
+                raise StageStopped("completed model source checkpoint changed")
+            recorded["result_checkpoint"] = checkpoint
+            if failure_kind:
+                recorded["failure_kind"] = failure_kind
+            self.store.update_run(conn, run["run_id"], dispatch_json=json.dumps(recorded))
+            record_call_event(conn, "stage", run["run_id"], self.task_id, "result_saved", stage=run["stage"])
+        run["dispatch"] = recorded
+
+    def checkpoint_stopped_run(self, run, error):
+        """Account for a stopped stage only after exit and unchanged ownership."""
+        with self.store.connect(self.db_path) as conn:
+            session = self.store.session(conn, task_id=self.task_id)
+            original = next((r for r in self.store.runs(conn, self.round_id) if r["run_id"] == run["run_id"]), None)
+            binding = execution_store.get_binding(conn, "task", self.task_id)
+            active = attempt_is_active(conn, self.task_id, self.attempt_id)
+        if not active or not original or original["status"] not in {ModelRunStatus.STARTING, ModelRunStatus.RUNNING}:
+            return
+        if not _group_finished(original["dispatch"]):
+            return
+        recorded = _stopped_dispatch(original, observe_source=True)
+        with self.store.connect(self.db_path) as conn:
+            db_transactions.begin(conn, immediate=True)
+            current = next((r for r in self.store.runs(conn, self.round_id) if r["run_id"] == run["run_id"]), None)
+            if (
+                _stop_snapshot(current) != _stop_snapshot(original)
+                or _stop_snapshot(self.store.session(conn, task_id=self.task_id)) != _stop_snapshot(session)
+                or _stop_snapshot(execution_store.get_binding(conn, "task", self.task_id)) != _stop_snapshot(binding)
+                or not attempt_is_active(conn, self.task_id, self.attempt_id)
+            ):
+                return
+            self.store.update_run(
+                conn,
+                run["run_id"],
+                status=ModelRunStatus.INTERRUPTED.value,
+                error=str(error),
+                dispatch_json=json.dumps(recorded),
+                slot_reserved=0,
+            )
+            record_dispatch_usage(conn, self.data_dir, "stage", run["run_id"], self.task_id, recorded, terminal=True)
+            if recorded.get("result_checkpoint"):
+                record_call_event(conn, "stage", run["run_id"], self.task_id, "result_saved", stage=run["stage"])
+        run.update(status=ModelRunStatus.INTERRUPTED.value, error=str(error), dispatch=recorded, slot_reserved=0)
+
+    def bind_native_session(self, run, recorded, worker, prompt_path):
+        """Bind native provider history to the registered frozen launch."""
+        saved = recorded.get("native_session")
+        if saved and saved.get("history_path") or not supports_native_resume(worker["agent"]):
+            return
+        binding = session_resume.resolve_native_session(
+            data_root=self.data_dir,
+            agent=worker["agent"],
+            task_id=self.task_id,
+            run_id=run["run_id"],
+            prompt_path=prompt_path,
+            prompt_sha256=run["prompt_sha256"],
+            cwd=recorded.get("worktree_path") or recorded.get("launch_checkpoint", {}).get("worktree_path"),
+            stdout_path=recorded.get("stdout_path"),
+            started_at=run.get("started_at") or run["created_at"],
+            native_home=recorded.get("native_home"),
+        )
+        if binding:
+            if saved and saved["session_id"] != binding["session_id"]:
+                raise StageStopped("native session identity changed")
+            recorded["native_session"] = binding
+            recorded["native_session_id"] = binding["session_id"]
+
+    def missing_output(self, run):
+        parent = "runs" if run["stage"] == self.voter_stage else run["stage"]
+        marker = Path(self.manifest["artifact_root"]) / parent / "sealed" / run["run_id"] / "seal.json"
+        if marker.exists():
+            return False
+        output = self.artifact_files.safe_path(run["output_dir"], self.manifest["artifact_root"])
+        return any(not (output / name).is_file() for name in self.handoff_files[run["stage"]])
+
+    def native_resume_source(self, stage, worker, prompt_path, prompt_hash, previous):
+        """Choose only a stopped, unchanged, incomplete invocation for resume."""
+        if not supports_native_resume(worker["agent"]):
+            return None, "adapter_unsupported"
+        matching = [r for r in previous if r["prompt_sha256"] == prompt_hash]
+        if not matching:
+            return None, None
+        run = matching[-1]
+        recorded = run["dispatch"]
+        if run["status"] not in {ModelRunStatus.FAILED, ModelRunStatus.INTERRUPTED} or not self.missing_output(run):
+            return None, None
+        if (run.get("error") or "").startswith("rate_limited: "):
+            return None, "rate_limited_session"
+        if not recorded.get("pid"):
+            if (
+                run.get("slot_reserved")
+                or recorded.get("launch_checkpoint")
+                and recorded.get("status") != "failed_dispatch"
+            ):
+                raise StageStopped("native resume launch outcome unknown")
+            return None, "no_native_launch"
+        if recorded.get("cleanup_pending") or not _group_finished(recorded):
+            raise StageStopped("native resume requires the original process group to exit")
+        checkpoint = recorded.get("result_checkpoint") or recorded.get("launch_checkpoint")
+        if not checkpoint:
+            return None, "source_checkpoint_unavailable"
+        current = self.source_checkpoint(run)
+        if checkpoint.get("source_pin_error"):
+            identity = {key: value for key, value in checkpoint.items() if key != "source_pin_error"}
+            if any(current.get(key) != value for key, value in identity.items()):
+                raise StageStopped("native resume source checkpoint changed")
+            return None, "source_checkpoint_incomplete"
+        if checkpoint != current:
+            raise StageStopped("native resume source checkpoint changed")
+        self.workspace.verify_snapshot(self.manifest)
+        self.bind_native_session(run, recorded, worker, prompt_path)
+        binding = recorded.get("native_session")
+        if not binding or not binding.get("history_path"):
+            return None, "native_history_unavailable"
+        if sum(bool(r["dispatch"].get("native_resume")) for r in matching) >= 3:
+            raise StageStopped("native session resume budget exhausted")
+        return (run, binding), None
+
+    def adoptable_result(self, run):
+        recorded = run["dispatch"]
+        if not recorded or not _group_finished(recorded):
+            if recorded and (recorded.get("pid") or run.get("slot_reserved")):
+                raise StageStopped("completed artifact process identity requires attention")
+            return False
+        checkpoint = recorded.get("result_checkpoint")
+        classification = recorded.get("failure_kind")
+        accepted = artifact_available(run) or classification in {"registration", "execution_complete"}
+        accepted |= classification == "interrupted" or run["status"] == ModelRunStatus.INTERRUPTED
+        if not checkpoint or not accepted:
+            return False
+        if self.missing_output(run):
+            return False
+        if checkpoint.get("source_pin_error"):
+            raise StageStopped("completed artifact source checkpoint incomplete; adoption requires exact evidence")
+        if checkpoint != self.source_checkpoint(run):
+            raise StageStopped("completed artifact source checkpoint changed")
+        self.workspace.verify_snapshot(self.manifest)
+        return True
 
     def sealed_output(self, run):
         """Copy handoff files to a separate registration directory and hash them.
@@ -502,9 +796,21 @@ class StageCoordinator:
 
     def _wait(self, run, launched, timeout):
         store = self.store
-        started = datetime.fromisoformat(run.get("started_at") or run["created_at"])
+        with store.connect(self.db_path) as conn:
+            current = next(item for item in store.runs(conn, self.round_id) if item["run_id"] == run["run_id"])
+        started = datetime.fromisoformat(current.get("started_at") or current["created_at"])
+        workers = self.recovery_workers()
+        worker = workers[run["worker_id"]]
+        if launched.get("prompt_path"):
+            self.bind_native_session(run, launched, worker, Path(launched["prompt_path"]))
+        next_binding_at = 0.0
         while not launched.get("process_exited"):
             self.check_active()
+            if launched.get("prompt_path") and time.monotonic() >= next_binding_at:
+                self.bind_native_session(run, launched, worker, Path(launched["prompt_path"]))
+                with store.connect(self.db_path) as conn:
+                    store.update_run(conn, run["run_id"], dispatch_json=json.dumps(launched))
+                next_binding_at = time.monotonic() + 1
             proc = self.processes.get(launched.get("pid")) or dispatch.tracked_process(launched.get("pid"))
             if proc is not None:
                 code = proc.poll()
@@ -528,9 +834,16 @@ class StageCoordinator:
                     raise StageStopped("review worker timeout termination requires attention")
                 if not _wait_for_group_exit(launched):
                     raise StageStopped("review worker timeout left a process group; inspect remaining processes")
+                launched = {**launched, "process_exited": True, "interrupted": True}
+                with store.connect(self.db_path) as conn:
+                    store.update_run(conn, run["run_id"], dispatch_json=json.dumps(launched))
+                run["dispatch"] = launched
+                self.checkpoint_result(run, failure_kind="interrupted")
                 self.release_slot(run, launched)
                 raise RuntimeError("review worker timed out")
             time.sleep(self.poll_seconds)
+        if launched.get("prompt_path"):
+            self.bind_native_session(run, launched, worker, Path(launched["prompt_path"]))
         with store.connect(self.db_path) as conn:
             store.update_run(conn, run["run_id"], dispatch_json=json.dumps(launched))
         if not _wait_for_group_exit(launched):
@@ -538,6 +851,12 @@ class StageCoordinator:
                 "review leader exited but process group remains; inspect and stop remaining processes before retry"
             )
         self.release_slot(run, launched)
+        run["dispatch"] = launched
+        # Final verification inputs are reconstructed after reconcile_running.
+        # A modern launch pins its cwd before spawn; historical runs wait until
+        # the owning phase reconstructs those inputs before recording evidence.
+        if run["stage"] != "verify_final" or launched.get("launch_checkpoint"):
+            self.checkpoint_result(run, failure_kind="execution_complete")
         _raise_rate_limit(launched)
         if launched.get("returncode", 0) != 0:
             raise RuntimeError(f"review worker exited with code {launched['returncode']}")
@@ -545,8 +864,15 @@ class StageCoordinator:
     def phase_input_changed(self, stage):
         return stage == "synthesis" or (stage == "prepare" and not self.manifest.get("frozen"))
 
+    def preserve_phase_artifact(self, run):
+        """Workflow hook for immutable successes referenced by later stage evidence."""
+        return False
+
     def check_launch_budget(self, stage, prompt_hash, previous):
         """Workflow hook for a durable limit on stage launches."""
+
+    def validate_output(self, run, validate, model):
+        return validate(self.sealed_output(run), model)
 
     def run_phase(self, stage, worker, prompt_path, validate, *, input_hash=None):
         """Adopt a complete unregistered file, or run only this failed stage."""
@@ -568,7 +894,10 @@ class StageCoordinator:
                 continue
             if run["prompt_sha256"] != prompt_hash:
                 if self.phase_input_changed(stage):
-                    if run["status"] in {ModelRunStatus.RUNNING, ModelRunStatus.SUCCEEDED}:
+                    if run["status"] in {
+                        ModelRunStatus.RUNNING,
+                        ModelRunStatus.SUCCEEDED,
+                    } and not self.preserve_phase_artifact(run):
                         with store.connect(self.db_path) as conn:
                             store.update_run(
                                 conn,
@@ -578,29 +907,44 @@ class StageCoordinator:
                             )
                     continue
                 raise ValueError("same-round prompt changed")
-            if run["status"] == ModelRunStatus.STARTING and not run["dispatch"]:
+            if run["status"] == ModelRunStatus.STARTING and not run["dispatch"].get("pid"):
                 raise StageStopped("model launch outcome unknown; cancel and inspect this round")
-            if run["status"] not in {ModelRunStatus.SUCCEEDED, ModelRunStatus.RUNNING}:
+            adopting = run["status"] in {ModelRunStatus.FAILED, ModelRunStatus.INTERRUPTED}
+            if adopting and not self.adoptable_result(run):
+                continue
+            if not adopting and run["status"] not in {ModelRunStatus.SUCCEEDED, ModelRunStatus.RUNNING}:
                 continue
             try:
                 if run["status"] == ModelRunStatus.RUNNING:
                     self._wait(run, run["dispatch"], worker["timeout_seconds"])
+                if self.store.digest(prompt_path) != prompt_hash:
+                    raise StageStopped("registered phase prompt changed")
+                if run["status"] == ModelRunStatus.RUNNING:
+                    self.checkpoint_result(run)
                 model = run["model"] or worker["default_model"]
-                artifact = validate(self.sealed_output(run), model)
+                artifact = self.validate_output(run, validate, model)
                 artifact["model"] = model
                 if input_hash:
                     artifact["input_sha256"] = input_hash
-                if run["status"] == ModelRunStatus.SUCCEEDED and artifact != run["artifact"]:
+                if artifact_available(run) and artifact != run["artifact"]:
                     raise ValueError("registered review artifact changed")
                 self.workspace.verify_snapshot(self.manifest)
                 return self.register(run, artifact)
-            except StageStopped:
+            except StageStopped as exc:
+                self.checkpoint_stopped_run(run, exc)
                 raise
             except (ValueError, OSError, RuntimeError) as exc:
+                if adopting:
+                    raise StageStopped("completed artifact failed independent validation: " + str(exc)) from exc
                 with store.connect(self.db_path) as conn:
                     store.update_run(conn, run["run_id"], status=ModelRunStatus.FAILED.value, error=str(exc))
                 break
         self.check_active()
+        with store.connect(self.db_path) as conn:
+            prior_runs = [
+                r for r in store.runs(conn, self.round_id) if r["stage"] == stage and r["worker_id"] == worker["name"]
+            ]
+        resume_source, fallback_reason = self.native_resume_source(stage, worker, prompt_path, prompt_hash, prior_runs)
         with store.connect(self.db_path) as conn:
             previous = [
                 r for r in store.runs(conn, self.round_id) if r["stage"] == stage and r["worker_id"] == worker["name"]
@@ -639,32 +983,96 @@ class StageCoordinator:
                 model=model,
             )
             store.update_run(conn, run["run_id"], status=ModelRunStatus.WAITING.value)
+            record_call_event(conn, "stage", run["run_id"], self.task_id, "queued", stage=stage)
+        recorded = {}
+        if resume_source:
+            source_run, binding = resume_source
+            segment = 1 + sum(
+                bool(r["dispatch"].get("native_resume")) for r in previous if r["prompt_sha256"] == prompt_hash
+            )
+            try:
+                descriptor = session_resume.resume_descriptor(
+                    binding,
+                    task_id=binding["task_id"],
+                    run_id=run["run_id"],
+                    prompt_path=prompt_path,
+                    prompt_sha256=prompt_hash,
+                    cwd=binding["cwd"],
+                    segment=segment,
+                    native_home=source_run["dispatch"].get("native_home"),
+                )
+                recorded = {
+                    "native_resume": descriptor,
+                    "native_session": binding,
+                    "native_session_id": binding["session_id"],
+                    "parent_run_id": source_run["run_id"],
+                    "usage_segment_id": run["run_id"],
+                    "native_home": descriptor["native_home"],
+                }
+                raw_dispatch = {key: value for key, value in source_run["dispatch"].items() if key != "usage_baseline"}
+                original_usage = model_usage.read_dispatch(self.data_dir, raw_dispatch)
+                if (
+                    original_usage.get("counter_scope") == "session"
+                    and original_usage.get("counter_mode") == "cumulative"
+                ):
+                    recorded["usage_baseline"] = {
+                        key: value
+                        for key, value in original_usage.items()
+                        if key in {"usage", "provider_usage", "provider_raw_usage", "total_cost_usd"}
+                    }
+            except (OSError, ValueError):
+                fallback_reason = "native_history_invalid"
+        if fallback_reason and not recorded:
+            recorded = {"resume_fallback_reason": fallback_reason}
+        if recorded:
+            with store.connect(self.db_path) as conn:
+                db_transactions.begin(conn, immediate=True)
+                if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                    raise StageStopped("review owner changed while preparing native resume")
+                store.update_run(conn, run["run_id"], dispatch_json=json.dumps(recorded))
+            run["dispatch"] = recorded
+        failure_kind = "execution"
         try:
             environment = self.stage_environment(run)
             launched = self.launch_with_slot(run, worker, prompt_path, environment)
             if not launched.get("ok"):
                 if launched.get("pid") and not _wait_for_group_exit(launched):
                     raise StageStopped("failed model launch left a process group; inspect remaining processes")
+                if launched.get("pid") and launched.get("process_exited"):
+                    self.checkpoint_result(run, failure_kind="execution_complete")
                 self.release_slot(run, launched)
                 _raise_rate_limit(launched)
                 raise RuntimeError(launched.get("safe_error", "review launch failed"))
             self._wait(run, launched, worker["timeout_seconds"])
+            failure_kind = "output_validation"
             if store.digest(prompt_path) != prompt_hash:
                 raise ValueError("model changed prompt file")
             self.workspace.verify_snapshot(self.manifest)
-            artifact = validate(self.sealed_output(run), model)
+            self.checkpoint_result(run)
+            artifact = self.validate_output(run, validate, model)
             artifact["model"] = model
             if input_hash:
                 artifact["input_sha256"] = input_hash
+            failure_kind = "registration"
             return self.register(run, artifact)
-        except StageStopped:
+        except StageStopped as exc:
+            self.checkpoint_stopped_run(run, exc)
             raise
         except Exception as exc:
             with store.connect(self.db_path) as conn:
                 current = next(r for r in store.runs(conn, self.round_id) if r["run_id"] == run["run_id"])
-                if current["status"] == ModelRunStatus.STARTING.value and not current["dispatch"]:
+                if current["status"] == ModelRunStatus.STARTING.value and not current["dispatch"].get("pid"):
                     raise StageStopped("model launch outcome unknown; inspect before retry") from exc
-                store.update_run(conn, run["run_id"], status=ModelRunStatus.FAILED.value, error=str(exc))
+                recorded = dict(current["dispatch"])
+                if failure_kind != "execution" or recorded.get("failure_kind") != "execution_complete":
+                    recorded["failure_kind"] = failure_kind
+                store.update_run(
+                    conn,
+                    run["run_id"],
+                    status=ModelRunStatus.FAILED.value,
+                    error=str(exc),
+                    dispatch_json=json.dumps(recorded),
+                )
             if isinstance(exc, ModelRateLimited) and worker.get("fallback_model") and model != worker["fallback_model"]:
                 return self.run_phase(stage, worker, prompt_path, validate, input_hash=input_hash)
             raise

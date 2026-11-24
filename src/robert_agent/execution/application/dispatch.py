@@ -1,6 +1,7 @@
 """Queue prepared attempts and claim launches under the task fence."""
 
-from robert_agent.execution.usage import record_dispatch_usage
+from robert_agent.execution.usage import record_dispatch_usage, start_call
+from robert_agent.execution.budgets import pipeline_timeout
 from robert_agent.foundation.contracts.execution import AttemptStatus, RoundStatus
 
 from robert_agent.persistence.queries import attempts as db_read_attempts
@@ -635,7 +636,7 @@ def dispatch_queued_locked(
                         "--attempt-id",
                         task_info["attempt_id"],
                     ],
-                    "timeout_seconds": plan["timeout_seconds"],
+                    "timeout_seconds": pipeline_timeout(plan),
                     "environment_allowlist": sorted(
                         {"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}
                         | {name for profile in profiles for name in profile["environment_allowlist"]}
@@ -700,6 +701,20 @@ def dispatch_queued_locked(
                     metadata["dispatch_inflight"] = task_info["attempt_id"]
                     db_write_execution_subjects.update_for_dispatch_queued_locked(
                         conn, json.dumps(metadata), subject_type, subject_id
+                    )
+                if not (worktree_result and not worktree_result.get("ok", True)):
+                    start_call(
+                        conn,
+                        Path(db_path).parent,
+                        "worker",
+                        task_info["attempt_id"],
+                        task_info["task_id"],
+                        {
+                            "worker_agent": selected_worker["agent"],
+                            "worker_name": selected_worker["name"],
+                            "model": model,
+                            "model_coordinator": bool(native_review or candidate_review),
+                        },
                     )
         with dispatch.defer_termination():
             try:

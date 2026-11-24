@@ -113,7 +113,7 @@ class ReviewCoordinatorFixture(unittest.TestCase):
         self.calls.append((stage, worker, prompt.read_bytes(), kwargs["worktree_path"], str(output), kwargs["model"]))
         manifest = json.loads((prompt.parent / "context" / "manifest.json").read_text())
         if worker == self.fail_worker and stage == "review":
-            return {"ok": False, "safe_error": "test model unavailable"}
+            return {"ok": False, "status": "failed_dispatch", "safe_error": "test model unavailable"}
         if stage == "prepare":
             (output / "context-summary.md").write_text(
                 "Read source.py; integer assignment change. Test entrypoints inspected."

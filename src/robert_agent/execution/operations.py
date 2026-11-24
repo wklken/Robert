@@ -24,6 +24,7 @@ from robert_agent.persistence.stores import execution_subjects as db_write_execu
 from robert_agent.persistence.stores import notifications as db_write_notifications
 
 import json
+import hashlib
 from contextlib import closing
 from datetime import datetime, timezone
 from robert_agent.adapters.processes import identity as worker_identity
@@ -388,6 +389,19 @@ def classify_recovery(conn, subject_type, subject_id, attempt_id, evidence, *, n
     if updated != 1:
         _mark_recovery_attention(conn, binding, now)
         return "attention"
+    if evidence.get("reason_code") == "review_revision_changed" and isinstance(evidence.get("review_source"), dict):
+        metadata = _json_object(binding.get("metadata_json"))
+        metadata["review_revision_recovery"] = {
+            "round_id": evidence.get("round_id"),
+            "task_id": evidence["task_id"],
+            "attempt_id": attempt_id,
+            "review_source_sha256": hashlib.sha256(
+                json.dumps(evidence["review_source"], sort_keys=True).encode()
+            ).hexdigest(),
+        }
+        db_write_execution_subjects.update_for_dispatch_queued_locked(
+            conn, json.dumps(metadata, sort_keys=True), subject_type, subject_id
+        )
     return "recover_once"
 
 

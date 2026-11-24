@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime, timezone
 
 from robert_agent.foundation.commands import emit
+from robert_agent.execution.budgets import pipeline_timeout
 
 
 def _parse_time(value):
@@ -20,6 +21,8 @@ def classify_attempt(
     heartbeat_stale_seconds=1200,
     global_timeout_seconds=3600,
     hard_timeout_seconds=None,
+    *,
+    pipeline_plan=None,
 ):
     now = now or datetime.now(timezone.utc)
     heartbeat_at = _parse_time(heartbeat_at)
@@ -31,6 +34,13 @@ def classify_attempt(
     timeout_seconds = global_timeout_seconds
     if hard_timeout_seconds is not None:
         timeout_seconds = min(global_timeout_seconds, hard_timeout_seconds)
+    if pipeline_plan is not None:
+        try:
+            # Only callers with a durable pre-PR session may supply this plan.
+            # Launch metadata is not an authority to extend the global cap.
+            timeout_seconds = pipeline_timeout(pipeline_plan)
+        except ValueError:
+            pass  # An incomplete historical plan retains the ordinary limits.
 
     if runtime_seconds >= timeout_seconds or heartbeat_age_seconds >= global_timeout_seconds:
         return {

@@ -53,6 +53,7 @@ def admit_requests(
     known_workstreams,
     active_workstreams,
     summary,
+    review_fetch_pr=None,
 ):
     admitted = dispatch_admission.prepare(
         conn,
@@ -153,6 +154,9 @@ def admit_requests(
             tapd_pr_requests[event["workstream_id"]].append(event)
     batched_fingerprints = set()
     track_admission = supervision_store.has_schema(conn)
+    review_observations = github_requests.observe_review_candidates(
+        conn, repo, decisions, config_result, fetch_pr=review_fetch_pr
+    )
     for event in decisions:
         if event["event_fingerprint"] in batched_fingerprints:
             continue
@@ -192,8 +196,8 @@ def admit_requests(
                 continue
         if github_requests.resume_waiting_vote(conn, repo, event, run_now, admission):
             continue
-        # New review requests are independent durable rounds. They never
-        # become pending context that a still-running reviewer can consume.
+        # Each request remains separately authorized and durable. Equivalent
+        # current revisions attach to one execution without changing its input.
         if (
             event.get("source_type") == "pull_request"
             and event.get("authorization_status") in {"authorized_trigger", "accepted_context"}
@@ -221,6 +225,7 @@ def admit_requests(
                     review_route["native_review_workers"],
                     admission,
                     run_now,
+                    observed_pr=review_observations.get(event["event_fingerprint"]),
                 )
                 continue
         # A consumed trigger belongs to its original task, even when the

@@ -16,3 +16,7 @@ These rules apply to this directory and its descendants. Follow the
 - Test workflow-specific stage transitions, stale sources, author selection and
   partial retries at the owning workflow. Cover execution mechanics with the
   shared stage tests.
+- Canonical PR review admission preserves each authorized trigger in
+  `review_triggers`, with one original task/attempt owning the review execution.
+  Complete trigger associations only from an audited, published report receipt;
+  late equivalent requests do not modify frozen review inputs.

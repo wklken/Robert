@@ -552,6 +552,16 @@ flowchart TD
 两种内建协调器共用 `StageCoordinator` 和 SQLite 模型进程池。一轮占一个任务并发槽，
 各阶段模型再申请共享额度。图用两个模型说明阶段顺序，实际数量来自配置。
 
+多模型 PR review 通过 [review_identity](../src/robert_agent/work/review_identity.py) 核对当前完整修订、
+范围、reviewer 配置、验收意图与资格。等价触发在 `review_executions` 绑定唯一执行，
+`review_triggers` 分别保存授权、原任务关联以及同一报告的发布完成回执；原 task/attempt 继续持有模型额度。
+晚到触发不改冻结输入，历史重复轮次不自动取消。报告由
+[report_checkpoint](../src/robert_agent/workflows/review/report_checkpoint.py) 分别固定渲染、脱敏与封存事实，
+数据库保存公开报告登记前的可信封存 hash。没有可信封存记录的缓存须从原始输入重新推导并逐字核对。
+共享 [stage_evidence](../src/robert_agent/execution/stage_evidence.py) 固定阶段源码，
+[session_resume](../src/robert_agent/adapters/processes/session_resume.py) 验证 provider 会话历史；
+具体 adapter 构造显式 resume 命令，共享执行层保留原会话目录与独立调用段。
+
 ```mermaid
 sequenceDiagram
     participant Local as Local drain
@@ -740,3 +750,12 @@ Attempt，最终结果与已绑定的 Attempt 交接，发布动作归属 result
 和 `persistence/stores/notifications.py`；问题和通知使用调用方事务原子提交，
 收件箱、发送队列和就绪检测在限额前应用相同的未解决问题和仓库筛选。
 通知确认不会改变 Supervisor 事件或执行所有权。未来渠道复用同一版本化协议。
+
+
+发布前提问由 `workflows/pre_pr_review/decisions.py` 绑定登记的阶段输出、原请求及已停止
+writer 的源码，再通过原审计提交流程发布。`persistence/rounds/pre_pr_review.py` 核验可信回复
+来源。`delivery/mixed_base_dependencies.py` 保存完整声明式混合组件的源码、构建及 CI
+依赖证书；未知动态影响仍需重新审查。`adapters/git/merge_preflight.py` 在写入新合并检查点
+之前，只读检查 Git 身份和已识别 hook 的运行条件。
+分析交付证明位于 `persistence/queries/readviews/board_delivery.py`，看板依据已接纳结果和
+完整发布回执展示方案已交付，无需 PR 或工作项完成时间戳，且不修改生命周期状态。
