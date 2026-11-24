@@ -28,5 +28,6 @@
 | --- | --- |
 | [GitHub 轮询与本地推进](github-polling.md) | 扫描、缓存、持久观察、内部唤醒和受控发布 |
 | [持续任务监督](task-supervision.md) | 独立观察、诊断、已知恢复、工程修复和验证 |
+| [离线生命周期验收](compose-integration-tests.md) | 安装包、GitHub/TAPD 入口、发布与进程故障的端到端测试 |
 
 通用部署操作见[操作指引](../guides.md)，完整配置字段和命令见[配置与命令参考](../reference.md)。

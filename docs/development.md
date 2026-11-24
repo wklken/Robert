@@ -130,9 +130,14 @@ Plans, reviews and remediation records under `docs/superpowers/`, `docs/reviews/
 and `docs/remediation/` are local archives ignored by Git; durable usage and
 architecture rules belong in the published guides.
 
+For deployment acceptance with an installed wheel, real Git and SQLite, and
+offline GitHub, TAPD and model processes, run the
+[Compose lifecycle suite](features/compose-integration-tests.md).
+The standard unittest discovery stays Docker-free.
+
 ## CI checks
 
-Pull requests and pushes to `main` run four jobs:
+Pull requests and pushes to `main` run these checks:
 
 - The complete unittest suite on Linux with Python 3.11 and 3.15, the minimum
   and maximum supported versions. Each job runs up to four isolated test module
@@ -140,10 +145,13 @@ Pull requests and pushes to `main` run four jobs:
 - One Python 3.15 quality job for Ruff lint/format, import boundaries, the
   configured mypy targets, compilation and diff checks.
 - Secret scanning.
+- Compose smoke scenarios against the installed wheel. The manual **Compose
+  lifecycle** workflow runs the complete acceptance suite in shards.
 
-New commits to a pull request cancel its superseded CI run. Ordinary CI does
-not build packages, run installed-wheel smoke tests, audit dependencies or
-check documentation links.
+New commits to a pull request cancel its superseded CI run. The Compose smoke
+job installs its own wheel. The other regular jobs run the source suite and
+quality checks. Release validation also runs distribution smoke, dependency
+audits and documentation link checks.
 
 Ordinary CI caches the installed dependency environment in `.ci-venv`, shared
 by quality and test jobs when their interpreter and runner match. The key

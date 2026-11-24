@@ -19,6 +19,19 @@ permissions:
   contents: read
 
 jobs:
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -B tests/simulations/compose/run.py --suite smoke --artifacts "${{ runner.temp }}/robert-compose"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: robert-compose-smoke
+          path: ${{ runner.temp }}/robert-compose
+          retention-days: 7
+
   quality:
     runs-on: ubuntu-latest
     steps:
