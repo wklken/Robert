@@ -15,12 +15,13 @@ def _positive_seconds(value):
 
 
 def pipeline_timeout(plan: Mapping) -> int:
-    """Bound implement, reviews, synthesis, address, verify, one repair and verify.
+    """Bound the stages selected by the durable pre-publication review plan.
 
     Each stage uses its recorded worker timeout. Reviews overlap; the first
-    reviewer owns synthesis and both verification passes. The implementer owns
-    implementation and both address passes. Each of these three write passes
-    reserves at most three artifact-only repairs, each capped at 120 seconds.
+    reviewer owns synthesis. A single-round plan reserves implementation and
+    one address pass, without a final model verification or another repair.
+    Historical plans retain two address and two verification passes. Each write
+    pass reserves at most three artifact-only repairs, capped at 120 seconds.
     Pool waiting shares one allowance, capped at an hour and at the plan timeout.
     This helper grants no authority: callers must obtain the plan from a durable
     pre-PR session before applying it to an attempt's global runtime limit.
@@ -38,5 +39,16 @@ def pipeline_timeout(plan: Mapping) -> int:
         if not isinstance(worker, Mapping):
             raise ValueError("pipeline reviewer must be a mapping")
         reviews.append(_positive_seconds(worker.get("timeout_seconds")))
-    handoff_repairs = 3 * MAX_HANDOFF_REPAIR_ATTEMPTS * min(implement, MAX_HANDOFF_REPAIR_SECONDS)
-    return 3 * implement + max(reviews) + 3 * reviews[0] + min(limit, MAX_PIPELINE_QUEUE_SECONDS) + handoff_repairs
+    policy = plan.get("review_policy")
+    if policy not in (None, "single_review_single_repair"):
+        raise ValueError("unsupported review policy")
+    write_passes = 2 if policy else 3
+    reviewer_passes = 1 if policy else 3
+    handoff_repairs = write_passes * MAX_HANDOFF_REPAIR_ATTEMPTS * min(implement, MAX_HANDOFF_REPAIR_SECONDS)
+    return (
+        write_passes * implement
+        + max(reviews)
+        + reviewer_passes * reviews[0]
+        + min(limit, MAX_PIPELINE_QUEUE_SECONDS)
+        + handoff_repairs
+    )

@@ -124,6 +124,44 @@ def _worktrees(coordinator, run):
     return result
 
 
+def reuse(coordinator, run, validate, model):
+    """Validate the registered deterministic correction without another write pass."""
+    artifact = run["artifact"]
+    checkpoint = run["dispatch"].get("handoff_repair_checkpoint")
+    if not checkpoint or checkpoint.get("source_run_id") != run["run_id"]:
+        raise StageStopped("registered handoff repair checkpoint changed")
+    name = coordinator.handoff_files[run["stage"]][0]
+    source = coordinator.sealed_output(run) / name
+    prompt = Path(run["dispatch"]["prompt_path"])
+    target = files.safe_path(Path(artifact["handoff_repair_path"]), coordinator.manifest["artifact_root"])
+    if (
+        checkpoint.get("stage") != run["stage"]
+        or checkpoint.get("handoff_path") != str(source)
+        or checkpoint.get("prompt_path") != str(prompt)
+        or checkpoint.get("prompt_sha256") != run["prompt_sha256"]
+        or store.digest(prompt) != run["prompt_sha256"]
+        or store.digest(source) != checkpoint.get("handoff_sha256")
+    ):
+        raise StageStopped("registered handoff repair source changed")
+    if target.name != name or store.digest(target) != artifact["handoff_repair_sha256"]:
+        raise StageStopped("corrected handoff changed")
+    if coordinator.source_checkpoint(run) != run["dispatch"].get("result_checkpoint"):
+        raise StageStopped("registered handoff repair source checkpoint changed")
+    _check_preserved(_read(source.read_bytes()), _read(target.read_bytes()), run["stage"])
+    coordinator.handoff_source_run_id = run["run_id"]
+    try:
+        checked = validate(target.parent, model)
+    finally:
+        coordinator.handoff_source_run_id = None
+    if store.digest(target) != artifact["handoff_repair_sha256"]:
+        raise StageStopped("corrected handoff changed during validation")
+    return {
+        **checked,
+        "handoff_repair_path": str(target),
+        "handoff_repair_sha256": artifact["handoff_repair_sha256"],
+    }
+
+
 def repair(coordinator, run, validate, model, exc):
     if not repairable(exc):
         raise StageStopped("handoff error is not safely repairable") from exc
