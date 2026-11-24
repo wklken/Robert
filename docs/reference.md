@@ -216,9 +216,55 @@ Cycles and inspection:
 robert run once --config ~/.config/robert/config.yml
 robert run show RUN_ID --config ~/.config/robert/config.yml --output json
 robert status --config ~/.config/robert/config.yml
+robert status --tasks --quick --config ~/.config/robert/config.yml --output json
+robert task list --state running --latest --config ~/.config/robert/config.yml
+robert task list --state failed --query 073 --config ~/.config/robert/config.yml --output json
 robert task show TASK_ID --config ~/.config/robert/config.yml
+robert task stages TASK_ID --history --config ~/.config/robert/config.yml --output json
+robert task snapshots TASK_ID --config ~/.config/robert/config.yml --output json
+robert task logs TASK_ID --lines 40 --max-bytes 8192 --config ~/.config/robert/config.yml
 robert artifact show TASK_ID ARTIFACT_TYPE --config ~/.config/robert/config.yml
 ```
+
+`status` and `task` inspection accept `--db /path/to/robert.sqlite3` to inspect
+an existing database without loading configuration. They do not initialize or
+repair it. `status --quick` skips historical execution percentile metrics;
+`--tasks` adds running task summaries and `--limit` bounds the recent/running list.
+The added `lifecycle_counts` cover all persisted tasks, including failed history,
+while `model_pool` reports the shared model slot limit and occupancy.
+
+`task list` supports repeated `--state` lifecycle filters, exact `--repo`, literal
+`--query` matches in title/public ref/source/task/workstream IDs, and inclusive
+`--since` with an ISO timestamp and timezone. `--latest` selects the newest task
+per workstream before applying these filters; an old failed task is excluded
+when that workstream has a newer task. `--limit` is 1–500 and `--offset` is
+non-negative. Results use creation time descending and task ID as a tie breaker.
+JSON pages include `items`, `limit`, `offset`, and `has_more`. Live offset pages
+can change between reads; save each JSON response when comparing observations.
+
+`task show` preserves its existing JSON fields and adds `inspection` with the
+latest attempt, elapsed seconds, phase report age, active model stages, recorded
+wait/attention reasons and publication receipts. Elapsed uses the latest
+attempt's start through now or its recorded finish. A missing timestamp remains
+`null`; an old round's age is never counted as the current retry's duration.
+
+`task stages` defaults to runs owned by the latest attempt; `--history` includes
+preserved runs and rounds rebound during recovery. Each run retains the owner
+attempt/task and current round task. Model activity, queue and registration delay
+come from recorded model usage facts. Terminal stage wall time needs a recorded
+exit observation; `updated_at` is not a model finish time. Process observations
+use the recorded start identity, with unverified identities reported as unknown.
+Registered stage log sizes and modification ages are observed without exposing
+stdout content. A heartbeat or live process alone does not prove progress.
+
+`task snapshots` lists persisted snapshot IDs, current round identity, HEAD/base
+SHAs and recorded file/source hashes, plus review/vote manifests. It does not
+revalidate Git HEAD or filesystem integrity. Hash lists are capped at 100 entries
+with truncation flags; names and hashes remain distinct when paths are redacted. `task logs` reads only the latest attempt's registered
+`worker_stderr` artifact, caps reads at 65,536 bytes and 500 lines, and redacts
+sensitive output. Missing or refused files remain visible as missing evidence.
+These commands are read-only; recovery continues through the existing guarded
+operator operations.
 
 Artifact previews read registered regular files inside the database directory.
 Paths or symlinks escaping that directory are unavailable.

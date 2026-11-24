@@ -18,6 +18,7 @@ from robert_agent.operations import diagnostics
 from robert_agent.operations import retention
 from robert_agent.runtime import cycle as run_once
 from robert_agent.readmodels import status
+from robert_agent.cli import task_commands
 from robert_agent.adapters.services import native as service
 from robert_agent.configuration import command as validate_config
 from robert_agent.interfaces.web import server as web
@@ -96,9 +97,15 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser = subparsers.add_parser(
         "status",
         help="Show control-plane status.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Examples:\n  robert status --tasks --quick --output json\n  robert status --db /tmp/robert.sqlite3",
     )
     _add_config_argument(status_parser)
     _add_output_argument(status_parser)
+    status_parser.add_argument("--db", help="Read an existing database directly, without loading configuration.")
+    status_parser.add_argument("--tasks", action="store_true", help="Include running task elapsed times and stages.")
+    status_parser.add_argument("--quick", action="store_true", help="Skip historical execution percentile metrics.")
+    status_parser.add_argument("--limit", type=int, default=5, help="Recent/running task limit (1..500).")
 
     run_parser = subparsers.add_parser("run", help="Run or inspect cycles.")
     run_subparsers = run_parser.add_subparsers(
@@ -121,14 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_output_argument(run_show_parser)
     run_show_parser.add_argument("run_id")
 
-    task_parser = subparsers.add_parser("task", help="Inspect tasks.")
-    task_show_parser = task_parser.add_subparsers(
-        dest="task_command",
-        required=True,
-    ).add_parser("show")
-    _add_config_argument(task_show_parser)
-    _add_output_argument(task_show_parser)
-    task_show_parser.add_argument("task_id")
+    task_commands.add_parsers(subparsers, _add_config_argument, _add_output_argument)
 
     artifact_parser = subparsers.add_parser(
         "artifact",
@@ -356,6 +356,8 @@ def _daemon_argv(args):
 
 
 def _status_argv(args, suffix):
+    if getattr(args, "db", None):
+        return ["--db", str(Path(args.db).expanduser()), *suffix]
     validated = _validated_config(args)
     return ["--db", validated["db_path"], *suffix]
 
@@ -662,17 +664,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "daemon" and args.daemon_command == "run":
             return daemon.main(_daemon_argv(args))
         if args.command == "status":
-            return _run_read_only_command(
-                status.main,
-                _status_argv(args, ["status"]),
-                args.output,
-            )
-        if args.command == "task" and args.task_command == "show":
-            return _run_read_only_command(
-                status.main,
-                _status_argv(args, ["task", args.task_id]),
-                args.output,
-            )
+            return task_commands.run_status(args, _status_argv(args, [])[1])
+        if args.command == "task":
+            return task_commands.run(args, _status_argv(args, [])[1])
         if args.command == "run" and args.run_command == "show":
             return _run_read_only_command(
                 status.main,
