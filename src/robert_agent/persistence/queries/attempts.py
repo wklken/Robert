@@ -1133,7 +1133,8 @@ def find_for_supervise_running_attempts(conn, repo_id, task_id, task_id_3):
     return statements.read(conn, query4, {"p0": repo_id, "p1": task_id, "p2": task_id_3})
 
 
-def find_for_running_attempt_count(conn, repo_id):
+@cache
+def _running_attempt_count_statement():
     table1 = tables["attempts"].alias("a")
     table2 = tables["tasks"].alias("t")
     table3 = tables["workstreams"].alias("w")
@@ -1167,7 +1168,11 @@ def find_for_running_attempt_count(conn, repo_id):
         .correlate_except(table1, table2, table3)
         .set_label_style(LABEL_STYLE_NONE)
     )
-    return statements.read(conn, query4, {"p0": repo_id})
+    return query4
+
+
+def find_for_running_attempt_count(conn, repo_id):
+    return statements.read(conn, _running_attempt_count_statement(), {"p0": repo_id})
 
 
 def find_for_target(conn, task_id):
@@ -1480,7 +1485,8 @@ def has_occupied_runnable_attempt_filtered(conn, items):
     return statements.read(conn, query4, {"items": items})
 
 
-def running_attempt_count_for_repos_filtered(conn, items):
+@cache
+def _running_attempt_count_for_repos_statement():
     table1 = tables["attempts"].alias("a")
     table2 = tables["tasks"].alias("t")
     table3 = tables["workstreams"].alias("w")
@@ -1514,11 +1520,15 @@ def running_attempt_count_for_repos_filtered(conn, items):
         .correlate_except(table1, table2, table3)
         .set_label_style(LABEL_STYLE_NONE)
     )
-    return statements.read(conn, query4, {"items": items})
+    return query4
+
+
+def running_attempt_count_for_repos_filtered(conn, items):
+    return statements.read(conn, _running_attempt_count_for_repos_statement(), {"items": items})
 
 
 @cache
-def _lifecycle_facts_filtered_statement():
+def _lifecycle_facts_filtered_statement(include_workstream=False):
     table1 = tables["attempts"].alias("a")
     table2 = tables["tasks"].alias("t")
     table3 = tables["workstreams"].alias("w")
@@ -1553,11 +1563,13 @@ def _lifecycle_facts_filtered_statement():
         .correlate_except(table1, table2, table3, table4)
         .set_label_style(LABEL_STYLE_NONE)
     )
+    if include_workstream:
+        query5 = query5.add_columns(table2.c.workstream_id)
     return query5
 
 
-def lifecycle_facts_filtered(conn, items):
-    return statements.read(conn, _lifecycle_facts_filtered_statement(), {"items": items})
+def lifecycle_facts_filtered(conn, items, *, include_workstream=False):
+    return statements.read(conn, _lifecycle_facts_filtered_statement(include_workstream), {"items": items})
 
 
 def find_for_queue_prepared_attempts(conn, repo_id, capacity, *, reserved_only=False):

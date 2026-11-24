@@ -59,6 +59,11 @@ def execution_summary(conn, task_id):
 
 def attempt_summary(conn, attempt):
     phase = db_records.first(db_read_worker_phases.find_for_attempt_summary(conn, attempt["attempt_id"]))
+    return attempt_summary_from_records(attempt, phase)
+
+
+def attempt_summary_from_records(attempt, phase):
+    """Project an attempt and its latest phase from a supplied read snapshot."""
     try:
         failure = json.loads(attempt["failure_json"] or "{}")
     except (TypeError, ValueError):

@@ -440,6 +440,9 @@ ON daemon_events(daemon_run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_daemon_events_type_created
 ON daemon_events(event_type, created_at);
 
+CREATE INDEX IF NOT EXISTS idx_daemon_events_created_id
+ON daemon_events(created_at DESC, daemon_event_id DESC);
+
 CREATE TABLE IF NOT EXISTS audit_events (
   audit_id TEXT PRIMARY KEY,
   repo_id TEXT REFERENCES repos(repo_id) ON DELETE SET NULL,

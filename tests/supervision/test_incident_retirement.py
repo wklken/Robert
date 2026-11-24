@@ -78,6 +78,71 @@ class IncidentRetirementTests(unittest.TestCase):
                 self.assertEqual(item["resolution_evidence"]["reason_code"], "terminal_task_no_remaining_work")
                 self.assertEqual(self.run_check(record=True)["changes"], [])
 
+    def merged_review(self):
+        self.conn.execute(
+            "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,state,metadata_json) "
+            "VALUES('source','repo','github:example/repo!1','pull_request',1,'closed',?)",
+            (json.dumps({"remote_state": {"merged": True, "merged_at": NOW}}),),
+        )
+        self.conn.execute("UPDATE workstreams SET lifecycle='completed',primary_source_id='source'")
+        self.conn.execute("UPDATE tasks SET lifecycle='failed',route_id='review-pr'")
+        self.conn.execute(
+            "INSERT INTO attempts(attempt_id,task_id,attempt_no,status,started_at,finished_at,metadata_json) "
+            "VALUES('attempt','task',1,'completed',?,?,?)",
+            (NOW, NOW, json.dumps({"process_stopped_at": NOW})),
+        )
+        self.conn.execute(
+            "INSERT INTO execution_subjects(subject_type,subject_id,workflow_kind,binding_status,"
+            "created_at,updated_at,terminal_at) VALUES('task','task','human_request','terminal',?,?,?)",
+            (NOW, NOW, NOW),
+        )
+        self.conn.execute(
+            "INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json) "
+            "VALUES('result','task','attempt','multi_agent_review_report',?,?)",
+            (NOW, json.dumps({"audit": {"status": "accepted"}})),
+        )
+        self.conn.execute(
+            "INSERT INTO github_actions(action_id,result_id,task_id,action_type,audit_status,publish_status,"
+            "created_at,metadata_json) VALUES('action','result','task','submit_pr_review','accepted','skipped',?,?)",
+            (NOW, json.dumps({"publish": {"reason_code": "superseded", "skipped_at": NOW}})),
+        )
+        self.conn.commit()
+
+    def test_merged_superseded_review_is_dismissed_without_rewriting_failure(self):
+        self.merged_review()
+        result = self.run_check(record=True)
+        self.assertEqual([c["transition"] for c in result["changes"]], ["dismissed"])
+        self.assertEqual(self.active(), [])
+        self.assertEqual(self.conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "failed")
+        self.assertEqual(self.run_check(record=True)["changes"], [])
+
+    def test_merged_review_requires_proven_merge_and_settled_execution_and_publication(self):
+        self.merged_review()
+        statements = (
+            "UPDATE github_sources SET state='open'",
+            "UPDATE github_sources SET metadata_json='{}'",
+            "UPDATE workstreams SET lifecycle='active'",
+            "UPDATE tasks SET route_id='update-existing-pr'",
+            "UPDATE attempts SET metadata_json='{}'",
+            "UPDATE execution_subjects SET binding_status='attention'",
+            "UPDATE github_actions SET publish_status='not_published'",
+            "UPDATE github_actions SET metadata_json='{}'",
+            "UPDATE worker_results SET metadata_json='{}'",
+            "UPDATE worker_results SET metadata_json='{\"audit\":[]}'",
+            "UPDATE tasks SET updated_at='2099-01-01T00:00:00+00:00'",
+            'UPDATE github_sources SET metadata_json=\'{"remote_state":{"merged":false}}\'',
+        )
+        for statement in statements:
+            with self.subTest(statement=statement):
+                self.conn.execute("SAVEPOINT refusal")
+                self.conn.execute(statement)
+                # Query the proof in the same writer so refusal cannot depend on sampling.
+                self.assertEqual(store.dismiss_terminal_tasks(self.conn, ["task"], NOW), [])
+                self.conn.execute("ROLLBACK TO refusal")
+                self.conn.execute("RELEASE refusal")
+        self.conn.commit()
+        self.assertEqual(len(self.active()), 1)
+
     def test_live_or_successful_task_is_not_dismissed(self):
         for lifecycle in ("queued", "running", "completed", "failed"):
             with self.subTest(lifecycle=lifecycle):

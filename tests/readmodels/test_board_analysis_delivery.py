@@ -287,6 +287,10 @@ class BoardRoundCauseTests(BoardReadModelFixture):
         self.assertEqual(cause["process_observation"], "process_missing_or_zombie")
         self.assertEqual(detail["execution"]["failure"], "process_missing_or_zombie")
         self.assertTrue(detail["status_summary"]["needs_action"])
+        overview = board.list_board(self.db_path)
+        card = next(card for card in overview["items"] if card["work_item_id"] == item["work_item_id"])
+        self.assertEqual(card["status_summary"]["cause"], cause)
+        self.assertEqual(card["reason_summary"], error)
 
     def test_failed_run_error_survives_an_empty_round_error(self):
         item = self._create("Failed synthesis", start=True)

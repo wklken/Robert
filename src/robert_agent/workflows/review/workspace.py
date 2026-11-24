@@ -55,6 +55,32 @@ def _source_hashes(tree):
     return result
 
 
+def _is_test_artifact(tree, name):
+    # Git ignore rules are not authority to exclude arbitrary review inputs.
+    # Only known generated files may be absent from the tracked source hashes.
+    try:
+        path = review_files.safe_path(tree / name, tree)
+    except ValueError:
+        return False
+    if not path.is_file():
+        return False
+    relative = Path(name)
+    return (
+        name == "bkcore_unittest.sqlite3"
+        or (relative.parent.name == "__pycache__" and relative.suffix == ".pyc")
+        or name
+        in {
+            ".pytest_cache/.gitignore",
+            ".pytest_cache/CACHEDIR.TAG",
+            ".pytest_cache/README.md",
+            ".pytest_cache/nodeids",
+            ".pytest_cache/v/cache/nodeids",
+            ".pytest_cache/v/cache/lastfailed",
+            ".pytest_cache/v/cache/stepwise",
+        }
+    )
+
+
 def _runtime_info(tree, changed_paths=()):
     declarations = {}
     directories = {Path(".")}
@@ -294,8 +320,9 @@ def verify_snapshot(manifest, *, require_current_prompt=False):
             "--ignore-submodules=none",
         ).strip():
             raise ValueError("review worktree source is dirty")
-        if _git(tree, "ls-files", "--others", "-z"):
-            raise ValueError("review worktree contains unregistered files, including ignored files")
+        untracked = _git(tree, "ls-files", "--others", "-z").split("\0")
+        if any(name and not _is_test_artifact(tree, name) for name in untracked):
+            raise ValueError("review worktree contains unregistered files")
         if _source_hashes(tree) != manifest["source_hashes"]:
             raise ValueError("review worktree source hash changed")
         for name, expected in manifest["files"].items():

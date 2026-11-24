@@ -123,17 +123,25 @@ const AgentSessionView = (() => {
     let items = [];
     let nextCursor = null;
     let request = 0;
-    let loading = false;
+    let inFlight = null;
+    let pendingLoad = null;
     let loaded = false;
     let active = false;
+    let activeRuns = false;
+    let checkedAt = 0;
+    let loadedFingerprint = null;
+    let requestedFingerprint = null;
     let runId = "";
     let sourceIdentity = "";
     const expanded = new Set();
 
     function reset() {
       request++;
-      loading = false;
+      pendingLoad = null;
       loaded = false;
+      active = false;
+      activeRuns = false;
+      loadedFingerprint = null;
       items = [];
       nextCursor = null;
       expanded.clear();
@@ -148,11 +156,41 @@ const AgentSessionView = (() => {
       list.replaceChildren(...items.map(item => recordView(item, helpers, expanded)));
       more.hidden = !nextCursor;
     }
-    async function load({ older = false, reset: refreshAll = false } = {}) {
-      if (!selected || loading || (older && !nextCursor)) return;
+    function fingerprint() {
+      return JSON.stringify([selected, runId]);
+    }
+    function pollDue() {
+      // An active transcript may grow with no attempt/heartbeat change. An
+      // inactive one still gets a bounded recheck for late output and runs.
+      const interval = active || activeRuns || selected?.status === "running" ? 15000 : 60000;
+      return !loaded || fingerprint() !== loadedFingerprint || Date.now() - checkedAt >= interval;
+    }
+    function load({ older = false, reset: refreshAll = false, poll = false } = {}) {
+      if (!selected || (older && !nextCursor)) return Promise.resolve();
+      if (inFlight) {
+        if (!poll || fingerprint() !== requestedFingerprint) {
+          pendingLoad = {
+            older: older && !refreshAll && !(pendingLoad?.reset),
+            reset: refreshAll || (pendingLoad?.reset ?? false),
+          };
+        }
+        return inFlight;
+      }
+      inFlight = (async () => {
+        let options = { older, reset: refreshAll };
+        do {
+          pendingLoad = null;
+          await readPage(options);
+          options = pendingLoad;
+        } while (options && selected);
+      })().finally(() => { inFlight = null; });
+      return inFlight;
+    }
+    async function readPage({ older = false, reset: refreshAll = false } = {}) {
       const token = ++request;
       const execution = selected;
-      loading = true;
+      const evidence = fingerprint();
+      requestedFingerprint = evidence;
       refresh.disabled = true;
       more.disabled = true;
       message.textContent = t("sessionLoading");
@@ -194,7 +232,10 @@ const AgentSessionView = (() => {
           }
         }
         active = page.active;
+        activeRuns = (page.runs || []).some(run => ["running", "starting"].includes(run.status));
         loaded = true;
+        checkedAt = Date.now();
+        loadedFingerprint = evidence;
         info.textContent = [page.session_id ? `Session ${page.session_id}` : "", t("sessionNewestFirst"),
           active ? t("sessionLive") : ""].filter(Boolean).join(" · ");
         message.textContent = page.limited ? t("sessionLimited") : items.length ? "" : t(page.status === "unavailable" ? "sessionUnavailable" : "sessionEmpty");
@@ -207,16 +248,15 @@ const AgentSessionView = (() => {
         }
       } finally {
         if (token === request) {
-          loading = false;
           refresh.disabled = false;
           more.disabled = false;
         }
       }
     }
     panel.update = (updated, { poll = false } = {}) => {
-      const previousStatus = selected?.status;
       executions = (updated.tasks || []).flatMap(task => (task.attempts || []).map(attempt => ({
         ...attempt, task_id: task.task_id, stage: task.expected_output || task.route_id,
+        runEvidence: [task.review, task.pre_pr_review, task.vote],
       }))).sort((a, b) => String(b.started_at || "").localeCompare(String(a.started_at || "")) || b.attempt_no - a.attempt_no);
       const previousId = selected?.attempt_id;
       selected = executions.find(execution => execution.attempt_id === previousId) || executions[0] || null;
@@ -233,8 +273,14 @@ const AgentSessionView = (() => {
         runField.hidden = true;
         reset();
       }
-      if (panel.open && selected && (!loaded || (poll && (active || previousStatus === "running")))) load();
+      if (panel.open && selected && (!loaded || (poll && pollDue()))) load({ poll: true });
     };
+    Object.defineProperties(panel, {
+      pollingActive: { get: () => panel.open && (active || activeRuns || selected?.status === "running") },
+      pollDelay: { get: () => panel.open && selected
+        ? Math.max(0, (active || activeRuns || selected.status === "running" ? 15000 : 60000) - (Date.now() - checkedAt))
+        : Infinity },
+    });
     select.addEventListener("change", () => {
       selected = executions.find(execution => execution.attempt_id === select.value);
       runId = "";
@@ -249,7 +295,7 @@ const AgentSessionView = (() => {
       reset();
       if (panel.open) load();
     });
-    panel.addEventListener("toggle", () => { if (panel.open && !loaded) load(); });
+    panel.addEventListener("toggle", () => { if (panel.open && selected && pollDue()) load({ poll: true }); });
     panel.update(detail);
     return panel;
   }

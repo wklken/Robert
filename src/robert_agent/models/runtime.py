@@ -137,6 +137,7 @@ class DaemonEvent(Base):
         Index("idx_daemon_events_retention", text("julianday(created_at)")),
         Index("idx_daemon_events_run_created", "daemon_run_id", "created_at"),
         Index("idx_daemon_events_type_created", "event_type", "created_at"),
+        Index("idx_daemon_events_created_id", text("created_at DESC"), text("daemon_event_id DESC")),
     )
 
 

@@ -4,16 +4,49 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 
 import yaml
 
 from robert_agent.operations.initialize import init_config
 from robert_agent.resource_files import resource
-from robert_agent.configuration.routes import resolve_route_config
+from robert_agent.configuration import routes
+from robert_agent.configuration.routes import load_route_policies, resolve_route_config
 from robert_agent.runtime.cycle import run_once
 
 
 class RouteConfigTests(unittest.TestCase):
+    def test_repeated_policy_loads_parse_once_and_return_independent_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "routes.yml"
+            path.write_text("routes:\n  - id: cache-fixture\n    allowed_github_actions: [open_pr]\n")
+            with (
+                mock.patch.object(routes, "resource", return_value=path),
+                mock.patch.object(routes.yaml, "safe_load", wraps=yaml.safe_load) as parse,
+            ):
+                first = load_route_policies()
+                first[0]["allowed_github_actions"].append("delete_repo")
+                first.append({"id": "injected"})
+                second = load_route_policies()
+                self.assertEqual(second, [{"id": "cache-fixture", "allowed_github_actions": ["open_pr"]}])
+                self.assertEqual(parse.call_count, 1)
+
+    def test_policy_content_changes_and_invalid_documents_are_observed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "routes.yml"
+            with mock.patch.object(routes, "resource", return_value=path):
+                path.write_text("routes: [{id: before}]\n")
+                self.assertEqual(load_route_policies()[0]["id"], "before")
+                path.write_text("routes: [{id: after}]\n")
+                self.assertEqual(load_route_policies()[0]["id"], "after")
+                for document in ("routes: []\n", "routes: {}\n", "{}\n", "- item\n"):
+                    with self.subTest(document=document):
+                        path.write_text(document)
+                        with self.assertRaisesRegex(ValueError, "must contain routes"):
+                            load_route_policies()
+                path.write_text("routes: [{id: after}]\n")
+                self.assertEqual(load_route_policies()[0]["id"], "after")
+
     def test_repo_override_replaces_only_explicit_fields(self):
         config = {
             "default_worker": "default",

@@ -27,6 +27,10 @@ Unit-test writing guidance:
 Verification evidence:
 Follow verification_policy and repository requirements. Each check needs source (worker_reported, runtime_recorded or external_ci), command, status, purpose and required; executed checks also need exit_code. Skipped checks need skipped_reason. Required checks must pass when allow_skipped=false. Runtime records require command_record_path; external CI requires its HTTPS url. Sources are declarations, not independent attestation. Do not invent successful evidence.
 
+Reuse a passed check only while its relevant source content, tests, dependency lockfiles, configuration, command and runtime still match the verified inputs. Start with focused checks during iteration, then complete repository-required checks for the final candidate. Retain the original command, exit status and evidence location when reusing a result; rerun affected checks when their inputs change or freshness cannot be established.
+
+Inspect commit hooks before scheduling expensive validation. Hook results can satisfy only the checks they actually execute against the final content, when repository instructions permit that evidence. If a hook changes files, invalidate affected earlier checks and verify the resulting content. Do not disable or bypass hooks, omit required checks, or silently narrow their scope to reduce CPU use.
+
 ## resume
 Resume Previous Attempt:
 - This is a resume attempt for the same task, not a fresh task.
