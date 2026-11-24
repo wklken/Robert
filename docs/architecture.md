@@ -97,6 +97,10 @@ Worker 结果和原生阶段在进入等待前校验新提问。看板和 OpenCl
   结果提交在 `delivery.application.submission`。models 和 persistence 不反向依赖领域或用例。
 - `readmodels.dashboard` 负责只读查询与聚合；`interfaces.web.server` 负责 HTTP，
   工作项/知识写入调用相应领域的应用用例。
+- `readmodels.board` 通过 `persistence.queries.readviews.board` 按批读取生命周期、
+  当前尝试、最新阶段和模型轮次记录，在请求内复用。`work.control_queries` 与单项详情
+  共用生命周期规则；完整执行历史仍由详情读取，不跨请求缓存数据库记录。
+  `daemon_events` 的最新事件索引按创建时间与事件 ID 倒序匹配 dashboard 查询。
 - 包根目录只保留 `__init__.py`、`paths.py` 和 `resource_files.py`。可执行入口位于所属模块，
   例如 `robert_agent.runtime.scan` 和 `robert_agent.worker.result`。安装检查使用
   [入口清单](../src/robert_agent/resources/entrypoints.json)。
@@ -111,6 +115,8 @@ Worker 结果和原生阶段在进入等待前校验新提问。看板和 OpenCl
 - `context.memory_policy` 定义项目记忆的大小和脱敏约束，供提交、审计和入库共用。
 - `interfaces.web.auth` 校验私有文件中的 salted PBKDF2-SHA256 password verifier；
   `interfaces.web.server` 在 GET 读取与 POST 请求体解析前执行可选 Basic 认证。
+  每个不可变 verifier 在进程内复用一组成功凭据的 HMAC 指纹，固定 60 秒到期，
+  不缓存失败结果或明文凭据。密码文件在启动时加载，更换凭据后需重启服务。
   认证保留配置中的操作员身份、仓库范围、Host、Origin、CSRF 与只读检查。
 
 [架构门禁](../tests/architecture/test_architecture_boundaries.py) 检查无环、层次方向、根目录合同和

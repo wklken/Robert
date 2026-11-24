@@ -12,6 +12,20 @@ from robert_agent.workflows import routes as route
 
 
 class PromptScopeTests(unittest.TestCase):
+    def test_code_verification_reuses_only_matching_input_and_hook_evidence(self):
+        for route_id in ("new-pr", "update-existing-pr"):
+            with self.subTest(route_id=route_id):
+                prompt = self.render(route_id)
+                for requirement in (
+                    "source content, tests, dependency lockfiles, configuration, command and runtime",
+                    "repository-required checks",
+                    "commit hooks",
+                    "If a hook changes files",
+                    "Do not disable or bypass hooks",
+                    "Retain the original command, exit status and evidence location",
+                ):
+                    self.assertIn(requirement, prompt)
+
     def test_review_template_versions_use_fixed_resources_and_reject_unknown_versions(self):
         manifest = {
             "schema_version": 1,

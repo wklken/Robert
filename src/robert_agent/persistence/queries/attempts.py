@@ -1518,7 +1518,7 @@ def running_attempt_count_for_repos_filtered(conn, items):
 
 
 @cache
-def _lifecycle_facts_filtered_statement():
+def _lifecycle_facts_filtered_statement(include_workstream=False):
     table1 = tables["attempts"].alias("a")
     table2 = tables["tasks"].alias("t")
     table3 = tables["workstreams"].alias("w")
@@ -1553,11 +1553,13 @@ def _lifecycle_facts_filtered_statement():
         .correlate_except(table1, table2, table3, table4)
         .set_label_style(LABEL_STYLE_NONE)
     )
+    if include_workstream:
+        query5 = query5.add_columns(table2.c.workstream_id)
     return query5
 
 
-def lifecycle_facts_filtered(conn, items):
-    return statements.read(conn, _lifecycle_facts_filtered_statement(), {"items": items})
+def lifecycle_facts_filtered(conn, items, *, include_workstream=False):
+    return statements.read(conn, _lifecycle_facts_filtered_statement(include_workstream), {"items": items})
 
 
 def find_for_queue_prepared_attempts(conn, repo_id, capacity, *, reserved_only=False):

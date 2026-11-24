@@ -174,17 +174,22 @@ def task_status(conn, task_id):
 
 def board_status(conn, task_id):
     """Only bounded public status; no filesystem paths, environment or raw logs."""
-    from robert_agent.security.text import safe_text
-
     entry = session(conn, task_id=task_id)
     if not entry:
         return None
+    return board_status_from_records(entry, runs(conn, entry["round_id"]), process_pool_status(conn))
+
+
+def board_status_from_records(entry, model_runs, process_pool):
+    """Public status from records already loaded for this request."""
+    from robert_agent.security.text import safe_text
+
     manifest = entry["manifest"]
     return {
         "round_id": entry["round_id"],
         "status": entry["status"],
         "kind": "vote",
-        "process_pool": process_pool_status(conn),
+        "process_pool": process_pool,
         "head_sha": manifest.get("head_sha"),
         "base_ref": manifest.get("base_ref"),
         "error": safe_text(entry["error"] or ""),
@@ -200,7 +205,7 @@ def board_status(conn, task_id):
                 "status": run["status"],
                 "error": safe_text(run["error"] or ""),
             }
-            for run in runs(conn, entry["round_id"])
+            for run in model_runs
         ],
     }
 

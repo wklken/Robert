@@ -9,6 +9,32 @@ WORKER_MODULE = PACKAGE_ROOT / "worker"
 
 
 class ConfigAndSchemaTests(unittest.TestCase):
+    def test_latest_daemon_events_are_indexed_after_existing_database_upgrade(self):
+        from robert_agent.persistence.schema import database as storage
+
+        db_path = self.root / "event-index-upgrade.sqlite3"
+        storage.init_database(db_path)
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute("DROP INDEX IF EXISTS idx_daemon_events_created_id")
+            conn.execute(
+                "INSERT INTO daemon_runs(daemon_run_id,status,owner_id,config_path,started_at) "
+                "VALUES ('run-1','running','owner','/config','2026-11-24T00:00:00+00:00')"
+            )
+            conn.executemany(
+                "INSERT INTO daemon_events(daemon_event_id,daemon_run_id,event_type,status,created_at) "
+                "VALUES (?,'run-1','heartbeat','ok',?)",
+                [("event-a", "2026-11-24T01:00:00+00:00"), ("event-b", "2026-11-24T01:00:00+00:00")],
+            )
+        storage.init_database(db_path)
+        storage.init_database(db_path)
+        with closing(sqlite3.connect(db_path)) as conn:
+            query = "SELECT * FROM daemon_events ORDER BY created_at DESC, daemon_event_id DESC LIMIT 20"
+            plan = conn.execute("EXPLAIN QUERY PLAN " + query).fetchall()
+            events = conn.execute(query).fetchall()
+        self.assertIn("idx_daemon_events_created_id", str(plan))
+        self.assertNotIn("USE TEMP B-TREE", str(plan))
+        self.assertEqual([row[0] for row in events], ["event-b", "event-a"])
+
     def test_route_completion_uses_covering_index_after_existing_database_upgrade(self):
         from robert_agent.persistence.schema import database as storage
 
