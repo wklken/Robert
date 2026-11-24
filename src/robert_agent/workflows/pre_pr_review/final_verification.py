@@ -24,6 +24,7 @@ def _registered_inputs(coordinator, inputs):
         return None
     with store.connect(coordinator.db_path) as conn:
         previous = store.runs(conn, coordinator.round_id)
+        roots = store.snapshot_artifact_roots(conn, coordinator.round_id)
     semantic = {name: value for name, value in inputs.items() if name != "report_path"}
     for run in reversed(previous):
         if run["stage"] != "verify_final" or run["worker_id"] != coordinator.request["workers"][0]["name"]:
@@ -31,6 +32,22 @@ def _registered_inputs(coordinator, inputs):
         prompt = Path(run["dispatch"].get("prompt_path", ""))
         key = prompt.stem.removeprefix("verify-final-")
         if len(key) != 64 or any(char not in "0123456789abcdef" for char in key):
+            continue
+        # Runs survive snapshot refreshes. Their registered output directory
+        # identifies the generation, including legacy runs with no checkpoint.
+        # Never infer history from a moved prompt or an editable input document.
+        historical = next(
+            (
+                Path(artifact_root)
+                for snapshot_id, artifact_root in roots.items()
+                if snapshot_id != inputs["snapshot_id"]
+                and Path(run["output_dir"]) == Path(artifact_root) / "verify_final" / run["run_id"]
+            ),
+            None,
+        )
+        if historical is not None:
+            if prompt != historical / f"verify-final-{key}.md":
+                raise StageStopped("registered final reviewer prompt path changed")
             continue
         if prompt != Path(root) / f"verify-final-{key}.md":
             raise StageStopped("registered final reviewer prompt path changed")
