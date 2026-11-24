@@ -45,6 +45,11 @@ def session(conn, *, round_id=None, task_id=None):
         else None
     )
     entry["manifest"] = json.loads(row[0]) if row else {}
+    entry["completion_runs"] = (
+        runs(conn, entry["round_id"])
+        if entry["request"].get("plan", {}).get("review_policy") == "single_review_single_repair"
+        else []
+    )
     feedbacks = (
         entry["request"].get("final_feedback"),
         entry["proof"].get("decision", {}).get("final_feedback"),
@@ -369,6 +374,11 @@ def bind_result(conn, round_id, result_id):
 
 def _matches_final_verification(entry, result_id=None):
     proof = entry["proof"]
+    policy = entry.get("request", {}).get("plan", {}).get("review_policy")
+    if policy == "single_review_single_repair":
+        return _matches_single_round(entry)
+    if policy is not None or "review_policy" in proof or "single_round_completion" in proof:
+        return False
     if proof.get("candidate_sha") == proof.get("head_sha") and not proof.get("finding_ids"):
         return not entry.get("legacy_result_binding")
     verification = proof.get("final_verification")
@@ -408,6 +418,148 @@ def _matches_final_verification(entry, result_id=None):
         and verification.get("final_verification_sha256")
         and verification.get("input_sha256")
     )
+
+
+def _matches_single_round(entry):
+    """The stored plan selects a completed-pass proof, never model approval."""
+    proof = entry["proof"]
+    marker = proof.get("single_round_completion")
+    plan = entry["request"]["plan"]
+    manifest = entry["manifest"]
+    if (
+        proof.get("review_policy") != "single_review_single_repair"
+        or "final_verification" in proof
+        or not isinstance(marker, dict)
+        or type(marker.get("version")) is not int
+        or marker.get("version") != 1
+        or not isinstance(marker.get("review_run_ids"), list)
+        or not marker["review_run_ids"]
+    ):
+        return False
+    expected = {
+        "round_id": entry["round_id"],
+        "snapshot_id": entry["snapshot_id"],
+        "candidate_sha": proof.get("candidate_sha"),
+        "final_sha": proof.get("head_sha"),
+        "report_sha256": entry["report_sha256"],
+        "dispositions_sha256": proof.get("dispositions_sha256"),
+    }
+    if any(not value or marker.get(key) != value for key, value in expected.items()):
+        return False
+    if (
+        manifest.get("snapshot_id") != expected["snapshot_id"]
+        or manifest.get("head_sha") != expected["candidate_sha"]
+        or proof.get("round_id") != entry["round_id"]
+    ):
+        return False
+    try:
+        history = entry.get("completion_runs", [])
+        selected = {run["run_id"]: run for run in history}
+        workers = [worker["name"] for worker in plan["workers"]]
+        review_ids = marker["review_run_ids"]
+        if len(review_ids) != len(workers) or len(set(review_ids)) != len(review_ids):
+            return False
+        reviews = [selected[run_id] for run_id in review_ids]
+        if [run["worker_id"] for run in reviews] != workers:
+            return False
+        address = selected[marker["address_run_id"]]
+        if address["worker_id"] != plan["implementer"]["name"]:
+            return False
+        synthesis = selected[marker["synthesis_run_id"]] if len(reviews) > 1 else None
+        if len(reviews) == 1 and marker.get("synthesis_run_id") is not None:
+            return False
+        phase_runs = [("review", run) for run in reviews] + [("address_findings", address)]
+        if synthesis:
+            if synthesis["worker_id"] != workers[0]:
+                return False
+            phase_runs.append(("synthesis", synthesis))
+        if any(
+            run["stage"] in {"review", "synthesis", "address_findings"}
+            and round_records.artifact_available(run)
+            and run["run_id"] not in {source["run_id"] for _, source in phase_runs}
+            for run in history
+        ) or any(run["stage"] == "verify_final" for run in history):
+            return False
+        for stage, run in phase_runs:
+            checkpoint = run.get("dispatch", {}).get("result_checkpoint", {})
+            if (
+                run["round_id"] != entry["round_id"]
+                or run["stage"] != stage
+                or not round_records.artifact_available(run)
+                or run["slot_reserved"]
+                or checkpoint.get("run_id") != run["run_id"]
+                or checkpoint.get("prompt_sha256") != run["prompt_sha256"]
+                or checkpoint.get("snapshot_id") != expected["snapshot_id"]
+                or checkpoint.get("head_sha") != expected["candidate_sha"]
+                or (stage == "address_findings" and checkpoint.get("worktree_head") != expected["final_sha"])
+            ):
+                return False
+        if digest(entry["report_path"]) != expected["report_sha256"]:
+            return False
+        finding_ids = []
+        for run in reviews:
+            artifact = run["artifact"]
+            for kind in ("result", "report"):
+                if digest(artifact[kind + "_path"]) != artifact[kind + "_sha256"]:
+                    return False
+            result = json.loads(Path(artifact["result_path"]).read_text())
+            if any(
+                result.get(key) != value
+                for key, value in {
+                    "round_id": entry["round_id"],
+                    "snapshot_id": expected["snapshot_id"],
+                    "head_sha": expected["candidate_sha"],
+                }.items()
+            ):
+                return False
+            if not synthesis:
+                finding_ids = [item["id"] for item in result["findings"] + result["dismissed_findings"]]
+        if synthesis:
+            artifact = synthesis["artifact"]
+            if digest(artifact["evaluation_path"]) != artifact["evaluation_sha256"]:
+                return False
+            result = json.loads(Path(artifact["evaluation_path"]).read_text())
+            if any(
+                result.get(key) != value
+                for key, value in {
+                    "round_id": entry["round_id"],
+                    "snapshot_id": expected["snapshot_id"],
+                    "head_sha": expected["candidate_sha"],
+                }.items()
+            ):
+                return False
+            if not artifact.get("input_sha256"):
+                return False
+            finding_ids = [item["id"] for item in result["items"]]
+        artifact = address["artifact"]
+        if artifact.get("dispositions_sha256") != expected["dispositions_sha256"]:
+            return False
+        if artifact.get("head") != expected["final_sha"] or artifact.get("operator_question"):
+            return False
+        if digest(artifact["dispositions_path"]) != expected["dispositions_sha256"]:
+            return False
+        response = json.loads(Path(artifact["dispositions_path"]).read_text())
+        if any(response.get(key) != expected[key] for key in ("candidate_sha", "final_sha", "report_sha256")):
+            return False
+        dispositions = response["dispositions"]
+        disposition_ids = [item["id"] for item in dispositions]
+        if (
+            len(set(finding_ids)) != len(finding_ids)
+            or len(set(disposition_ids)) != len(disposition_ids)
+            or set(disposition_ids) != set(finding_ids)
+            or proof.get("finding_ids") != disposition_ids
+            or any(
+                item.get("status") not in {"fixed", "dismissed", "deferred", "needs_decision"}
+                or not isinstance(item.get("reason"), str)
+                or not item["reason"].strip()
+                for item in dispositions
+            )
+        ):
+            return False
+        required = [check for check in response["verification"] if check.get("required") is True]
+        return bool(required) and all(check.get("status") == "passed" for check in required)
+    except (KeyError, TypeError, AttributeError, OSError, ValueError):
+        return False
 
 
 def matches_submission(entry, attempt_id, fingerprint, *, head=None, result_id=None):

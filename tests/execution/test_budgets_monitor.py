@@ -37,6 +37,30 @@ def review_plan():
 
 
 class PipelineBudgetTests(unittest.TestCase):
+    def test_single_round_budget_covers_implementation_review_and_one_repair(self):
+        from robert_agent.execution.budgets import pipeline_timeout
+
+        plan = {**review_plan(), "review_policy": "single_review_single_repair"}
+        self.assertEqual(pipeline_timeout(plan), 2 * 4200 + 4200 + 4200 + 3600 + 6 * 120)
+        self.assertEqual(pipeline_timeout(plan), 21120)
+
+    def test_single_round_does_not_reserve_verifier_or_second_repair_time(self):
+        from robert_agent.execution.budgets import pipeline_timeout
+
+        plan = {
+            "review_policy": "single_review_single_repair",
+            "timeout_seconds": 100,
+            "implementer": {"timeout_seconds": 80},
+            "workers": [{"timeout_seconds": 50}, {"timeout_seconds": 200}],
+        }
+        self.assertEqual(pipeline_timeout(plan), 2 * 80 + 200 + 50 + 100 + 6 * 80)
+
+    def test_unknown_review_policy_cannot_supply_an_extended_budget(self):
+        from robert_agent.execution.budgets import pipeline_timeout
+
+        with self.assertRaisesRegex(ValueError, "unsupported review policy"):
+            pipeline_timeout({**review_plan(), "review_policy": "unlimited"})
+
     def test_envelope_covers_one_repair_and_parallel_reviews(self):
         from robert_agent.execution.budgets import pipeline_timeout
 
@@ -161,6 +185,17 @@ class PipelineMonitorTests(TemporaryWorkspace):
 
     def test_verified_pipeline_with_fresh_heartbeat_survives_seventy_minutes(self):
         self.assertEqual(self.observe(runtime=4201, plan=review_plan()), (False, 0, "running", {}, 0))
+
+    def test_single_round_durable_plan_uses_its_shorter_deadline(self):
+        plan = {**review_plan(), "review_policy": "single_review_single_repair"}
+        due, count, status, failure, stopped = self.observe(runtime=21120, plan=plan)
+        self.assertTrue(due)
+        self.assertEqual((count, status, stopped), (1, "failed", 1))
+        self.assertEqual(failure["timeout_seconds"], 21120)
+
+    def test_single_round_fresh_heartbeat_before_deadline_still_runs(self):
+        plan = {**review_plan(), "review_policy": "single_review_single_repair"}
+        self.assertEqual(self.observe(runtime=21119, plan=plan), (False, 0, "running", {}, 0))
 
     def test_pipeline_does_not_extend_heartbeat_failure_timeout(self):
         due, count, status, failure, stopped = self.observe(runtime=5000, heartbeat_age=4200, plan=review_plan())

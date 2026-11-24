@@ -19,7 +19,7 @@ from tests.support.tapd_cycle import TAPD_CONFIG
 
 
 class PrePRReviewFixture(ReviewCoordinatorFixture):
-    def start(self, workers, *, local=False, tapd=False, github_comment=False):
+    def start(self, workers, *, local=False, tapd=False, github_comment=False, legacy=True):
         config = yaml.safe_load(self.config_path.read_text())
         config["repos"][0]["routes"] = {"new-pr": {"pre_pr_review": {"workers": workers}}}
         if tapd:
@@ -80,6 +80,10 @@ class PrePRReviewFixture(ReviewCoordinatorFixture):
         task, attempt = self.current()
         with fixture_database.connect(self.db) as conn:
             saved = store.session(conn, task_id=task)
+            if legacy and "review_policy" in saved["request"]["plan"]:
+                # These fixtures exercise already registered historical rounds.
+                saved["request"]["plan"].pop("review_policy")
+                store.update(conn, saved["round_id"], request_json=json.dumps(saved["request"], sort_keys=True))
         self.assertIsNotNone(saved)
         self.verification = [_verification_evidence()]
         self.submission = {
