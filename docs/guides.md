@@ -65,6 +65,14 @@ robert status --config ~/.config/robert/config.yml --output json
 Each worker receives the workspace belonging to its task's repository.
 The global `scheduler.max_concurrency` defaults to 3; each repository may set a positive
 limit no larger than that global limit. Use actual checkouts and branch names.
+`scheduler.max_dispatches` limits task starts per local scheduling cycle (default 2).
+`scheduler.max_publish_actions` sets the publication action budget per local loop
+and the background publisher's batch limit per repository (default 5).
+Both settings must be positive integers. Explicit loop CLI budget flags override
+these configuration values and may use zero to disable the corresponding work.
+New local loops and publication batches load these values from configuration.
+Reload the Robert control programs after changing task capacity so that the
+resident daemon also uses the new global and repository limits.
 A repository's optional `github_account` overrides the global account for event
 routing; it does not switch the authenticated `gh` session.
 

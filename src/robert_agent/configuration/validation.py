@@ -87,6 +87,8 @@ def _normalize(config, path, skip_external):
         "python_bin": config.get("python_bin", sys.executable or "python3").strip(),
         "max_concurrency": scheduler["max_concurrency"],
         "model_max_concurrency": scheduler["model_max_concurrency"],
+        "max_dispatches": scheduler["max_dispatches"],
+        "max_publish_actions": scheduler["max_publish_actions"],
         "lease_ttl_seconds": scheduler["lease_ttl_seconds"],
         "heartbeat_stale_seconds": supervision["heartbeat_stale_seconds"],
         "hard_timeout_seconds": supervision["hard_timeout_seconds"],

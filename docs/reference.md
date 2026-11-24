@@ -19,7 +19,7 @@ structural validation and defaults. SQLite is the execution engine.
 | `version`, `data_dir`, `database`, `python_bin` | Format, runtime directory, SQLite filename, optional helper interpreter override. |
 | `default_worker` | Required worker name; mapping order does not select a default. |
 | `github` | Listening account, polling and API quota thresholds; no credentials. |
-| `scheduler` | Global task capacity, native model-process capacity, local polling and task leases. |
+| `scheduler` | Global task capacity, native model-process capacity, per-cycle task starts, publication batches, local polling and task leases. |
 | `supervision` | Independent observation/diagnosis/recovery settings plus heartbeat staleness, hard timeout and startup grace. |
 | `daemon` | Enablement, immediate startup scan, scan/local-cycle control timeouts. |
 | `maintenance` | Automatic pruning, interval, batch size and diagnostic retention days. |

@@ -91,7 +91,9 @@ def _workflow_args(workflow_path):
     return ["--workflow", str(workflow_path)] if workflow_path else []
 
 
-def build_run_once_command(config_path, workflow_path=None, *, dry_run=False):
+def build_run_once_command(
+    config_path, workflow_path=None, *, dry_run=False, max_dispatches=None, max_publish_actions=None
+):
     command = [
         sys.executable,
         "-B",
@@ -102,6 +104,10 @@ def build_run_once_command(config_path, workflow_path=None, *, dry_run=False):
     ]
     if dry_run:
         command.append("--dry-run")
+    if max_dispatches is not None:
+        command.extend(["--max-dispatches", str(max_dispatches)])
+    if max_publish_actions is not None:
+        command.extend(["--max-publish-actions", str(max_publish_actions)])
     return command
 
 
@@ -732,6 +738,8 @@ def _run_live_poll(context, child_runner=run_child_json, now=None):
         context.config_path,
         context.workflow_path,
         dry_run=context.dry_run,
+        max_dispatches=(context.runtime_config or {}).get("max_dispatches", 2),
+        max_publish_actions=(context.runtime_config or {}).get("max_publish_actions", 5),
     )
     with closing(daemon_state.connect(context.db_path)) as conn, conn:
         daemon_state.record_event(

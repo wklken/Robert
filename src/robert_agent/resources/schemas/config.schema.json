@@ -458,6 +458,16 @@
           "minimum": 1,
           "default": 4
         },
+        "max_dispatches": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2
+        },
+        "max_publish_actions": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5
+        },
         "local_poll_seconds": {
           "type": "integer",
           "minimum": 1,

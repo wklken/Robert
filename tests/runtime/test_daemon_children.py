@@ -86,6 +86,10 @@ class DaemonChildRunnerTests(unittest.TestCase):
         )
         self.assertIn("--skip-publish", skip_publish_cmd)
 
+        bounded_scan = daemon.build_run_once_command("/tmp/config.yml", max_dispatches=6, max_publish_actions=10)
+        self.assertEqual(bounded_scan[bounded_scan.index("--max-dispatches") + 1], "6")
+        self.assertEqual(bounded_scan[bounded_scan.index("--max-publish-actions") + 1], "10")
+
     def test_run_child_json_parses_single_json_object(self):
         from robert_agent.runtime import daemon
 
