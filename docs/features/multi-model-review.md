@@ -88,6 +88,9 @@ API 使用现有取消命令的 `abandon_review_run_ids` 列表，仍要求仓�
 
 ## 文件交接
 
+源码快照校验遵循 Git 的标准忽略规则：未跟踪且被忽略的测试数据库、字节码和缓存不会阻断审查或恢复。
+已跟踪文件即使命中忽略规则也必须保持不变；未被忽略的新文件、HEAD、源码哈希、上下文和 prompt 的变化仍会被拒绝。
+
 每轮 fetch 当前 PR head/base，验证 SHA 后建立独立 detached Git worktree。
 完整 PR diff 从该轮 merge-base 到 head 计算。共享源码和上下文不被后续轮次 reset。
 PR 信息、触发上下文、变更文件、diff/stat/行数、Python 运行时信息由 Robert 写入；
@@ -158,6 +161,7 @@ mention 不扩大发布或修改权限，各阶段继续使用原有 JSON schema
 - 仅某个模型失败时，同轮重试复用已验证的其他模型结果；汇总失败仅重跑汇总。产物已落盘但数据库登记前崩溃，可重新验证后接纳。
 - 配置了 `fallback_model` 时，同轮同阶段同一 worker 连续两次超时，下一次重试使用备用模型；其他 worker 的失败不会计入。实际选择在启动前持久化，恢复、报告和 Board 使用该值，reviewer prompt 不变。CLI 的 `default` 表示未指定具体模型，不推测其实际名称；相同模型配置不宣称为不同模型。
 - 原成功文件缺失或 hash 改变，不再作为有效结果使用。无法确认进程身份或启动结果时停止自动执行；未知启动按上面的人工恢复流程处理，不盲目拉起第二个进程。主进程退出但进程组仍存在时同样停止，不能把仍可能变化的文件登记为成功。
+- 源码快照拒绝未跟踪的审查规则、源码和配置，即使 Git 忽略这些文件。仅放行被 Git 忽略的明确测试产物：根目录 `bkcore_unittest.sqlite3`、`__pycache__` 内的 `.pyc`，以及根目录 `.pytest_cache` 的 `.gitignore`、`CACHEDIR.TAG`、`README.md`、`nodeids` 和 `v/cache/{nodeids,lastfailed,stepwise}`。这些产物可以在测试后更新，但文件及其父目录不能是符号链接；已跟踪文件仍受原有状态和哈希校验约束。
 - 使用现有任务 Retry/Cancel 和 publication retry。发布失败沿用原 action/result，仅重试发布和远端对账。
 - 发布前再次核对 head、base、目标分支和 PR 是否仍打开；变化标记 `superseded`，需要新触发请求。确认旧进程已停止后，重新触发失败任务会创建新轮次并读取当前 PR；旧轮次及其产物保留。已有排队请求会继续执行。
 - 发布按 repository、PR、round 去重；遇到模糊响应先分页查询 PR Reviews，核对 marker、commit 和完整正文，不能确认时不重复发布。
