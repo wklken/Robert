@@ -596,6 +596,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 installed = openclaw.install_plugin(
                     args.plugin_dir,
                     dry_run=args.dry_run,
+                    force=args.force,
                 )
                 steps = [preflight, written, installed]
                 if installed.get("ok") and not args.skip_restart:

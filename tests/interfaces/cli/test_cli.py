@@ -294,7 +294,7 @@ class CliTests(unittest.TestCase):
                 mock.patch(
                     "robert_agent.cli.main.openclaw.install_plugin",
                     return_value={"ok": True, "status": "installed"},
-                ),
+                ) as install_plugin,
                 mock.patch(
                     "robert_agent.cli.main.openclaw.restart_gateway",
                     return_value={"ok": True, "status": "restarted"},
@@ -311,6 +311,7 @@ class CliTests(unittest.TestCase):
                         "install",
                         "--plugin-dir",
                         plugin_dir,
+                        "--force",
                         "--output",
                         "json",
                     ]
@@ -318,6 +319,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         verify.assert_called_once_with(dry_run=False)
+        install_plugin.assert_called_once_with(plugin_dir, dry_run=False, force=True)
         result = json.loads(output.getvalue())
         self.assertTrue(result["ok"])
         self.assertEqual(result["status"], "installed")

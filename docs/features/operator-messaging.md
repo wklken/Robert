@@ -107,6 +107,8 @@ Robert service must share the same configuration/database and run on a trusted
 host. For a non-default Robert configuration, set the generated plugin's
 `robertConfig` option to the absolute configuration path. OpenClaw's plugin entry
 configuration is `plugins.entries.robert-openclaw.config.robertConfig`.
+`robertExecutable` optionally selects the local Robert executable; it defaults to
+`robert` on the gateway process PATH.
 
 Credentials remain in OpenClaw's own channel configuration. Do not put tokens in
 Robert configuration or messages. Validate Robert's configuration, then restart
@@ -195,6 +197,44 @@ contextual replies, quote that prompt and reply with your own text.
 Robert sends native command buttons through OpenClaw message presentation for
 Telegram, Discord and Slack. Telegram requires inline buttons on the configured
 account and destination. Reload the generated Robert plugin after upgrading.
+For WeCom Bot accounts, Robert sends the complete notification followed by a
+template card with full option labels, numbered buttons and a custom-answer button. Clicking
+a button uses the authenticated channel callback and the existing versioned
+response command, including sender, conversation and repository checks. Custom
+answers display the command bound to that question.
+
+For a display test, call the authenticated `robert.question.send` gateway method
+with `preview: true` and option labels in `presentation.blocks[0].buttons`.
+Preview buttons use independent test identifiers and do not require response
+commands or real notification IDs. The text and card are marked as a test;
+clicking any button, including the custom-answer button, only confirms the test
+click and never invokes the Robert business response command.
+
+The WeCom bridge is verified with OpenClaw `2026.10.3-t.8` and its bundled
+`wecom-openclaw-plugin`. The native card transport reads that channel’s internal
+connected Bot interface; it is a version-specific integration boundary. Without
+that connection it uses the channel’s normal text transport. The queue saves the
+body's message ID and delivery receipt before sending the card; quoted replies
+use that body ID. Card receipts and retry state are stored separately. A confirmed
+card rejection retries only the card under the existing attempt and time budgets.
+The body receipt binds the actual outbound `target` as well as the provider,
+channel, account, conversation and thread. Card retries require that destination
+to match the current configuration. Delivery and readiness exclude mismatched
+cards before the queue limit, so they cannot hold up new notices. The saved
+receipt remains intact; restoring the destination permits retries within the
+existing budgets. Older receipts without a saved target withhold card retries.
+When `ROBERT_NOTIFICATION_COMMAND` or an explicit notification command is active,
+delivery and readiness exclude saved cards before ordering and limiting candidates.
+Ordinary notification bodies keep the configured repository and `send_after` filters.
+Disabling the command restores native card retries under the existing destination
+and retry-budget checks.
+A timeout, missing acknowledgement or interrupted card send remains `unknown`
+and withholds automatic card retries until the remote effect can be reconciled.
+The delivered body stays answerable in all these cases. No second transport is
+tried after a card send.
+`robert openclaw install --force` replaces both generated files and the
+OpenClaw-managed installed copy before restarting the gateway.
+
 Other channels can use the displayed `/robert-respond <message-id> <version> pick <number>`
 or `reply` command. Older saved questions retain their text reply path.
 

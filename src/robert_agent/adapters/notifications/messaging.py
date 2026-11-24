@@ -250,9 +250,25 @@ def render_message(payload, *, contextual_replies=False):
     return "\n".join(lines)
 
 
-def send(payload, *, config=None, command=None, runner=subprocess.run, receipt=None, media_paths=()):
+def send(
+    payload,
+    *,
+    config=None,
+    command=None,
+    runner=subprocess.run,
+    receipt=None,
+    media_paths=(),
+    question_phase="text",
+    message_id=None,
+):
     command = command or os.environ.get("ROBERT_NOTIFICATION_COMMAND")
     presentation = None
+    transport_timeout = 30
+    question_rpc = False
+    if question_phase == "card" and receipt is not None:
+        receipt["card"] = {"status": "unknown"}
+    if question_phase == "card" and command:
+        return False
     if command:
         if media_paths:
             return False
@@ -284,7 +300,40 @@ def send(payload, *, config=None, command=None, runner=subprocess.run, receipt=N
             presentation = _choice_presentation(payload)
             if presentation:
                 argv += ["--presentation", json.dumps(presentation, ensure_ascii=False)]
-        kwargs = {"timeout": 30}
+        if payload.get("selectable_choices") and settings["channel"] == "wecom":
+            card = _choice_presentation(payload)
+            if card and not media_paths:
+                question_rpc = True
+                argv = [
+                    "openclaw",
+                    "gateway",
+                    "call",
+                    "robert.question.send",
+                    "--params",
+                    json.dumps(
+                        {
+                            "channel": "wecom",
+                            "account": settings["account"],
+                            "target": settings["target"],
+                            "thread": settings.get("thread", ""),
+                            "text": render_message(
+                                payload, contextual_replies=settings.get("contextual_replies", False)
+                            ),
+                            "presentation": card,
+                            "phase": question_phase,
+                            **({"messageId": message_id} if question_phase == "card" else {}),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "--json",
+                    "--timeout",
+                    "60000",
+                ]
+                # Each phase waits for its own acknowledgement within the CLI deadline.
+                transport_timeout = 90
+        if question_phase == "card" and not question_rpc:
+            return False
+        kwargs = {"timeout": transport_timeout}
     try:
         result = runner(argv, text=True, capture_output=True, check=False, **kwargs)
         if presentation and result.returncode and result.stderr.strip() == "error: unknown option '--presentation'":
@@ -299,6 +348,31 @@ def send(payload, *, config=None, command=None, runner=subprocess.run, receipt=N
             if not isinstance(response, dict) or response.get("ok") is False:
                 return False
             result_payload = response.get("payload", response)
+            if question_rpc:
+                if not isinstance(result_payload, dict) or result_payload.get("ok") is False:
+                    return False
+                remote_id = result_payload.get("messageId")
+                if not isinstance(remote_id, str) or not 0 < len(remote_id) <= 256:
+                    return False
+                if question_phase == "card" and remote_id != message_id:
+                    return False
+                card_receipt = {"status": "unknown"}
+                card = result_payload.get("card")
+                if isinstance(card, dict):
+                    card_status = card.get("status")
+                    allowed = {"failed", "unknown", "sent"} if question_phase == "card" else {"pending", "skipped"}
+                    if isinstance(card_status, str) and card_status in allowed:
+                        card_receipt = {"status": card_status}
+                        card_id = card.get("messageId")
+                        if card_status == "sent":
+                            if not isinstance(card_id, str) or not 0 < len(card_id) <= 256:
+                                card_receipt = {"status": "unknown"}
+                            else:
+                                card_receipt["message_id"] = card_id
+                if receipt is not None:
+                    receipt["card"] = card_receipt
+                if question_phase == "card":
+                    return card_receipt["status"] == "sent"
             if receipt is not None and isinstance(result_payload, dict):
                 message_id = result_payload.get("messageId")
                 if isinstance(message_id, str) and 0 < len(message_id) <= 256:

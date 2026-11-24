@@ -12,6 +12,157 @@ from tests.support.work_items import WorkItemCommandFixture
 
 
 class MessagingPersistenceTests(WorkItemCommandFixture):
+    def test_card_endpoint_filter_precedes_limit_and_readiness_without_hiding_inbox(self):
+        endpoint = {
+            "provider": "openclaw",
+            "channel": "wecom",
+            "account": "default",
+            "conversation": "wecom:operator",
+            "thread": "",
+            "target": "operator",
+        }
+        settings = {**endpoint, "enabled": True, "send_after": "2026-11-20T00:00:00Z"}
+        now = "2026-11-20T03:16:48Z"
+        with closing(database.connect(self.db_path)) as conn, conn:
+            notification_store.record_notification(
+                conn,
+                "card",
+                None,
+                "worker_stale",
+                "local",
+                "recorded",
+                "2026-11-20T03:00:00Z",
+                json.dumps({"delivery": {"status": "sent", "endpoint": endpoint, "card": {"status": "failed"}}}),
+            )
+            for field in (*endpoint, "enabled"):
+                changed = {**settings, field: False if field == "enabled" else "changed"}
+                with self.subTest(field=field):
+                    self.assertFalse(notifications.find_for_deliver_pending(conn, now, 1, messaging_settings=changed))
+                    self.assertFalse(
+                        notifications.has_pending_local_delivery_filtered(conn, None, now, messaging_settings=changed)
+                    )
+            notification_store.record_notification(
+                conn,
+                "legacy-card",
+                None,
+                "worker_stale",
+                "local",
+                "recorded",
+                "2026-11-20T03:01:00Z",
+                json.dumps(
+                    {
+                        "delivery": {
+                            "status": "sent",
+                            "endpoint": {k: v for k, v in endpoint.items() if k != "target"},
+                            "card": {"status": "failed"},
+                        }
+                    }
+                ),
+            )
+            self.assertEqual(
+                [row[0] for row in notifications.find_for_deliver_pending(conn, now, 1, messaging_settings=settings)],
+                ["card"],
+            )
+            changed = {**settings, "account": "another"}
+            self.assertFalse(
+                notifications.has_pending_local_delivery_filtered(conn, None, now, messaging_settings=changed)
+            )
+            notification_store.record_notification(
+                conn,
+                "body",
+                None,
+                "worker_stale",
+                "local",
+                "recorded",
+                "2026-11-20T03:02:00Z",
+                "{}",
+            )
+            self.assertEqual(
+                [row[0] for row in notifications.find_for_deliver_pending(conn, now, 1, messaging_settings=changed)],
+                ["body"],
+            )
+            self.assertEqual(
+                {row[0] for row in notifications.find_inbox(conn, messaging_repo_ids=None, messaging_settings=changed)},
+                {"card", "legacy-card", "body"},
+            )
+
+    def test_body_and_card_candidates_share_scope_filtering_and_queue_limit(self):
+        now = "2026-11-20T03:16:48Z"
+        endpoint = {
+            "provider": "openclaw",
+            "channel": "wecom",
+            "account": "default",
+            "conversation": "wecom:operator",
+            "thread": "",
+            "target": "operator",
+        }
+        settings = {**endpoint, "enabled": True, "send_after": "2026-11-20T00:00:00Z"}
+        with closing(database.connect(self.db_path)) as conn, conn:
+            for identifier, created, delivery in (
+                ("denied-card", "2026-11-20T03:00:00Z", {"status": "sent", "card": {"status": "pending"}}),
+                ("unknown-card", "2026-11-20T03:01:00Z", {"status": "sent", "card": {"status": "unknown"}}),
+                ("card", "2026-11-20T03:02:00Z", {"status": "sent", "card": {"status": "failed"}}),
+                ("body", "2026-11-20T03:03:00Z", {}),
+            ):
+                if delivery:
+                    delivery["endpoint"] = endpoint
+                notification_store.record_notification(
+                    conn,
+                    identifier,
+                    None,
+                    "worker_stale",
+                    "local",
+                    "recorded",
+                    created,
+                    json.dumps(
+                        {"delivery": delivery, "repo_id": "denied" if identifier == "denied-card" else "repo-1"}
+                    ),
+                )
+            self.assertEqual(
+                [
+                    row[0]
+                    for row in notifications.find_for_deliver_pending(
+                        conn,
+                        now,
+                        1,
+                        messaging_repo_ids={"repo-1"},
+                        messaging_settings=settings,
+                    )
+                ],
+                ["card"],
+            )
+            self.assertEqual(
+                [
+                    row[0]
+                    for row in notifications.find_for_deliver_pending(
+                        conn,
+                        now,
+                        2,
+                        messaging_repo_ids={"repo-1"},
+                        messaging_settings=settings,
+                    )
+                ],
+                ["card", "body"],
+            )
+            self.assertTrue(
+                notifications.has_pending_local_delivery_filtered(
+                    conn,
+                    None,
+                    now,
+                    messaging_repo_ids={"repo-1"},
+                    messaging_settings=settings,
+                )
+            )
+            self.assertFalse(
+                notifications.has_pending_local_delivery_filtered(
+                    conn,
+                    None,
+                    now,
+                    messaging_repo_ids=set(),
+                    messaging_settings=settings,
+                )
+            )
+
     def test_canceled_repair_is_filtered_before_queue_limit_and_readiness(self):
         item = self._create(start=True)["item"]
         now = "2026-11-20T03:16:48Z"
