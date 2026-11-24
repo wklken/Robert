@@ -157,7 +157,17 @@ def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info,
 
 
 def prepare_candidate_snapshot(
-    repo_root, worktree_root, artifact_root, round_id, repo, base_ref, base_sha, head_sha, event
+    repo_root,
+    worktree_root,
+    artifact_root,
+    round_id,
+    repo,
+    base_ref,
+    base_sha,
+    head_sha,
+    event,
+    *,
+    original_request=None,
 ):
     info = {
         "head": {"sha": head_sha},
@@ -171,15 +181,21 @@ def prepare_candidate_snapshot(
         round_id,
         info,
         [event],
+        original_request=original_request,
     )
 
 
-def _build_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, github_context):
+def _build_snapshot(
+    repo_root, worktree_root, artifact_root, round_id, pr_info, github_context, *, original_request=None
+):
     number = pr_info.get("number")
     head_sha = pr_info["head"]["sha"]
     base_sha, base_ref = pr_info["base"]["sha"], pr_info["base"]["ref"]
     merge_base = _git(repo_root, "merge-base", base_sha, head_sha).strip()
-    snapshot_id = _digest(json.dumps([round_id, number, head_sha, base_sha, base_ref, merge_base]))[:24]
+    identity = [round_id, number, head_sha, base_sha, base_ref, merge_base]
+    if original_request:
+        identity.append(original_request)
+    snapshot_id = _digest(json.dumps(identity))[:24]
     tree = worktree_root / "review" / (f"pr-{number}" if number else "candidate") / round_id / snapshot_id
     artifacts = artifact_root / round_id / snapshot_id
     context = artifacts / "context"
@@ -248,6 +264,7 @@ def _build_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, 
         "source_hashes": _source_hashes(tree),
         "files": {str(context / name): review_files.sha256_file(context / name) for name in CONTEXT_FILES},
         "frozen": False,
+        **({"original_request": original_request} if original_request else {}),
         **_trigger(github_context),
     }
     review_files.atomic_json(context / "manifest.json", manifest)

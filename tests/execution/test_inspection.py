@@ -46,3 +46,25 @@ class InspectionTests(TemporaryWorkspace):
         self.assertEqual(running["status"], "running")
         self.assertEqual(timed_out["status"], "failed_timeout")
         self.assertEqual(timed_out["timeout_seconds"], 60 * 60)
+
+    def test_pipeline_runtime_budget_preserves_original_heartbeat_timeout(self):
+        from robert_agent.execution import inspection
+
+        now = datetime(2026, 11, 24, tzinfo=timezone.utc)
+        plan = {
+            "timeout_seconds": 4200,
+            "implementer": {"timeout_seconds": 4200},
+            "workers": [{"timeout_seconds": 4200}],
+        }
+        for heartbeat_age, expected in ((0, "running"), (1200, "stale"), (4200, "failed_timeout")):
+            with self.subTest(heartbeat_age=heartbeat_age):
+                status = inspection.classify_attempt(
+                    now - timedelta(seconds=heartbeat_age),
+                    now - timedelta(seconds=5000),
+                    now=now,
+                    global_timeout_seconds=4200,
+                    hard_timeout_seconds=4200,
+                    pipeline_plan=plan,
+                )
+                self.assertEqual(status["status"], expected)
+                self.assertEqual(status["terminate"], expected == "failed_timeout")

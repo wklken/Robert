@@ -26,6 +26,150 @@ from tests.support.tapd_cycle import TAPD_CONFIG
 
 
 class PrePublicationReviewTests(ReviewCoordinatorFixture):
+    def test_invalid_handoff_repairs_only_the_artifact_and_reuses_implementation(self):
+        driver = self.start(["claude"])
+        launch = driver.launcher
+        repairs = []
+
+        def malformed_then_correct(**kwargs):
+            prompt = Path(kwargs["prompt_path"])
+            output = Path(kwargs["log_dir"])
+            if prompt.name.startswith("repair-handoff-"):
+                inputs = json.loads(
+                    Path(kwargs["trusted_environment"]["ROBERT_PRE_PR_HANDOFF_REPAIR_INPUT"]).read_text()
+                )
+                self.assertIn("unsupported", inputs["error"])
+                payload = json.loads(Path(inputs["handoff_path"]).read_text())
+                payload.pop("unexpected_program_field")
+                (output / "handoff.json").write_text(json.dumps(payload))
+                repairs.append(inputs)
+                return {"ok": True, "process_exited": True, "returncode": 0, "pid": 1073741824}
+            result = launch(**kwargs)
+            if "ROBERT_PRE_PR_CANDIDATE_DIR" in kwargs["trusted_environment"]:
+                path = output / "candidate.json"
+                payload = json.loads(path.read_text())
+                payload["unexpected_program_field"] = True
+                path.write_text(json.dumps(payload))
+            return result
+
+        driver.launcher = malformed_then_correct
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.launches["implement"], 1)
+        self.assertEqual(len(repairs), 1)
+
+    def test_one_targeted_repair_after_final_blocker_then_delivers(self):
+        driver = self.start(["claude"])
+        self.with_finding = True
+        launch = driver.launcher
+
+        def blocker_then_approved(**kwargs):
+            result = launch(**kwargs)
+            prompt = Path(kwargs["prompt_path"])
+            output = Path(kwargs["log_dir"])
+            if prompt.name.startswith("verify-final-") and self.launches["verify_final"] == 1:
+                payload = json.loads((output / "final-verification.json").read_text())
+                payload["recommendation"] = "blocked"
+                payload["blocking_findings"] = ["source.py still requires the scoped guard"]
+                (output / "final-verification.json").write_text(json.dumps(payload))
+            return result
+
+        driver.launcher = blocker_then_approved
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.launches["implement"], 1)
+        self.assertEqual(self.launches["address"], 2)
+        self.assertEqual(self.launches["verify_final"], 2)
+        with fixture_database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=driver.task_id)
+            self.assertEqual(entry["request"]["final_repair_count"], 1)
+            self.assertTrue(all(run["status"] != "running" for run in store.runs(conn, driver.round_id)))
+
+    def test_original_request_is_pinned_for_review_address_and_final_verification(self):
+        driver = self.start(["claude"])
+        original = Path(driver.request["prompt_path"])
+        original.write_text(original.read_text() + "\nOriginal acceptance: keep original error observable.\n")
+        driver.request["prompt_sha256"] = store.digest(original)
+        self.with_finding = True
+        seen = {}
+        launch = driver.launcher
+
+        def check_context(**kwargs):
+            prompt = Path(kwargs["prompt_path"])
+            if "ROBERT_PRE_PR_CANDIDATE_DIR" not in kwargs["trusted_environment"]:
+                text = prompt.read_text()
+                self.assertIn("original-request", text)
+                pinned = driver.manifest["original_request"]
+                self.assertIn(pinned["path"], text)
+                self.assertEqual(store.digest(pinned["path"]), pinned["sha256"])
+                self.assertIn("keep original error observable", Path(pinned["path"]).read_text())
+                seen[prompt.name.split("-")[0]] = True
+            return launch(**kwargs)
+
+        driver.launcher = check_context
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(set(seen), {"reviewer", "address", "verify"})
+
+    def test_unrelated_base_advance_preserves_completed_reviews_and_repairs(self):
+        driver = self.start(["claude"])
+        self.with_finding = True
+        launch = driver.launcher
+        changed = []
+
+        def advance_base(**kwargs):
+            result = launch(**kwargs)
+            if Path(kwargs["prompt_path"]).name.startswith("verify-final-") and not changed:
+                root = self.git_fixture.upstream
+                git(root, "checkout", "main")
+                (root / "docs").mkdir(exist_ok=True)
+                (root / "docs" / "unrelated.md").write_text("unrelated upstream documentation\n")
+                git(root, "add", "docs/unrelated.md")
+                git(root, "commit", "-m", "advance base independently")
+                changed.append(git(root, "rev-parse", "HEAD"))
+            return result
+
+        driver.launcher = advance_base
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.launches["reviewer-prompt.md"], 1)
+        self.assertEqual(self.launches["address"], 1)
+        self.assertEqual(self.launches["verify_final"], 1)
+        with fixture_database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=driver.task_id)
+            self.assertEqual(entry["proof"]["base_sha"], changed[0])
+            self.assertEqual(entry["proof"]["base_refresh"]["reviewed_base_sha"], driver.manifest["base_sha"])
+
+    def test_related_base_advance_re_reviews_and_preserves_repaired_commit(self):
+        driver = self.start(["claude"])
+        self.with_finding = True
+        launch = driver.launcher
+        changed = []
+
+        def advance_related_base(**kwargs):
+            result = launch(**kwargs)
+            if Path(kwargs["prompt_path"]).name.startswith("verify-final-") and not changed:
+                root = self.git_fixture.upstream
+                git(root, "checkout", "main")
+                (root / "consumer.py").write_text("from source import value\nbase_feature = True\n")
+                git(root, "add", "consumer.py")
+                git(root, "commit", "-m", "related upstream change")
+                changed.append(git(root, "rev-parse", "HEAD"))
+                self.with_finding = False
+            return result
+
+        driver.launcher = advance_related_base
+        result = driver.run()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.launches["implement"], 1)
+        self.assertEqual(self.launches["reviewer-prompt.md"], 2)
+        with fixture_database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=driver.task_id)
+            self.assertEqual(entry["request"]["base_refresh_count"], 1)
+            self.assertEqual(entry["manifest"]["base_sha"], changed[0])
+            self.assertIn("value = 4", Path(driver.assigned_path, "source.py").read_text())
+            self.assertIn("base_feature = True", Path(driver.assigned_path, "consumer.py").read_text())
+
     def start(self, workers, *, local=False, tapd=False, github_comment=False):
         config = yaml.safe_load(self.config_path.read_text())
         config["repos"][0]["routes"] = {"new-pr": {"pre_pr_review": {"workers": workers}}}
@@ -175,11 +319,12 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
             self.launches["address"] += 1
             if not self.fail_disposition:
                 report_sha = prompt.stem.removeprefix("address-").split("-")[0]
-                candidate_sha = git(tree, "rev-parse", "HEAD")
+                candidate_sha = json.loads((prompt.parent / "context" / "manifest.json").read_text())["head_sha"]
                 decisions = []
                 if self.with_finding:
-                    (tree / "source.py").write_text("value = 4\n")
-                    git(tree, "commit", "-am", "address finding")
+                    if (tree / "source.py").read_text() != "value = 4\n":
+                        (tree / "source.py").write_text("value = 4\n")
+                        git(tree, "commit", "-am", "address finding")
                     decisions = [
                         {"id": "F1", "status": "fixed", "reason": "Updated the value and verified its consumer."}
                     ]
@@ -750,11 +895,21 @@ class PrePublicationReviewTests(ReviewCoordinatorFixture):
         driver = self.start(["claude"])
         self.with_finding = True
         self.final_review_mode = mode
-        with patch.object(driver.stopping, "wait", return_value=False), self.assertRaises(RuntimeError):
-            driver.run()
+        if mode in {"blocked", "unknown", "blocking_approval"}:
+            with patch.object(driver.stopping, "wait", return_value=False):
+                result = driver.run()
+            self.assertTrue(result["ok"], result)
+            with fixture_database.connect(self.db) as conn:
+                self.assertEqual(store.session(conn, task_id=driver.task_id)["status"], "waiting_for_user")
+        else:
+            with patch.object(driver.stopping, "wait", return_value=False), self.assertRaises(RuntimeError):
+                driver.run()
         with fixture_database.connect(self.db) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM github_actions").fetchone()[0], 0)
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM github_actions WHERE action_type='open_pr'").fetchone()[0], 0
+            )
+            if mode not in {"blocked", "unknown", "blocking_approval"}:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM worker_results").fetchone()[0], 0)
         self.assertLessEqual(self.launches["verify_final"], 3)
 
     def test_wrong_sha_cannot_release_a_result(self):

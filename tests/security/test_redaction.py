@@ -5,6 +5,186 @@ from tests.support import TEST_ROOT
 
 
 class RedactionTests(unittest.TestCase):
+    def test_redacted_cookie_examples_are_safe_but_appended_values_still_block(self):
+        from robert_agent.security import redaction
+
+        for text in (
+            "响应头为 Set-Cookie: session=<redacted>; Path=/，普通字段回显会话值。",
+            "Cookie: session=<redacted>; other=<redacted>",
+            "Set-Cookie: <redacted>",
+            "Cookie: <redacted>",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(redaction.redact_text(text)["ok"])
+        for text in (
+            "Cookie: session=actual-session",
+            "Set-Cookie: session=actual-session; Path=/",
+            "Cookie: <redacted>; session=actual-session",
+            "Set-Cookie: session=<redacted>; other=actual-session",
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(redaction.redact_text(text)["ok"])
+
+    def test_complete_redacted_cookie_headers_preserve_formatting(self):
+        from robert_agent.security import redaction
+
+        for text in (
+            "Cookie: session=[redacted]; other=...",
+            "Set-Cookie: session=<REDACTED>; Path=/; Secure; HttpOnly; SameSite=Lax",
+            "响应头为 `Set-Cookie: session=<redacted>; Path=/`，普通字段回显会话值。",
+            'Example: "Cookie: session=<redacted>; other=<redacted>"',
+            "Cookie: session=\"<redacted>\"; other='[redacted]'",
+            "Cookie:\n  session=<redacted>;\n  other=<redacted>\nFinding remains visible.",
+            "Cookie: session=<redacted>;\nother=<redacted>",
+            "Set-Cookie:\r\n\tsession=<redacted>;\r\n\tPath=/; HttpOnly\r\n",
+            "```http\nCookie: session=<redacted>\nSet-Cookie: other=<redacted>; Path=/\n```",
+        ):
+            for strict in (False, True):
+                with self.subTest(text=text, strict=strict):
+                    result = redaction.redact_text(text, strict_assignments=strict)
+                    self.assertTrue(result["ok"], result)
+                    self.assertEqual(result["text"], text)
+
+    def test_cookie_placeholders_do_not_exempt_appended_or_malformed_values(self):
+        from robert_agent.security import redaction
+
+        for text in (
+            "Cookie: session=<redacted>actual-session",
+            "Cookie: session=<redacted>; other=短密钥",
+            "Cookie: session=<redacted>; other=x",
+            "Cookie: session=<redacted>, other=actual-session",
+            "Cookie: session=<redacted>，other=actual-session",
+            "Cookie: session=<redacted>，会话=真实密钥",
+            "Cookie: session=<redacted>，actual-session",
+            "Cookie: session=<redacted>，会话值 actual-session",
+            "Cookie: session=<redacted> actual-session",
+            "Cookie: session=<redacted>普通字段",
+            "Cookie: session=<redacted>; Path=/",
+            "Set-Cookie: Path=/; session=<redacted>",
+            "Set-Cookie: session=<redacted>; Path=/actual-session",
+            "Set-Cookie: session=<redacted>; SameSite=actual-session",
+            "Set-Cookie: session=<redacted>; Secure=actual-session",
+            "Set-Cookie: session=<redacted>; Domain=actual-session",
+            "Set-Cookie: session=<redacted>; actual-session",
+            "Cookie: session=<redacted>;\n  other=actual-session",
+            "Cookie: session=<redacted>;\nother=actual-session",
+            "Cookie:\n  session=actual-session",
+            "Cookie: <redacted>\n  session=actual-session",
+            "Cookie: session=<redacted>\nCookie: other=actual-session",
+            "Set-Cookie: session=<redacted>; Path=/\nSet-Cookie: other=actual-session",
+            "Cookie: session=<redacted>`; other=actual-session",
+            'Example: "Cookie: session=<redacted>"; other=actual-session',
+            "Cookie:",
+        ):
+            with self.subTest(text=text):
+                result = redaction.redact_text(text)
+                self.assertFalse(result["ok"], result)
+                self.assertEqual(result["status"], "blocked_secret")
+                self.assertNotIn("actual-session", str(result))
+                self.assertFalse(redaction.redact_and_truncate(text, 1)["ok"])
+
+    def test_safe_cookie_headers_do_not_mask_other_secret_patterns(self):
+        from robert_agent.security import redaction
+
+        for secret in (
+            "Authorization: Bearer private-value",
+            "https://alice:private-value@example.org/path",
+            '"apiKey": "private-value"',
+            "ghp_" + "a" * 20,
+        ):
+            with self.subTest(kind=secret.split(":")[0]):
+                text = "Set-Cookie: session=<redacted>; Path=/\n" + secret
+                result = redaction.redact_text(text)
+                self.assertFalse(result["ok"], result)
+                self.assertNotIn(secret, str(result))
+
+    def test_public_report_redaction_removes_credentials_and_preserves_findings(self):
+        from robert_agent.security import redaction
+
+        for ending in ("\n", "\r\n"):
+            text = ending.join(
+                (
+                    "Finding: request handling skips validation.",
+                    "Cookie: session=actual-session; other=<redacted>",
+                    "Evidence: tests/security/test_redaction.py:12",
+                    'Payload: {"apiKey": "private-value", "cache_key": "normal-value"}',
+                    "Remedy: validate every cookie value.",
+                    "password=x",
+                    "Set-Cookie: session=<redacted>; Path=/",
+                )
+            )
+            expected = ending.join(
+                (
+                    "Finding: request handling skips validation.",
+                    "[redacted sensitive report line]",
+                    "Evidence: tests/security/test_redaction.py:12",
+                    "[redacted sensitive report line]",
+                    "Remedy: validate every cookie value.",
+                    "[redacted sensitive report line]",
+                    "Set-Cookie: session=<redacted>; Path=/",
+                )
+            )
+            with self.subTest(ending=ending):
+                self.assertFalse(redaction.redact_text(text)["ok"])
+                result = redaction.redact_report(text)
+                self.assertTrue(result["ok"], result)
+                self.assertEqual(result["text"], expected)
+                for secret in ("actual-session", "private-value", "password=x"):
+                    self.assertNotIn(secret, str(result))
+                self.assertTrue(redaction.redact_text(result["text"], strict_assignments=True)["ok"])
+                self.assertEqual(redaction.redact_report(text), result)
+                self.assertEqual(redaction.redact_report(result["text"])["text"], expected)
+
+    def test_public_report_redaction_removes_complete_wrapped_secret_spans(self):
+        from robert_agent.security import redaction
+
+        for secret in (
+            "Cookie:\n  session=actual-session;\n  other=<redacted>",
+            "Cookie:\nactual-session",
+            "Cookie: session=<redacted>;\nother=actual-session",
+            "Cookie: session=<redacted>;\n; other=actual-session",
+            "Authorization: Bearer\n  private-value",
+            "Authorization:\n  Bearer private-value",
+            "password:\n  private-value",
+            "-----BEGIN RSA PRIVATE KEY-----\nYWJjZGVm\nYWJjZGVm\n-----END RSA PRIVATE KEY-----",
+        ):
+            with self.subTest(kind=secret.split(":")[0]):
+                text = "Finding before.\n" + secret + "\nFinding after.\n"
+                self.assertFalse(redaction.redact_text(text)["ok"])
+                result = redaction.redact_report(text)
+                self.assertTrue(result["ok"], result)
+                self.assertEqual(
+                    result["text"],
+                    "Finding before.\n"
+                    + "[redacted sensitive report line]\n" * len(secret.splitlines())
+                    + "Finding after.\n",
+                )
+                self.assertNotIn("actual-session", str(result))
+                self.assertNotIn("YWJjZGVm", str(result))
+
+        text = "Finding before.\n-----BEGIN PRIVATE KEY-----\nYWJjZGVm\ntruncated-key-body"
+        result = redaction.redact_report(text)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            result["text"],
+            "Finding before.\n[redacted sensitive report line]\n[redacted sensitive report line]\n"
+            "[redacted sensitive report line]",
+        )
+
+    def test_public_report_redaction_applies_remaining_redaction_to_safe_copy(self):
+        from robert_agent.security import redaction
+
+        text = "Finding: /home/sample/project at 10.0.0.12\nAuthorization: Bearer private-value\npassword=secret"
+        result = redaction.redact_report(text)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            result["text"],
+            "Finding: <local-path> at <internal-ip>\n[redacted sensitive report line]\npassword=<redacted>",
+        )
+        self.assertNotIn("private-value", str(result))
+        self.assertFalse(redaction.redact_text(text)["ok"])
+        self.assertEqual(redaction.redact_report("Finding: no credentials.")["text"], "Finding: no credentials.")
+
     def test_url_userinfo_is_blocked_without_returning_credentials(self):
         from robert_agent.security import redaction
 

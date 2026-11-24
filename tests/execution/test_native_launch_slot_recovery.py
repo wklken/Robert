@@ -49,7 +49,7 @@ class NativeLaunchSlotRecoveryTests(unittest.TestCase):
         run = self.new_run(driver)
         driver.launcher = lambda **kwargs: dict(FAILED_WITHOUT_PROCESS)
         launched = driver.launch_with_slot(run, driver.request["workers"][0], driver.manifest["prompt_path"], {})
-        self.assertEqual(launched, FAILED_WITHOUT_PROCESS)
+        self.assertEqual(launched, {**FAILED_WITHOUT_PROCESS, "prompt_path": driver.manifest["prompt_path"]})
         with fixture_database.connect(driver.db_path) as conn:
             self.assertEqual(driver.store.process_pool_status(conn), {"limit": 1, "in_use": 1})
         # Crash after launch outcome commits, before run_phase's release_slot.
@@ -75,7 +75,9 @@ class NativeLaunchSlotRecoveryTests(unittest.TestCase):
         with fixture_database.connect(driver.db_path) as conn:
             current = next(row for row in driver.store.runs(conn, driver.round_id) if row["run_id"] == run["run_id"])
             self.assertEqual(current["status"], "failed")
-            self.assertEqual(current["dispatch"], FAILED_WITHOUT_PROCESS)
+            self.assertEqual(
+                current["dispatch"], {**FAILED_WITHOUT_PROCESS, "prompt_path": driver.manifest["prompt_path"]}
+            )
             self.assertFalse(current["slot_reserved"])
             self.assertEqual(driver.store.process_pool_status(conn), {"limit": 1, "in_use": 0})
         waiting = self.new_run(driver)

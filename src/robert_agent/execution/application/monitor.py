@@ -35,6 +35,7 @@ from robert_agent.execution import spool as result_spool
 from robert_agent.foundation import values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.execution import rounds as native_rounds
+from robert_agent.persistence.rounds import pre_pr_review
 import json
 import subprocess
 
@@ -173,6 +174,12 @@ def supervise_running_attempts(
             worker_timeout_seconds = None
         if worker_timeout_seconds is not None and worker_timeout_seconds < 1:
             worker_timeout_seconds = None
+        pipeline_session = (
+            pre_pr_review.session(conn, task_id=task_id)
+            if (metadata.get("dispatch") or {}).get("model_coordinator") is True
+            else None
+        )
+        pipeline_plan = pipeline_session["request"].get("plan") if pipeline_session else None
         if rejection:
             status = {**rejection, "ok": False, "terminate": True}
         else:
@@ -183,6 +190,7 @@ def supervise_running_attempts(
                 heartbeat_stale_seconds=config_result.get("heartbeat_stale_seconds", 1200),
                 global_timeout_seconds=config_result.get("hard_timeout_seconds", 3600),
                 hard_timeout_seconds=worker_timeout_seconds,
+                pipeline_plan=pipeline_plan,
             )
         process_status = {"status": "not_checked"}
         if attempt_status in {AttemptStatus.RUNNING, AttemptStatus.STALE, AttemptStatus.COMPLETED} and status[

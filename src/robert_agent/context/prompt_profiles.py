@@ -28,6 +28,7 @@ STAGES = {
     "review.prepare": StageProfile("atomic-files", ("review_context",), boundary="review"),
     "review.evaluate": StageProfile("atomic-files", ("review_result",), boundary="review"),
     "review.verify_final": StageProfile("atomic-files", ("final_review",), boundary="review"),
+    "review.repair_handoff": StageProfile("atomic-files", ("repaired_handoff",), boundary="review"),
     "review.address_findings": StageProfile("atomic-files", ("review_dispositions",), guidance=("receipt-summary",)),
     "review.synthesize": StageProfile(
         "atomic-files", ("review_evaluation",), boundary="review", guidance=("receipt-summary",)

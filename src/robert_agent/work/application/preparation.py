@@ -14,6 +14,7 @@ from robert_agent.persistence import transactions as db_transactions
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import attempts as db_read_attempts
+from robert_agent.persistence.queries import artifacts as db_read_artifacts
 from robert_agent.persistence.queries import repos as db_read_repos
 from robert_agent.persistence.queries import route_decisions as db_read_route_decisions
 from robert_agent.persistence.queries import task_events as db_read_task_events
@@ -342,6 +343,66 @@ def _refresh_prepared_task_locked(
     return prompt_path
 
 
+def pre_pr_retrigger_context(conn, previous_review, related_events):
+    """Recover the exact prepared inputs, allowing only derived event decoration."""
+    if not previous_review or previous_review["final_result_id"] or not previous_review["manifest"].get("candidate"):
+        return None
+    previous = previous_review["request"]
+    artifact = db_records.first(
+        db_read_artifacts.load_artifact_preview(conn, previous_review["task_id"], "github_context_json", None, None)
+    )
+    if not artifact:
+        return None
+    try:
+        frozen = json.loads(Path(artifact[1]).read_text(encoding="utf-8"))["events"]
+        if hashlib.sha256(json.dumps(frozen, sort_keys=True).encode()).hexdigest() != previous["input_sha256"]:
+            return None
+        current = _prompt_events(previous["event"], related_events)
+        by_fingerprint = {item["event_fingerprint"]: item for item in current}
+        if len(by_fingerprint) != len(current) or len(current) != len(frozen):
+            return None
+        restored = []
+        # These fields are preparation/authorization results, never source content.
+        decoration = {"authorization_status", "creates_task", "drives_execution", "branch_slug"}
+        for original in frozen:
+            observed = by_fingerprint.pop(original["event_fingerprint"])
+            if {key: value for key, value in observed.items() if key not in decoration} != {
+                key: value for key, value in original.items() if key not in decoration
+            }:
+                return None
+            restored.append(
+                {
+                    **{key: value for key, value in observed.items() if key not in decoration},
+                    **{key: original[key] for key in decoration if key in original},
+                }
+            )
+        if (
+            by_fingerprint
+            or hashlib.sha256(json.dumps(restored, sort_keys=True).encode()).hexdigest() != previous["input_sha256"]
+        ):
+            return None
+        if not any(item == previous["event"] for item in restored):
+            return None
+        return previous["event"], restored
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def prepare_pre_pr_retrigger_worktree(repo, previous_review, event, route_result, dry_run):
+    """Resolve the saved branch through the normal registered-worktree guards."""
+    branch = previous_review["request"]["branch"]
+    prefix = f"codex/dd-{assigned_workspace.source_reference(event)}-"
+    if route_result.get("workspace_mode") != "new_branch" or not branch or not branch.startswith(prefix):
+        return {"ok": False, "status": "blocked_changed_branch"}
+    worktree_event = {**event, "branch_slug": branch.removeprefix(prefix)}
+    planned = assigned_workspace.prepare_worktree(repo, worktree_event, route_result, True)
+    if not planned or not planned.get("ok", True):
+        return planned
+    if planned.get("branch_name") != branch or planned.get("mode") != "reuse_existing_worktree":
+        return {**planned, "ok": False, "status": "blocked_unregistered_worktree"}
+    return planned if dry_run else assigned_workspace.prepare_worktree(repo, worktree_event, route_result, False)
+
+
 def bind_pre_pr_review(
     conn, repo, event, related_events, plan, task_id, attempt_id, prompt_path, worktree_result, *, previous_review=None
 ):
@@ -372,6 +433,7 @@ def bind_pre_pr_review(
             raise ValueError("operator reply cannot change the original review scope")
         if (
             previous_review
+            and not (worktree_result and not worktree_result.get("ok", True))
             and (not previous_review["final_result_id"] or reply_continuation)
             and previous_review["manifest"].get("candidate")
             and all(request[key] == previous.get(key) for key in ("repo", "branch"))
@@ -846,6 +908,59 @@ def create_resume_attempt_and_prompt(
     events = _events_for_task(conn, task_id)
     if not route_result or not events:
         return None
+    deadline_round_id = None
+    if recovery_context.get("reason_code") == "pre_pr_review_deadline":
+        from robert_agent.adapters.processes import attempt as attempt_process
+        from robert_agent.execution.application import evidence as recovery_evidence
+        from robert_agent.persistence import execution_control
+
+        # The monitor already consumed the one-shot grant in this writer.
+        # An old grant or a caller-supplied reason is not renewal authority.
+        binding = execution_control.get_binding(conn, "task", task_id)
+        latest = db_records.first(db_read_attempts.find_for_latest_attempt_for_task(conn, task_id))
+        owner = db_records.first(db_read_workstreams.find_active_task_id_by_workstream_id(conn, workstream_id))
+        if (
+            not conn.in_transaction
+            or not binding
+            or binding["binding_status"] != "active"
+            or binding["recovery_attempts"] != 1
+            or binding["updated_at"] != run_now
+            or recovery_context.get("status") != "recoverable_progress"
+            or recovery_context.get("task_id") != task_id
+            or recovery_context.get("previous_attempt_id") != previous_attempt_id
+            or not latest
+            or latest["attempt_id"] != previous_attempt_id
+            or latest["status"] not in {AttemptStatus.RUNNING, AttemptStatus.STALE, AttemptStatus.FAILED}
+            or (owner and owner[0] not in {None, task_id})
+        ):
+            return None
+        with task_publication_lock(db_path, f"pre-pr-coordinator:{task_id}") as locked:
+            if not locked:
+                return None
+            # Read process/checkpoint evidence outside the caller's writer;
+            # retain the consumed grant and recheck the complete native snapshot.
+            with pre_pr_review.connect(db_path) as observed_conn:
+                verified = recovery_evidence.inspect_attempt_recovery(
+                    observed_conn, previous_attempt_id, task_id, worktree_path
+                )
+                observation = native_rounds.observe_exit(observed_conn, task_id)
+            if (
+                verified.get("status") != "recoverable_progress"
+                or verified.get("reason_code") != "pre_pr_review_deadline"
+                or verified.get("round_id") != recovery_context.get("round_id")
+                or not observation["all_stopped"]
+                or not native_rounds.exit_observation_current(conn, task_id, observation)
+            ):
+                return None
+            for prior in db_read_attempts.find_record_by_task_id(conn, task_id):
+                metadata = values.json_object(prior["metadata_json"])
+                dispatch = metadata.get("dispatch")
+                if dispatch or prior["status"] in {AttemptStatus.RUNNING, AttemptStatus.STALE}:
+                    if not isinstance(dispatch, dict) or dispatch.get("cleanup_pending"):
+                        return None
+                    if attempt_process.dispatch_status(metadata)["status"] != "dead":
+                        return None
+            deadline_round_id = verified["round_id"]
     trigger = work_queries.task_events(conn, task_id)
     events = _prompt_events(trigger[0] if trigger else events[0], events)
 
@@ -951,6 +1066,10 @@ def create_resume_attempt_and_prompt(
         run_now,
         json.dumps(attempt_metadata, ensure_ascii=False, sort_keys=True),
     )
+    if deadline_round_id:
+        # Atomic with the new attempt's saved resume binding. Keep all stage,
+        # repair and final-verification counters and sealed evidence unchanged.
+        pre_pr_review.update(conn, deadline_round_id, deadline_at=None)
     for artifact_type, path in [
         ("recovery_context", recovery_path),
         ("prompt", prompt_path),

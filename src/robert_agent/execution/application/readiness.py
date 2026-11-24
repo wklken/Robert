@@ -15,6 +15,7 @@ from robert_agent.persistence.queries import github_actions as db_read_github_ac
 from robert_agent.persistence.queries import scheduling
 from robert_agent.persistence.queries import worker_phases as db_read_worker_phases
 from robert_agent.persistence.queries import worker_results as db_read_worker_results
+from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.work import repositories as work_repositories
 from robert_agent.supervision import decisions as supervision_decisions
 from robert_agent.work import wakeup
@@ -43,6 +44,12 @@ def _supervision_transition_due(conn, repo_ids, config, now):
             timeout = None
         if timeout is not None and timeout < 1:
             timeout = None
+        pipeline_session = (
+            pre_pr_review.session(conn, task_id=task_id)
+            if (metadata.get("dispatch") or {}).get("model_coordinator") is True
+            else None
+        )
+        pipeline_plan = pipeline_session["request"].get("plan") if pipeline_session else None
         status = supervise.classify_attempt(
             heartbeat_at,
             started_at,
@@ -50,6 +57,7 @@ def _supervision_transition_due(conn, repo_ids, config, now):
             heartbeat_stale_seconds=config.get("heartbeat_stale_seconds", 1200),
             global_timeout_seconds=config.get("hard_timeout_seconds", 3600),
             hard_timeout_seconds=timeout,
+            pipeline_plan=pipeline_plan,
         )
         process = attempt_process.dispatch_status(metadata)
         if (

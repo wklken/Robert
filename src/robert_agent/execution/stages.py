@@ -404,6 +404,7 @@ class StageCoordinator:
                             log_dir=run["output_dir"],
                             dry_run=False,
                         )
+                        launched = {**launched, "prompt_path": str(prompt_path)}
                         # Retain our Popen even when another thread's dispatch
                         # reaps the shared registry before this waiter polls it.
                         process = dispatch.tracked_process(launched.get("pid"))
@@ -502,7 +503,9 @@ class StageCoordinator:
 
     def _wait(self, run, launched, timeout):
         store = self.store
-        started = datetime.fromisoformat(run.get("started_at") or run["created_at"])
+        with store.connect(self.db_path) as conn:
+            current = next(item for item in store.runs(conn, self.round_id) if item["run_id"] == run["run_id"])
+        started = datetime.fromisoformat(current.get("started_at") or current["created_at"])
         while not launched.get("process_exited"):
             self.check_active()
             proc = self.processes.get(launched.get("pid")) or dispatch.tracked_process(launched.get("pid"))
@@ -545,8 +548,15 @@ class StageCoordinator:
     def phase_input_changed(self, stage):
         return stage == "synthesis" or (stage == "prepare" and not self.manifest.get("frozen"))
 
+    def preserve_phase_artifact(self, run):
+        """Workflow hook for immutable successes referenced by later stage evidence."""
+        return False
+
     def check_launch_budget(self, stage, prompt_hash, previous):
         """Workflow hook for a durable limit on stage launches."""
+
+    def validate_output(self, run, validate, model):
+        return validate(self.sealed_output(run), model)
 
     def run_phase(self, stage, worker, prompt_path, validate, *, input_hash=None):
         """Adopt a complete unregistered file, or run only this failed stage."""
@@ -568,7 +578,10 @@ class StageCoordinator:
                 continue
             if run["prompt_sha256"] != prompt_hash:
                 if self.phase_input_changed(stage):
-                    if run["status"] in {ModelRunStatus.RUNNING, ModelRunStatus.SUCCEEDED}:
+                    if run["status"] in {
+                        ModelRunStatus.RUNNING,
+                        ModelRunStatus.SUCCEEDED,
+                    } and not self.preserve_phase_artifact(run):
                         with store.connect(self.db_path) as conn:
                             store.update_run(
                                 conn,
@@ -586,7 +599,7 @@ class StageCoordinator:
                 if run["status"] == ModelRunStatus.RUNNING:
                     self._wait(run, run["dispatch"], worker["timeout_seconds"])
                 model = run["model"] or worker["default_model"]
-                artifact = validate(self.sealed_output(run), model)
+                artifact = self.validate_output(run, validate, model)
                 artifact["model"] = model
                 if input_hash:
                     artifact["input_sha256"] = input_hash
@@ -652,7 +665,7 @@ class StageCoordinator:
             if store.digest(prompt_path) != prompt_hash:
                 raise ValueError("model changed prompt file")
             self.workspace.verify_snapshot(self.manifest)
-            artifact = validate(self.sealed_output(run), model)
+            artifact = self.validate_output(run, validate, model)
             artifact["model"] = model
             if input_hash:
                 artifact["input_sha256"] = input_hash

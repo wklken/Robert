@@ -187,7 +187,9 @@ class PrePrReviewRun(Base):
     updated_at: Mapped[str] = mapped_column(Text)
 
     __table_args__ = (
-        CheckConstraint("stage IN ('implement','prepare','review','synthesis','address_findings','verify_final')"),
+        CheckConstraint(
+            "stage IN ('implement','prepare','review','synthesis','address_findings','verify_final','repair_handoff')"
+        ),
         UniqueConstraint("round_id", "stage", "worker_id", "attempt_no"),
         Index("pre_pr_review_runs_reserved", "slot_reserved", sqlite_where=text("slot_reserved=1")),
     )

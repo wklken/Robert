@@ -45,6 +45,23 @@ def session(conn, *, round_id=None, task_id=None):
         else None
     )
     entry["manifest"] = json.loads(row[0]) if row else {}
+    feedbacks = (
+        entry["request"].get("final_feedback"),
+        entry["proof"].get("decision", {}).get("final_feedback"),
+        entry["request"].get("operator_reply", {}).get("decision", {}).get("final_feedback"),
+    )
+    feedback_ids = {
+        feedback.get(field)
+        for feedback in feedbacks
+        if isinstance(feedback, dict)
+        for field in ("source_run_id", "verification_run_id")
+        if isinstance(feedback.get(field), str)
+    }
+    entry["feedback_runs"] = feedback_runs(conn, entry["round_id"], feedback_ids)
+    reply_binding = entry["request"].get("operator_reply", {}).get("decision")
+    entry["reply_context_checkpoint"] = None
+    if isinstance(reply_binding, dict) and reply_binding.get("snapshot_id") != entry["snapshot_id"]:
+        entry["reply_context_checkpoint"] = reply_context_checkpoint(conn, entry["round_id"], reply_binding)
     verification = entry["proof"].get("final_verification")
     entry["final_verification_run"] = None
     if isinstance(verification, dict) and verification.get("run_id"):
@@ -178,6 +195,74 @@ def runs(conn, round_id):
     return [review.decode(dict(row)) for row in rows]
 
 
+def feedback_runs(conn, round_id, run_ids):
+    """Read only the registered source runs named by a final feedback binding."""
+    if not run_ids:
+        return {}
+    rows = statements.read(conn, select(RUN).where(RUN.c.round_id == round_id, RUN.c.run_id.in_(run_ids)))
+    return {row["run_id"]: review.decode(dict(row)) for row in rows}
+
+
+def validate_final_feedback(entry, feedback):
+    """Validate feedback bytes and their registered reviewer/address provenance."""
+    error = "Final review feedback changed or has no registered source."
+    try:
+        identity = {
+            "round_id": entry["round_id"],
+            "snapshot_id": entry["snapshot_id"],
+            "candidate_sha": entry["manifest"]["head_sha"],
+            "report_sha256": entry["report_sha256"],
+            "final_sha": feedback["final_sha"],
+            "dispositions_sha256": feedback["dispositions_sha256"],
+        }
+        if any(feedback.get(key) != expected for key, expected in identity.items()):
+            raise ValueError(error)
+        registered = entry["feedback_runs"]
+        verifier = registered[feedback["verification_run_id"]]
+        source = registered[feedback["source_run_id"]]
+        if (
+            any(
+                run["round_id"] != entry["round_id"]
+                or run["status"] != ModelRunStatus.SUCCEEDED
+                or run["slot_reserved"]
+                for run in (verifier, source)
+            )
+            or verifier["stage"] != "verify_final"
+            or source["stage"] != "address_findings"
+        ):
+            raise ValueError(error)
+        artifact = verifier["artifact"]
+        if (
+            not feedback["verification_input_sha256"]
+            or artifact.get("input_sha256") != feedback["verification_input_sha256"]
+            or any(artifact.get(key) != expected for key, expected in identity.items())
+            or artifact.get("final_verification_path") != feedback["verification_path"]
+            or artifact.get("final_verification_sha256") != feedback["verification_sha256"]
+            or source["artifact"].get("head") != feedback["final_sha"]
+            or source["artifact"].get("dispositions_path") != feedback["dispositions_path"]
+            or source["artifact"].get("dispositions_sha256") != feedback["dispositions_sha256"]
+        ):
+            raise ValueError(error)
+        values = {}
+        for name in ("verification", "dispositions"):
+            raw = Path(feedback[name + "_path"]).read_bytes()
+            if hashlib.sha256(raw).hexdigest() != feedback[name + "_sha256"]:
+                raise ValueError(error)
+            values[name] = json.loads(raw)
+        if (
+            any(values["verification"].get(key) != expected for key, expected in identity.items())
+            or values["verification"].get("additional_diff_sha256") != artifact.get("additional_diff_sha256")
+            or any(
+                values["dispositions"].get(key) != identity[key]
+                for key in ("candidate_sha", "final_sha", "report_sha256")
+            )
+        ):
+            raise ValueError(error)
+        return values["verification"]
+    except (KeyError, TypeError, AttributeError, OSError, ValueError) as exc:
+        raise ValueError(error) from exc
+
+
 def new_run(conn, round_id, stage, worker_id, owner_attempt_id, root, prompt_sha256, model=None):
     attempt = (
         statements.read(
@@ -266,7 +351,7 @@ def bind_result(conn, round_id, result_id):
 
 def _matches_final_verification(entry, result_id=None):
     proof = entry["proof"]
-    if proof.get("candidate_sha") == proof.get("head_sha"):
+    if proof.get("candidate_sha") == proof.get("head_sha") and not proof.get("finding_ids"):
         return not entry.get("legacy_result_binding")
     verification = proof.get("final_verification")
     run = entry.get("final_verification_run")
@@ -339,6 +424,69 @@ def validate_reply_checkpoint(entry, binding):
         or digest(binding["dispositions_path"]) != binding["dispositions_sha256"]
     ):
         raise ValueError("The review checkpoint changed. Refresh before replying.")
+    if "final_feedback" in binding:
+        feedback = binding["final_feedback"]
+        validate_final_feedback(entry, feedback)
+        if any(
+            feedback.get(key) != binding[key]
+            for key in (
+                "round_id",
+                "snapshot_id",
+                "candidate_sha",
+                "report_sha256",
+                "dispositions_path",
+                "dispositions_sha256",
+            )
+        ):
+            raise ValueError("The final review question changed. Refresh before replying.")
+
+
+def reply_context_checkpoint(conn, round_id, binding):
+    """Load a same-round historical snapshot and its registered report."""
+    snapshot = records.first(
+        statements.read(
+            conn,
+            select(SNAPSHOT).where(
+                SNAPSHOT.c.round_id == round_id, SNAPSHOT.c.snapshot_id == binding.get("snapshot_id")
+            ),
+        )
+    )
+    artifact = tables["artifacts"]
+    report = records.first(
+        statements.read(
+            conn,
+            select(artifact.c.path, artifact.c.sha256).where(
+                artifact.c.artifact_id == f"{round_id}:{binding.get('report_sha256')}",
+                artifact.c.artifact_type == "pre_pr_review_report",
+                artifact.c.sha256 == binding.get("report_sha256"),
+            ),
+        )
+    )
+    if not snapshot or not report:
+        return None
+    return {
+        "round_id": snapshot["round_id"],
+        "snapshot_id": snapshot["snapshot_id"],
+        "manifest": json.loads(snapshot["manifest_json"]),
+        "report_path": report["path"],
+        "report_sha256": report["sha256"],
+    }
+
+
+def validate_reply_context(entry, binding):
+    """Restore only an already accepted reply as context, never stale question authority."""
+    reply = entry["request"].get("operator_reply")
+    if not isinstance(reply, dict) or reply.get("decision") != binding or not isinstance(binding, dict):
+        raise ValueError("The reply is not bound to the authenticated review request.")
+    if binding.get("snapshot_id") == entry["snapshot_id"]:
+        validate_reply_checkpoint(entry, binding)
+        return
+    historical = entry.get("reply_context_checkpoint")
+    if not historical or historical["round_id"] != entry["round_id"]:
+        raise ValueError("The historical review context is missing. Refresh before continuing.")
+    # The snapshot/report identities are historical; run metadata and file
+    # bytes still come from current registered evidence and must remain intact.
+    validate_reply_checkpoint({**entry, **historical}, binding)
 
 
 def accept_reply(conn, entry, binding, body):
@@ -349,6 +497,8 @@ def accept_reply(conn, entry, binding, body):
         raise ValueError("The review question changed. Refresh before replying.")
     validate_reply_checkpoint(entry, binding)
     request = {**entry["request"], "operator_reply": {"body": body, "decision": expected, "scope": proof["scope"]}}
+    if "final_feedback" in expected:
+        request["final_feedback"] = expected["final_feedback"]
     update(conn, entry["round_id"], request_json=json.dumps(request, sort_keys=True))
 
 

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from pathlib import Path
 
 from robert_agent.adapters.git.review_revision import clean_head, git
 from robert_agent.context.native_prompts import final_review_input
@@ -10,9 +11,15 @@ from robert_agent.execution.stages import StageStopped, StageSuperseded
 from robert_agent.persistence.rounds import pre_pr_review as store
 
 
+class FinalReviewBlocked(StageStopped):
+    def __init__(self, artifact, value, disposition):
+        super().__init__("final review has blocking or unknown findings")
+        self.artifact, self.value, self.disposition = artifact, value, disposition
+
+
 def verify(coordinator, report, report_sha, finding_ids, disposition):
     head, final = coordinator.manifest["head_sha"], disposition["head"]
-    if head == final:
+    if head == final and not finding_ids:
         return None
     coordinator.stage = "verify_final"
     coordinator.phase(coordinator.stage)
@@ -38,6 +45,10 @@ def verify(coordinator, report, report_sha, finding_ids, disposition):
         "dispositions_path": disposition["dispositions_path"],
         "additional_diff_path": str(diff),
         "worktree_path": str(tree),
+        "original_request": coordinator.original_request,
+        "decision_owner": coordinator.scope.get("decision_owner"),
+        "operator_reply": coordinator.request.get("operator_reply"),
+        "dispositions": json.loads(Path(disposition["dispositions_path"]).read_text(encoding="utf-8"))["dispositions"],
     }
     input_text = json.dumps(inputs, sort_keys=True, indent=2)
     key = hashlib.sha256(input_text.encode()).hexdigest()
@@ -77,12 +88,29 @@ def verify(coordinator, report, report_sha, finding_ids, disposition):
             raise ValueError("final review requires reasoned finding evidence")
         if len(checked) != len(finding_ids) or {item["id"] for item in checked} != set(finding_ids):
             raise StageStopped("final review omitted or duplicated prior findings")
-        if (
-            value.get("recommendation") != "approved"
-            or value.get("blocking_findings") != []
-            or any(item.get("status") not in {"resolved", "dismissed"} for item in checked)
+        if value.get("recommendation") not in {"approved", "blocked", "unknown"}:
+            raise ValueError("unsupported final review recommendation")
+        if not isinstance(value.get("blocking_findings"), list) or any(
+            not isinstance(item, str) or not item.strip() for item in value["blocking_findings"]
         ):
-            raise StageStopped("final review has blocking or unknown findings")
+            raise ValueError("final review requires concrete blocker evidence")
+        if any(
+            item.get("status") not in {"resolved", "dismissed", "deferred", "blocking", "unknown"} for item in checked
+        ):
+            raise ValueError("unsupported checked finding status")
+        dispositions = {item["id"]: item["status"] for item in inputs["dispositions"]}
+        if any(item["status"] == "deferred" and dispositions[item["id"]] != "deferred" for item in checked):
+            raise ValueError("final review cannot defer a finding without a matching disposition")
         return {**identity, "final_verification_path": str(path), "final_verification_sha256": store.digest(path)}
 
-    return coordinator.run_phase("verify_final", coordinator.request["workers"][0], prompt, validate, input_hash=key)
+    artifact = coordinator.run_phase(
+        "verify_final", coordinator.request["workers"][0], prompt, validate, input_hash=key
+    )
+    value = json.loads(Path(artifact["final_verification_path"]).read_text(encoding="utf-8"))
+    if (
+        value["recommendation"] != "approved"
+        or value["blocking_findings"]
+        or any(item["status"] in {"blocking", "unknown"} for item in value["checked_findings"])
+    ):
+        raise FinalReviewBlocked(artifact, value, disposition)
+    return artifact

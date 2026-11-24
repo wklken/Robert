@@ -1,6 +1,6 @@
 """Collect attempt and command evidence for recovery."""
 
-from robert_agent.foundation.contracts.execution import RoundStatus
+from robert_agent.foundation.contracts.execution import ModelRunStatus, RoundStatus
 
 from robert_agent.persistence.dialects import sqlite as db_sqlite
 
@@ -23,6 +23,56 @@ import hashlib
 import json
 import os
 import subprocess
+from datetime import datetime, timezone
+
+
+def _pre_pr_deadline_checkpoint(conn, review, task_id):
+    # Match the coordinator's complete failure message, never a substring of
+    # identity, redaction or other attention. Classification grants no retry.
+    if review["status"] != RoundStatus.ATTENTION or review.get("final_result_id"):
+        return False
+    stage, separator, error = (review.get("error") or "").partition(": ")
+    if not separator or not stage or error != "pre-publication review deadline expired":
+        return False
+    try:
+        if not isinstance(review.get("deadline_at"), str):
+            return False
+        deadline = values.parse_time(review.get("deadline_at"))
+        if deadline is None or deadline > datetime.now(timezone.utc):
+            return False
+        candidate = review["manifest"].get("candidate")
+        if (
+            not review.get("snapshot_id")
+            or not isinstance(candidate, dict)
+            or not candidate.get("head")
+            or candidate["head"] != review["manifest"].get("head_sha")
+            or pre_pr_review.digest(candidate["candidate_path"]) != candidate["candidate_sha256"]
+        ):
+            return False
+        request = review["request"]
+        if pre_pr_review.digest(request["prompt_path"]) != request["prompt_sha256"]:
+            return False
+        runs = pre_pr_review.runs(conn, review["round_id"])
+        # Repairs/base merges can advance the snapshot head while preserving
+        # this immutable candidate document. This proves saved progress only;
+        # branch ancestry and repair provenance remain resume-time guards.
+        if not any(
+            run["stage"] == "implement"
+            and run["status"] == ModelRunStatus.SUCCEEDED
+            and isinstance(run["artifact"], dict)
+            and all(run["artifact"].get(key) == candidate.get(key) for key in ("candidate_path", "candidate_sha256"))
+            for run in runs
+        ) or any(
+            run["slot_reserved"] or not isinstance(run["dispatch"], dict) or run["dispatch"].get("cleanup_pending")
+            for run in runs
+        ):
+            return False
+        # Observation never signals or releases reservations. A terminal status
+        # alone is insufficient; require complete process/group exit evidence.
+        observation = native_rounds.observe_exit(conn, task_id)
+        return observation["all_stopped"] and native_rounds.exit_observation_current(conn, task_id, observation)
+    except (OSError, ValueError, TypeError, KeyError):
+        return False  # Missing/corrupt historical checkpoints remain attention.
 
 
 def tail_file(path, max_lines=80, max_bytes=32768):
@@ -257,11 +307,9 @@ def terminal_transport_failure(logs):
 
 def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
 
-    review = (
-        native_rounds.session(conn, task_id=task_id) or pre_pr_review.session(conn, task_id=task_id)
-        if conn is not None
-        else None
-    )
+    review = native_rounds.session(conn, task_id=task_id) if conn is not None else None
+    pre_pr = pre_pr_review.session(conn, task_id=task_id) if conn is not None and not review else None
+    review = review or pre_pr
     if review:
         revision_changed = (
             review["status"] == RoundStatus.SUPERSEDED
@@ -269,12 +317,16 @@ def inspect_attempt_recovery(conn, attempt_id, task_id, worktree_path):
         )
         row = db_records.first(db_read_attempts.find_metadata_json_by_attempt_id(conn, attempt_id))
         diagnostic = values.json_object(row[0] if row else None).get("submission_validation", {})
+        deadline_checkpoint = bool(pre_pr and not diagnostic and _pre_pr_deadline_checkpoint(conn, pre_pr, task_id))
         return {
             "status": "recoverable_progress"
             if revision_changed
+            or deadline_checkpoint
             or review["status"] not in {RoundStatus.CANCELED, RoundStatus.SUPERSEDED, RoundStatus.ATTENTION}
             else "unrecoverable",
-            "reason_code": "review_revision_changed" if revision_changed else "native_review_checkpoint",
+            "reason_code": "review_revision_changed"
+            if revision_changed
+            else ("pre_pr_review_deadline" if deadline_checkpoint else "native_review_checkpoint"),
             "round_id": review["round_id"],
             "task_id": task_id,
             "previous_attempt_id": attempt_id,

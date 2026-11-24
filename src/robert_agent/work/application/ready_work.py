@@ -674,6 +674,15 @@ def prepare_github_retrigger_tasks(
         if not related_events:
             continue
         task_event = related_events[0]
+        candidate_review = pre_pr_review.session(conn, task_id=parent_task_id)
+        candidate_context = preparation.pre_pr_retrigger_context(conn, candidate_review, related_events)
+        if candidate_context and candidate_review["request"]["repo"] == {
+            key: repo[key]
+            for key in ("full_name", "repo_root", "worktree_root", "default_base_branch", "github_account")
+        }:
+            task_event, related_events = candidate_context
+        else:
+            candidate_context = None
         route_result = workflow_routing.effective_route(
             config_result,
             repo,
@@ -697,7 +706,11 @@ def prepare_github_retrigger_tasks(
             )
         try:
             conn.commit()  # External Git I/O must not retain the SQLite writer lock.
-            worktree_result = assigned_workspace.prepare_worktree(repo, task_event, route_result, dry_run)
+            worktree_result = (
+                preparation.prepare_pre_pr_retrigger_worktree(repo, candidate_review, task_event, route_result, dry_run)
+                if candidate_context
+                else assigned_workspace.prepare_worktree(repo, task_event, route_result, dry_run)
+            )
         except ControlDeadlineExceeded:
             raise
         except (OSError, subprocess.SubprocessError) as exc:

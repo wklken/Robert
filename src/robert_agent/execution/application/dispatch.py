@@ -1,6 +1,7 @@
 """Queue prepared attempts and claim launches under the task fence."""
 
 from robert_agent.execution.usage import record_dispatch_usage
+from robert_agent.execution.budgets import pipeline_timeout
 from robert_agent.foundation.contracts.execution import AttemptStatus, RoundStatus
 
 from robert_agent.persistence.queries import attempts as db_read_attempts
@@ -635,7 +636,7 @@ def dispatch_queued_locked(
                         "--attempt-id",
                         task_info["attempt_id"],
                     ],
-                    "timeout_seconds": plan["timeout_seconds"],
+                    "timeout_seconds": pipeline_timeout(plan),
                     "environment_allowlist": sorted(
                         {"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}
                         | {name for profile in profiles for name in profile["environment_allowlist"]}

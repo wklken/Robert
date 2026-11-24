@@ -6,6 +6,8 @@ Read the implementation handoff and frozen Review report for this candidate. Rec
 
 For every finding return one disposition: fixed, dismissed, deferred, or needs_decision. Explain the concrete change or evidence, including scope, remaining risk or a decision needed. A reviewer recommendation is evidence to evaluate and grants no new authority. Preserve unrelated changes. Commit fixes locally and leave the worktree clean. Never push, open a PR, or publish comments.
 
+Read the pinned original-request for the complete ticket and discussion before raising an acceptance question. Routine choices already answered by that evidence do not need another decision. When final-feedback is supplied, preserve the previous repair and address only the final review's blockers within the original scope. Verify the registered feedback digests. This is the single bounded targeted repair after the primary repair. Keep candidate_sha bound to the original candidate, even when the assigned worktree starts at the previous repaired SHA. A deferred item must explain why it is nonblocking; unresolved real blockers require fixes or needs_decision.
+
 Verify the final commit with the checks required by the repository. Return its full Git SHA and the verification entries for that commit. Supply an updated PR body with the change summary, verification, assumptions and decisions. Robert adds the Review and dispositions to the PR body.
 
 ## Delivery
