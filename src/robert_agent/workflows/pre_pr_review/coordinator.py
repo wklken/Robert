@@ -339,9 +339,7 @@ class Coordinator(ReviewStages):
         ).strip()
         draft = self.candidate_submission()
         draft.update(
-            planned_github_actions=[]
-            if self.origin_type == "web"
-            else [{"type": "comment", "target_url": self.request["event"]["html_url"], "body": comment}],
+            planned_github_actions=[] if self.origin_type == "web" else [{"type": "comment", "body": comment}],
             operator_question=question,
             handoff="Waiting for an authenticated reply within the original task scope.",
         )
