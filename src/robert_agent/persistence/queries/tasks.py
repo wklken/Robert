@@ -313,7 +313,8 @@ def find_metadata_json_by_task_id(conn, task_id):
     return statements.read(conn, query1, {"p0": task_id})
 
 
-def find_for_attempt_is_active(conn, task_id, attempt_id):
+@cache
+def _attempt_is_active_statement():
     table1 = tables["tasks"].alias("t")
     table2 = tables["attempts"].alias("a")
     query4 = (
@@ -336,7 +337,11 @@ def find_for_attempt_is_active(conn, task_id, attempt_id):
         .correlate_except(table1, table2)
         .set_label_style(LABEL_STYLE_NONE)
     )
-    return statements.read(conn, query3, {"p0": task_id, "p1": attempt_id})
+    return query3
+
+
+def find_for_attempt_is_active(conn, task_id, attempt_id):
+    return statements.read(conn, _attempt_is_active_statement(), {"p0": task_id, "p1": attempt_id})
 
 
 def find_for_build_dashboard_data(conn, history_limit):

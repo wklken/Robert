@@ -1,6 +1,7 @@
 """Contracts for the full-suite CI runner, exercised with real Python children."""
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -197,3 +198,126 @@ class TestRunnerTests(unittest.TestCase):
         result = self.run_tests()
         self.assertEqual(result.returncode, 1)
         self.assertIn("value=2", result.stdout)
+
+    def test_json_report_records_every_module_and_tested_content(self):
+        self.module("reported", "import unittest\nclass Cases(unittest.TestCase):\n def test_case(self): pass")
+        report = self.root / "report.json"
+        result = self.run_tests("--report-json", str(report))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        value = json.loads(report.read_text())
+        self.assertEqual(value["total_tests"], 1)
+        self.assertEqual(value["failed_modules"], 0)
+        self.assertTrue(value["content_unchanged"])
+        self.assertEqual(len(value["source_sha256"]), 64)
+        self.assertEqual(value["source_sha256"], value["final_source_sha256"])
+        self.assertEqual(Path(value["environment"]["executable"]), Path(sys.executable).resolve())
+        self.assertTrue(value["environment_unchanged"])
+        self.assertEqual(value["modules"][0]["module"], "test_reported")
+        self.assertEqual(value["modules"][0]["exit_code"], 0)
+        self.assertGreater(value["modules"][0]["seconds"], 0)
+        again = self.run_tests("--report-json", str(report))
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(json.loads(report.read_text())["source_sha256"], value["source_sha256"])
+
+    def test_failure_report_preserves_other_module_results(self):
+        self.module(
+            "report_bad",
+            "import unittest\nclass Cases(unittest.TestCase):\n def test_case(self): self.fail('expected')",
+        )
+        self.module("report_good", "import unittest\nclass Cases(unittest.TestCase):\n def test_case(self): pass")
+        report = self.root / "failed.json"
+        result = self.run_tests("--report-json", str(report))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        value = json.loads(report.read_text())
+        self.assertEqual(value["total_tests"], 2)
+        self.assertEqual(value["failed_modules"], 1)
+        self.assertEqual(
+            {row["module"]: row["exit_code"] for row in value["modules"]}, {"test_report_bad": 1, "test_report_good": 0}
+        )
+
+    def test_duplicate_run_refuses_before_discovery_and_releases_after_exit(self):
+        self.module(
+            "held",
+            """
+            from pathlib import Path
+            import time, unittest
+            class Cases(unittest.TestCase):
+                def test_case(self):
+                    root = Path(__file__).parent
+                    (root / 'started').touch()
+                    deadline = time.monotonic() + 10
+                    while not (root / 'release').exists():
+                        self.assertLess(time.monotonic(), deadline)
+                        time.sleep(0.01)
+            """,
+        )
+        first = subprocess.Popen(
+            [sys.executable, "-B", "-m", "tests.run", "--start-directory", str(self.root)],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(first.wait)
+        self.addCleanup((self.root / "release").touch)
+        import time
+
+        deadline = time.monotonic() + 10
+        while not (self.root / "started").exists():
+            self.assertLess(time.monotonic(), deadline)
+            self.assertIsNone(first.poll())
+            time.sleep(0.01)
+        duplicate = self.run_tests()
+        (self.root / "release").touch()
+        stdout, stderr = first.communicate(timeout=15)
+        self.assertEqual(first.returncode, 0, stdout + stderr)
+        self.assertEqual(duplicate.returncode, 2, duplicate.stdout + duplicate.stderr)
+        self.assertIn("already running", duplicate.stderr)
+        self.assertNotIn("Discovered", duplicate.stdout)
+        self.assertEqual(self.run_tests().returncode, 0)
+
+    def test_report_rejects_source_changes_during_run(self):
+        from tests import run as runner
+        from tests.support import test_run
+
+        self.module("drift", "import unittest\nclass Cases(unittest.TestCase):\n def test_case(self): pass")
+        report = self.root / "drift.json"
+        with mock.patch.object(test_run, "source_digest", side_effect=["a" * 64, "b" * 64]):
+            status = runner.main(["--start-directory", str(self.root), "--report-json", str(report)])
+        self.assertEqual(status, 1)
+        self.assertFalse(json.loads(report.read_text())["content_unchanged"])
+
+    def test_report_rejects_real_test_file_changes(self):
+        self.module(
+            "modify",
+            """
+            from pathlib import Path
+            import unittest
+            class Cases(unittest.TestCase):
+                def test_modify(self):
+                    path = Path(__file__)
+                    path.write_text(path.read_text() + '\\n# modified during verification\\n')
+            """,
+        )
+        report = self.root / "report.json"
+        result = self.run_tests("--report-json", str(report))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Source changed", result.stderr)
+        self.assertFalse(json.loads(report.read_text())["content_unchanged"])
+
+    def test_report_rejects_dependency_changes_during_run(self):
+        from tests import run as runner
+        from tests.support import test_run
+
+        self.module("environment", "import unittest\nclass Cases(unittest.TestCase):\n def test_case(self): pass")
+        report = self.root / "report.json"
+        with (
+            mock.patch.dict(sys.modules),
+            mock.patch.object(sys, "path", sys.path.copy()),
+            mock.patch.object(
+                test_run, "environment_record", side_effect=[{"packages": {}}, {"packages": {"new": "1"}}]
+            ),
+        ):
+            code = runner.main(["--start-directory", str(self.root), "--report-json", str(report)])
+        self.assertEqual(code, 1)
+        self.assertFalse(json.loads(report.read_text())["environment_unchanged"])

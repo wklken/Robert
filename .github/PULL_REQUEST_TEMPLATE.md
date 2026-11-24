@@ -7,7 +7,7 @@ Mark checks that do not apply as N/A and explain skipped verification.
 ## Verification
 
 - [ ] Focused tests added or updated
-- [ ] `python3 -B -m unittest discover -s tests`
+- [ ] `python3 -B -m tests.run --workers 4` (or serial discovery when required)
 - [ ] `python3 -m build` when code, packaging, or resources changed
 - [ ] `git diff --check`
 - [ ] Documentation updated when behavior or commands changed

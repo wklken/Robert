@@ -10,6 +10,8 @@ import sys
 import time
 import unittest
 
+from tests.support import test_run
+
 
 class ModuleLoader(unittest.TestLoader):
     def loadTestsFromModule(self, module, *, pattern=None):
@@ -63,15 +65,35 @@ def run_module(module, identifiers, environment):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Examples: python3 -B -m tests.run --workers 4 --report-json .test-results/report.json; "
+        "python3 -B -m tests.run --list",
+    )
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--start-directory", type=Path, default=Path("tests"))
     parser.add_argument(
         "--list", action="store_true", help="List the complete discovered test IDs without running them"
     )
+    parser.add_argument("--report-json", type=Path, help="Write module timings and tested source/environment evidence")
     args = parser.parse_args(argv)
     if args.workers < 1:
         parser.error("--workers must be positive")
+    if args.list and args.report_json:
+        parser.error("--report-json requires executing tests; remove --list")
+    if args.list:
+        return run(args)
+    try:
+        with test_run.run_lock(args.start_directory):
+            return run(args)
+    except test_run.RunAlreadyActiveError as error:
+        print(error, file=sys.stderr)
+        return 2
+
+
+def run(args):
+    initial_digest = test_run.source_digest(args.start_directory) if args.report_json else None
+    initial_environment = test_run.environment_record() if args.report_json else None
     try:
         modules, discovery_cases = discover(args.start_directory)
     except (ImportError, ValueError) as error:
@@ -83,12 +105,15 @@ def main(argv=None):
         return 0
     environment = dict(os.environ)
     environment["PYTHONPATH"] = os.pathsep.join(
-        filter(None, (str(args.start_directory.resolve()), environment.get("PYTHONPATH")))
+        filter(
+            None, (str(test_run.REPO_ROOT / "src"), str(args.start_directory.resolve()), environment.get("PYTHONPATH"))
+        )
     )
     total = sum(map(len, modules.values())) + len(discovery_cases)
     started = time.monotonic()
     print(f"Discovered {total} tests in {len(modules)} modules; workers={args.workers}", flush=True)
     failures = 0
+    results = []
     if discovery_cases:
         result = unittest.TextTestRunner(stream=sys.stdout).run(unittest.TestSuite(discovery_cases))
         failures += not result.wasSuccessful()
@@ -102,6 +127,7 @@ def main(argv=None):
             for future in as_completed(futures):
                 module, count, result, duration = future.result()
                 failures += result.returncode != 0
+                results.append({"module": module, "tests": count, "seconds": duration, "exit_code": result.returncode})
                 status = "PASS" if result.returncode == 0 else "FAIL"
                 print(f"{status} {module}: {count} tests, {duration:.3f}s; exit={result.returncode}", flush=True)
                 print(result.stdout + result.stderr, end="", flush=True)
@@ -109,8 +135,36 @@ def main(argv=None):
             # Also cancel partially submitted batches before the context waits.
             executor.shutdown(wait=False, cancel_futures=True)
             raise
-    print(f"Completed {total} tests in {time.monotonic() - started:.3f}s; failed modules={failures}", flush=True)
-    return int(bool(failures))
+    duration = time.monotonic() - started
+    unchanged = True
+    environment_unchanged = True
+    if args.report_json:
+        final_digest = test_run.source_digest(args.start_directory)
+        final_environment = test_run.environment_record()
+        unchanged = initial_digest == final_digest
+        environment_unchanged = initial_environment == final_environment
+        test_run.write_report(
+            args.report_json,
+            {
+                "total_tests": total,
+                "failed_modules": failures,
+                "seconds": duration,
+                "workers": args.workers,
+                "source_sha256": initial_digest,
+                "final_source_sha256": final_digest,
+                "content_unchanged": unchanged,
+                "environment": initial_environment,
+                "final_environment": final_environment,
+                "environment_unchanged": environment_unchanged,
+                "modules": sorted(results, key=lambda row: (-row["seconds"], row["module"])),
+            },
+        )
+        if not unchanged:
+            print("Source changed during this run; repeat verification on the final changes", file=sys.stderr)
+        if not environment_unchanged:
+            print("Python environment changed during this run; repeat verification", file=sys.stderr)
+    print(f"Completed {total} tests in {duration:.3f}s; failed modules={failures}", flush=True)
+    return int(bool(failures) or not unchanged or not environment_unchanged)
 
 
 if __name__ == "__main__":
