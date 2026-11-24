@@ -1,0 +1,55 @@
+name: Compose lifecycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        type: choice
+        description: Offline lifecycle suite
+        options: [all, core, extended, slow]
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - id: matrix
+        env:
+          ROBERT_SUITE: ${{ inputs.suite }}
+        run: |
+          matrix=$(jq -cn --arg suite "$ROBERT_SUITE" '
+            {core: 4, extended: 4, slow: 2} | to_entries |
+            [ .[] | select($suite == "all" or .key == $suite) |
+              . as $group | range(.value) | {suite: $group.key, shard: ., count: $group.value} ]
+          ')
+          echo "value=$matrix" >> "$GITHUB_OUTPUT"
+
+  lifecycle:
+    needs: select
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.matrix) }}
+    env:
+      ROBERT_SUITE: ${{ matrix.suite }}
+      ROBERT_SHARD: ${{ matrix.shard }}
+      ROBERT_SHARD_COUNT: ${{ matrix.count }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          python3 -B tests/simulations/compose/run.py \
+            --suite "$ROBERT_SUITE" --shard-index "$ROBERT_SHARD" --shard-count "$ROBERT_SHARD_COUNT" \
+            --artifacts "${{ runner.temp }}/robert-compose"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: compose-${{ matrix.suite }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/robert-compose
+          retention-days: 7
