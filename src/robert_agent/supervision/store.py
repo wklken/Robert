@@ -178,7 +178,7 @@ def dismiss_terminal_tasks(conn, task_ids, now):
         if occurred_at is None or occurred_at > timestamp(now):
             continue
         actions = db_read_supervision_retirement.publications(conn, evidence["task_id"])
-        if len(actions) > 100 or not all(_settled_publication(action, now) for action in actions):
+        if not _settled_task(evidence, actions, now):
             continue
         incident_id = evidence.pop("incident_id")
         evidence.update(reason_code="terminal_task_no_remaining_work", action_ids=[a["action_id"] for a in actions])
@@ -186,6 +186,48 @@ def dismiss_terminal_tasks(conn, task_ids, now):
         incident = _one(db_read_supervision_incidents.find_record_by_incident_id(conn, incident_id))
         changes.append({"transition": "dismissed", "incident": incident})
     return changes
+
+
+def settled_merged_reviews(conn, workstream_ids, now):
+    """Prove obsolete review requests have no remaining work without changing history."""
+    candidates = db_read_supervision_retirement.merged_reviews(conn, workstream_ids, now)
+    if len(candidates) > 100:
+        return []
+    proofs = []
+    for candidate in candidates:
+        actions = db_read_supervision_retirement.publications(conn, candidate["task_id"])
+        if _settled_task(candidate, actions, now):
+            proofs.append({**dict(candidate), "action_ids": [action["action_id"] for action in actions]})
+    return proofs
+
+
+def _settled_task(evidence, actions, now):
+    occurred_at = timestamp(evidence["terminal_at"])
+    if occurred_at is None or occurred_at > timestamp(now):
+        return False
+    if len(actions) > 100 or not all(_settled_publication(action, now) for action in actions):
+        return False
+    if evidence["task_lifecycle"] != "failed":
+        return True
+    if not actions:
+        return False
+    for action in actions:
+        metadata = json.loads(action["result_metadata"] or "{}")
+        publish = json.loads(action["metadata_json"]).get("publish", {})
+        audit = metadata.get("audit") if isinstance(metadata, dict) else None
+        if (
+            action["action_type"] != "submit_pr_review"
+            or action["publish_status"] != "skipped"
+            or action["audit_status"] != "accepted"
+            or publish.get("reason_code") != "superseded"
+            or not timestamp(publish.get("skipped_at"))
+            or timestamp(publish["skipped_at"]) > timestamp(now)
+            or not isinstance(audit, dict)
+            or audit.get("status") != "accepted"
+            or action["result_task_id"] != evidence["task_id"]
+        ):
+            return False
+    return True
 
 
 def _settled_publication(action, now):

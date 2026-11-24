@@ -291,30 +291,8 @@ def context(conn, root_id):
         .order_by(cp.c.scope_id, cp.c.rule_id)
         .limit(64),
     )
-    # Completion is an aggregate over the entire family, never a sampled claim.
-    completion = _rows(
-        conn,
-        select(
-            select(items.c.work_item_id).where(items.c.workstream_id.in_(ids)).exists().label("has_goal"),
-            select(items.c.work_item_id)
-            .where(
-                items.c.workstream_id.in_(ids), or_(items.c.completed_at.is_(None), items.c.canceled_at.is_not(None))
-            )
-            .exists()
-            .label("unfinished_goal"),
-            select(tasks.c.task_id)
-            .where(
-                tasks.c.workstream_id.in_(ids),
-                tasks.c.lifecycle.not_in(
-                    [TaskLifecycle.COMPLETED.value, TaskLifecycle.CANCELED.value, TaskLifecycle.IGNORED.value]
-                ),
-            )
-            .exists()
-            .label("unfinished_task"),
-        ),
-    )[0]
     return {
-        "completion": completion,
+        "completion": completion(conn, ids),
         "repository": repository,
         "streams": [
             {k: row[k] for k in ("workstream_id", "origin_workstream_id", "lifecycle", "active_task_id")}
@@ -350,3 +328,32 @@ def approved_worker_retries(conn, repo_ids, now, policy_version):
     if repo_ids:
         query = query.where(stream.c.repo_id.in_(repo_ids))
     return _rows(conn, query.order_by(cp.c.updated_at, cp.c.scope_id))
+
+
+def completion(conn, workstream_ids, settled_task_ids=()):
+    """Aggregate the entire family, excluding only independently settled requests."""
+    items, tasks = tables["work_items"], tables["tasks"]
+    ids = tuple(workstream_ids)
+    # Completion is an aggregate over the entire family, never a sampled claim.
+    return _rows(
+        conn,
+        select(
+            select(items.c.work_item_id).where(items.c.workstream_id.in_(ids)).exists().label("has_goal"),
+            select(items.c.work_item_id)
+            .where(
+                items.c.workstream_id.in_(ids), or_(items.c.completed_at.is_(None), items.c.canceled_at.is_not(None))
+            )
+            .exists()
+            .label("unfinished_goal"),
+            select(tasks.c.task_id)
+            .where(
+                tasks.c.workstream_id.in_(ids),
+                tasks.c.task_id.not_in(tuple(settled_task_ids)),
+                tasks.c.lifecycle.not_in(
+                    [TaskLifecycle.COMPLETED.value, TaskLifecycle.CANCELED.value, TaskLifecycle.IGNORED.value]
+                ),
+            )
+            .exists()
+            .label("unfinished_task"),
+        ),
+    )[0]

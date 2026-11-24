@@ -299,8 +299,6 @@ class DecisionLoop:
                     if root_id in runner.get("attention_claims", {}):
                         continue
                     previous = decisions.read(conn, root_id)
-                    if previous.get("status") == DecisionStatus.ASK_USER:
-                        continue
                     try:
                         snapshot = decisions.snapshot(conn, root_id, config, now)
                     except (ValueError, UnicodeError, RecursionError):
@@ -309,6 +307,10 @@ class DecisionLoop:
                         )
                         continue
                     if not snapshot:
+                        continue
+                    if decisions.finish_merged_review(conn, root_id, snapshot, now):
+                        continue
+                    if previous.get("status") == DecisionStatus.ASK_USER:
                         continue
                     if previous.get("status") == DecisionStatus.FINISH_SUPERVISION and decisions.can_finish(snapshot):
                         continue

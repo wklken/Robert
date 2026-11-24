@@ -7,10 +7,8 @@ from robert_agent.persistence.catalog import tables
 from robert_agent.persistence.expressions import valid_json_or_empty
 
 
-def candidates(conn, task_ids, now):
-    if not task_ids:
-        return []
-    task, stream, incident = (tables[name] for name in ("tasks", "workstreams", "supervision_incidents"))
+def _terminal_tasks(task_ids, now, workstream_ids=()):
+    task, stream, source = (tables[name] for name in ("tasks", "workstreams", "github_sources"))
     attempt, subject, recovery = (
         tables[name] for name in ("attempts", "execution_subjects", "supervision_recovery_actions")
     )
@@ -91,7 +89,6 @@ def candidates(conn, task_ids, now):
     )
     stmt = (
         select(
-            incident.c.incident_id,
             task.c.task_id,
             task.c.lifecycle.label("task_lifecycle"),
             task.c.updated_at.label("terminal_at"),
@@ -99,19 +96,31 @@ def candidates(conn, task_ids, now):
             stream.c.lifecycle.label("stream_lifecycle"),
             lineage.label("lineage_key"),
         )
-        .select_from(
-            incident.join(task, and_(incident.c.scope_type == "task", incident.c.scope_id == task.c.task_id)).join(
-                stream, stream.c.workstream_id == task.c.workstream_id
-            )
-        )
+        .select_from(task.join(stream, stream.c.workstream_id == task.c.workstream_id))
         .where(
-            task.c.task_id.in_(tuple(task_ids)),
+            task.c.task_id.in_(tuple(task_ids)) if task_ids else task.c.workstream_id.in_(tuple(workstream_ids)),
             task.c.task_kind == "human_request",
-            task.c.lifecycle.in_(("canceled", "ignored")),
+            or_(
+                task.c.lifecycle.in_(("canceled", "ignored")),
+                and_(
+                    task.c.lifecycle == "failed",
+                    task.c.route_id == "review-pr",
+                    stream.c.lifecycle == "completed",
+                    select(1)
+                    .where(
+                        source.c.source_id == stream.c.primary_source_id,
+                        source.c.repo_id == stream.c.repo_id,
+                        source.c.source_type == "pull_request",
+                        source.c.state == "closed",
+                        func.json_extract(source.c.metadata_json, "$.remote_state.merged") == 1,
+                        func.julianday(func.json_extract(source.c.metadata_json, "$.remote_state.merged_at"))
+                        <= func.julianday(now),
+                    )
+                    .exists(),
+                ),
+            ),
             stream.c.lifecycle.in_(("canceled", "completed", "failed")),
             or_(stream.c.active_task_id.is_(None), stream.c.active_task_id == task.c.task_id),
-            incident.c.lineage_key == lineage,
-            incident.c.status.in_(("open", "diagnosing", "needs_attention")),
             func.json_extract(task.c.metadata_json, "$.execution_attention").is_(None),
             ~blocked_attempt,
             ~blocked_subject,
@@ -140,7 +149,33 @@ def candidates(conn, task_ids, now):
             )
             .exists()
         )
-    return statements.read(conn, stmt)
+    return stmt
+
+
+def candidates(conn, task_ids, now):
+    if not task_ids:
+        return []
+    task, incident = (tables[name] for name in ("tasks", "supervision_incidents"))
+    lineage = func.coalesce(func.json_extract(task.c.metadata_json, "$.supervision_lineage_key"), "")
+    stmt = (
+        _terminal_tasks(task_ids, now)
+        .add_columns(incident.c.incident_id)
+        .join(incident, and_(incident.c.scope_type == "task", incident.c.scope_id == task.c.task_id))
+    )
+    return statements.read(
+        conn,
+        stmt.where(
+            incident.c.lineage_key == lineage,
+            incident.c.status.in_(("open", "diagnosing", "needs_attention")),
+        ),
+    )
+
+
+def merged_reviews(conn, workstream_ids, now):
+    task = tables["tasks"]
+    return statements.read(
+        conn, _terminal_tasks((), now, workstream_ids).where(task.c.lifecycle == "failed").limit(101)
+    )
 
 
 def publications(conn, task_id):

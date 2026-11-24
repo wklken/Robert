@@ -82,6 +82,96 @@ class DecisionTests(unittest.TestCase):
             **({"choices": example_choices()} if action == "ask_user" else {}),
         }
 
+    def merged_review(self):
+        self.config["repos"][0]["github_account"] = "bot"
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO github_sources(source_id,repo_id,source_key,source_type,number,state,metadata_json) "
+                "VALUES('source','r','github:acme/project!1','pull_request',1,'closed',?)",
+                (json.dumps({"remote_state": {"merged": True, "merged_at": self.now}}),),
+            )
+            conn.execute("UPDATE workstreams SET lifecycle='completed',primary_source_id='source'")
+            conn.execute("UPDATE work_items SET completed_at=?", (self.now,))
+            conn.execute("UPDATE tasks SET lifecycle='failed',route_id='review-pr'")
+            conn.execute(
+                "INSERT INTO attempts(attempt_id,task_id,attempt_no,status,started_at,finished_at,metadata_json) "
+                "VALUES('attempt','t',1,'completed',?,?,?)",
+                (self.now, self.now, json.dumps({"process_stopped_at": self.now})),
+            )
+            conn.execute(
+                "INSERT INTO execution_subjects(subject_type,subject_id,workflow_kind,binding_status,"
+                "created_at,updated_at,terminal_at) VALUES('task','t','human_request','terminal',?,?,?)",
+                (self.now, self.now, self.now),
+            )
+            conn.execute(
+                "INSERT INTO worker_results(result_id,task_id,attempt_id,output_type,created_at,metadata_json) "
+                "VALUES('result','t','attempt','multi_agent_review_report',?,?)",
+                (self.now, json.dumps({"audit": {"status": "accepted"}})),
+            )
+            conn.execute(
+                "INSERT INTO github_actions(action_id,result_id,task_id,action_type,audit_status,publish_status,"
+                "created_at,metadata_json) VALUES('action','result','t','submit_pr_review','accepted','skipped',?,?)",
+                (self.now, json.dumps({"publish": {"reason_code": "superseded", "skipped_at": self.now}})),
+            )
+            conn.commit()
+
+    def test_loop_automatically_finishes_merged_review_and_resolves_old_question(self):
+        self.merged_review()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            request = self.request(conn)
+            self.assertTrue(decisions.can_finish(decisions.snapshot(conn, "w", self.config, self.now)))
+            self.assertTrue(decisions.approve(conn, self.config, request, self.output(request, "ask_user"), self.now))
+            conn.commit()
+        loop = DecisionLoop()
+        with patch.object(loop, "_run") as model:
+            result = loop.poll(self.config, now=self.now)
+            if loop.thread:
+                loop.thread.join()
+            model.assert_not_called()
+        self.assertEqual(result["status"], "idle")
+        with self.connect() as conn:
+            state = decisions.read(conn, "w")
+            self.assertEqual(state["status"], "finish_supervision")
+            self.assertIsNone(state["decision"])
+            self.assertEqual(state["history"][-1]["decision"]["action"], "ask_user")
+            self.assertEqual(state["receipt"]["reason_code"], "merged_review_no_remaining_work")
+            self.assertEqual(conn.execute("SELECT lifecycle FROM tasks").fetchone()[0], "failed")
+            self.assertEqual(conn.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT status FROM notifications").fetchone()[0], "resolved")
+        self.assertEqual(loop.poll(self.config, now=self.now)["status"], "idle")
+
+    def test_merged_review_does_not_finish_with_other_unfinished_request_beyond_packet_limit(self):
+        self.merged_review()
+        with self.connect() as conn:
+            for index in range(17):
+                conn.execute(
+                    "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) VALUES(?,'w',?,?,?)",
+                    (f"old-{index:02}", "running" if index == 0 else "completed", "2020-01-01", "2020-01-01"),
+                )
+            snapshot = decisions.snapshot(conn, "w", self.config, self.now)
+            self.assertNotIn("running", [task["lifecycle"] for task in snapshot["context"]["tasks"]])
+            self.assertFalse(decisions.can_finish(snapshot))
+
+    def test_merged_review_unknown_publication_cannot_finish_even_after_operator_reply(self):
+        self.merged_review()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO publication_intents(publication_id,action_id,idempotency_key,request_fingerprint,"
+                "status,created_at,updated_at) VALUES('intent','action','key','fingerprint','executing',?,?)",
+                (self.now, self.now),
+            )
+            decisions.write(conn, "w", {"status": "reply_received", "reply": "Stop supervising"}, self.now)
+            self.assertFalse(decisions.can_finish(decisions.snapshot(conn, "w", self.config, self.now)))
+
+    def test_packet_includes_verified_original_decision_owner(self):
+        owner = {"login": "Alice", "source_key": "github:acme/project!1", "event_fingerprint": "comment:1"}
+        with self.connect() as conn:
+            conn.execute("UPDATE workstreams SET metadata_json=?", (json.dumps({"decision_owner": owner}),))
+            packet = self.request(conn)
+            self.assertEqual(next(e["data"] for e in packet["evidence"] if e["id"] == "decision_owner"), owner)
+
     def test_no_action_until_model_selects_it_and_exact_version_is_current(self):
         with self.connect() as conn:
             self.offer(conn)
