@@ -562,6 +562,15 @@ flowchart TD
 [session_resume](../src/robert_agent/adapters/processes/session_resume.py) 验证 provider 会话历史；
 具体 adapter 构造显式 resume 命令，共享执行层保留原会话目录与独立调用段。
 
+阶段源码固定通过 [source_files](../src/robert_agent/adapters/git/source_files.py) 排除 Git 已忽略的
+虚拟环境、依赖安装和工具缓存目录，其余忽略配置仍记录内容 hash。仓库内生成的文件链接同时固定
+链接值和目标内容，仓库外链接不参与恢复。测试用 edition 链接在代码交付前通过仓库支持的清理入口移除。
+Review 快照仅允许已知的被忽略测试产物，包括嵌套目录的 `bkcore_unittest.sqlite3`。
+最终检查清单失败或旧问题缺少完整源码固定时，
+[verification_retry](../src/robert_agent/workflows/pre_pr_review/verification_retry.py) 绑定原 handoff、
+失败原因及修复提交，启动带新源码固定的检查阶段。旧失败、required 标记、prompt 和处置记录不改写；
+新清单仍须满足全部 required 检查通过，待决问题仍须由人回答。
+
 ```mermaid
 sequenceDiagram
     participant Local as Local drain

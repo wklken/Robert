@@ -6,6 +6,7 @@ import os
 import stat
 
 from robert_agent.adapters.git.review_revision import git
+from robert_agent.adapters.git.source_files import untracked_source_files
 
 
 class SourcePinUnavailable(ValueError):
@@ -40,24 +41,31 @@ def observe_source(run, manifest, worktree):
         ).hexdigest(),
     )
     # Ignored local configuration can still affect a resumed model or its tools.
-    # Include it in the same bounded pin rather than treating Gitignore as trust.
-    untracked = git(path, "ls-files", "--others", "-z").split("\0")
-    if len(untracked) > 1001:
+    # Keep that bounded pin while excluding ignored generated environments.
+    untracked = untracked_source_files(path)
+    if len(untracked) > 1000:
         raise SourcePinUnavailable(checkpoint, "stage source has too many untracked files to pin")
     hashes = {}
     try:
         for name in filter(None, untracked):
             file = path / name
-            if file.resolve() != file or not file.is_relative_to(path):
+            resolved = file.resolve()
+            if not resolved.is_relative_to(path):
                 raise SourcePinUnavailable(checkpoint, "stage source contains an untracked symlink")
-            fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            link = str(file.readlink()) if file.is_symlink() else None
+            if resolved != file and link is None:
+                raise SourcePinUnavailable(checkpoint, "stage source contains an untracked symlink directory")
+            fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             with os.fdopen(fd, "rb") as stream:
                 if (
                     not stat.S_ISREG(os.fstat(stream.fileno()).st_mode)
                     or os.fstat(stream.fileno()).st_size > 16 * 1024 * 1024
                 ):
                     raise SourcePinUnavailable(checkpoint, "stage source untracked file cannot be pinned")
-                hashes[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                hashes[name] = (
+                    hashlib.sha256(("symlink:" + link + "\0" + digest).encode()).hexdigest() if link else digest
+                )
     except OSError as exc:
         raise SourcePinUnavailable(checkpoint, "stage source untracked file could not be read") from exc
     checkpoint["untracked_sha256"] = hashes

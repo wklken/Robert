@@ -296,7 +296,15 @@ def vote_synthesize_input(manifest, inputs_path, inputs_hash, records):
 
 
 def address_findings_input(
-    manifest, candidate_path, report_path, report_sha, decision_ids, *, operator_reply=None, final_feedback=None
+    manifest,
+    candidate_path,
+    report_path,
+    report_sha,
+    decision_ids,
+    *,
+    operator_reply=None,
+    final_feedback=None,
+    verification_retry=None,
 ):
     identity = {"candidate_sha": manifest["head_sha"], "report_sha256": report_sha}
     output = _files_output(
@@ -331,6 +339,19 @@ def address_findings_input(
         output,
         authority={"source_access": "assigned worktree", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
         context_items=(
+            *(
+                (
+                    ContextItem(
+                        "verification-retry",
+                        "Pinned rejected verification evidence for fresh final checks; old evidence remains immutable",
+                        "Robert validation feedback",
+                        requirement="required",
+                        content=verification_retry,
+                    ),
+                )
+                if verification_retry
+                else ()
+            ),
             decision_owner_context(manifest.get("decision_owner")),
             *original_request_context(manifest.get("original_request")),
             _file_item(

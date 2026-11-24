@@ -65,6 +65,7 @@ class FinalVerificationTests(ReviewWorkspaceFixture):
         }
         self.driver = SimpleNamespace(
             db_path="fixture-unused.sqlite3",
+            round_id="round-1",
             task_id="task-1",
             attempt_id="attempt-1",
             manifest={
@@ -111,6 +112,7 @@ class FinalVerificationTests(ReviewWorkspaceFixture):
         # audit. The actual coordinator composes both original validators.
         with (
             patch.object(coordinator.store, "connect", return_value=nullcontext(None)),
+            patch.object(coordinator.store, "runs", return_value=[]),
             patch.object(coordinator.validation, "context", return_value=(self.settings, None)),
         ):
             return coordinator.Coordinator.address(self.driver, self.report, self.report_sha, ["F1"])

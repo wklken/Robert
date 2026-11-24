@@ -32,7 +32,7 @@ from robert_agent.workflows.review import files, workspace, report_checkpoint
 from robert_agent.workflows.review.coordinator import ReviewStages
 from robert_agent.workflows.pre_pr_review import base_impact, final_verification, handoff_repair, final_repair
 from robert_agent.workflows.pre_pr_review.verification import final_verification_checks
-from robert_agent.workflows.pre_pr_review import decisions
+from robert_agent.workflows.pre_pr_review import decisions, verification_retry
 
 
 class ReviewDecisionRequired(StageStopped):
@@ -98,12 +98,14 @@ class Coordinator(ReviewStages):
         self.final_feedback = self.request.get("final_feedback")
         self.final_decision_feedback = None
         self.handoff_source_run_id = None
+        self.verification_retry = None
         if reply and reply["decision"].get("stage") == "implement" and not self.manifest.get("candidate"):
             decisions.verify_implementation_source(self, reply["decision"])
 
     def check_active(self):
         super().check_active()
         final_repair.validate_feedback(self)
+        verification_retry.verify(self.verification_retry)
         if self.original_request and store.digest(self.original_request["path"]) != self.original_request["sha256"]:
             raise StageStopped("pinned original request changed")
         if self.deadline and datetime.now(timezone.utc) >= self.deadline:
@@ -178,7 +180,13 @@ class Coordinator(ReviewStages):
             path = self.address_workspace(run["run_id"])
             if not path.exists():
                 path.parent.mkdir(parents=True, exist_ok=True)
-                start = self.final_feedback["final_sha"] if self.final_feedback else self.manifest["head_sha"]
+                start = (
+                    self.verification_retry["final_sha"]
+                    if self.verification_retry
+                    else self.final_feedback["final_sha"]
+                    if self.final_feedback
+                    else self.manifest["head_sha"]
+                )
                 git(self.repo["repo_root"], "worktree", "add", "--detach", str(path), start)
             return str(path)
         return super().stage_worktree(run)
@@ -654,6 +662,10 @@ class Coordinator(ReviewStages):
         reply = self.request.get("operator_reply")
         generation = hashlib.sha256(json.dumps(reply, sort_keys=True).encode()).hexdigest() if reply else ""
         input_hash = report_sha + ("-" + generation if generation else "")
+        self.verification_report_sha = report_sha
+        self.verification_retry = verification_retry.inputs(self)
+        if self.verification_retry:
+            input_hash += "-" + self.verification_retry["input_sha256"]
         if self.original_request or self.final_feedback:
             generation = hashlib.sha256(
                 json.dumps([self.original_request, self.final_feedback], sort_keys=True).encode()
@@ -670,6 +682,7 @@ class Coordinator(ReviewStages):
                     ids,
                     operator_reply=reply,
                     final_feedback=self.final_feedback,
+                    verification_retry=self.verification_retry,
                 )
             ).text,
             stage="address_findings",

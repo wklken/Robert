@@ -240,6 +240,7 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
         database = tree / "bkcore_unittest.sqlite3"
         database.touch()
         artifacts = (
+            "src/dashboard/apigateway/bkcore_unittest.sqlite3",
             "__pycache__/source.pyc",
             "component/__pycache__/source.cpython-314.pyc",
             ".pytest_cache/.gitignore",
@@ -289,6 +290,7 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
             "component/pyproject.toml",
             "component/source.py",
             "settings.sqlite3",
+            "component/bkcore.sqlite3",
             "__pycache__/AGENTS.override.md",
             ".pytest_cache/pyproject.toml",
         )
