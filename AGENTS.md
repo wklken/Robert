@@ -88,6 +88,10 @@ Paths below are relative to `src/robert_agent/`.
 - `foundation/review_findings.py` owns the deterministic finding identity and
   follow-up signal shared by report generation and the pre-PR completion proof.
   It uses only the standard library and has no I/O or domain dependencies.
+- `foundation/review_recipient.py` owns pure PR review recipient selection for
+  prompt and publication consumers. Human PRs address their verified author;
+  robot-authored PRs preserve the original request owner. It has no I/O or domain
+  dependencies and does not change request or execution authority.
 - Group by domain first, then split a domain into responsibility/layer submodules.
   Reuse the domain's existing input types, errors, policies, facts and public
   capabilities. Do not scatter another implementation of the same concept into

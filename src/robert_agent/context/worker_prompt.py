@@ -6,6 +6,7 @@ import sys
 
 from robert_agent.context.prompt_contract import ContextItem, OutputContract, PromptInput
 from robert_agent.context.decision_owner import context_item as decision_owner_context
+from robert_agent.foundation import review_recipient
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS, SourceProvider, TaskKind
 
@@ -447,7 +448,13 @@ def worker_prompt_input(
         authority["backport"] = context["backport"]
 
     if not web and not discussions:
-        items.append(decision_owner_context(context.get("decision_owner")))
+        owner = context.get("decision_owner")
+        if expected_output == OutputType.PR_REVIEW_COMMENT:
+            review_event = next((event for event in events if event.get("source_type") == "pull_request"), None)
+            owner = review_recipient.decision_owner(
+                owner, (review_event or {}).get("pr_author_login"), context.get("github_account", "")
+            )
+        items.append(decision_owner_context(owner))
 
     guidance = ["worker-boundaries"]
     current = (context.get("github_context") or {}).get("current_event_fingerprint")

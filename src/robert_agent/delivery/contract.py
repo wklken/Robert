@@ -7,13 +7,14 @@ from robert_agent.foundation.contracts.work import SourceProvider, TaskKind
 from robert_agent.foundation.tapd_identity import KINDS as TAPD_KINDS, ticket_url as tapd_ticket_url
 
 from robert_agent.delivery import policies
+from robert_agent.foundation.review_recipient import decision_owner as review_decision_owner
 from copy import deepcopy
 import hashlib
 import json
 import re
 
 CONTRACT_ID = "compact-v1"
-NORMALIZER_VERSION = 4
+NORMALIZER_VERSION = 5
 OUTPUTS = frozenset(output.value for output in OutputType)
 FIELDS = {
     "planned_github_actions",
@@ -488,7 +489,9 @@ def normalize(envelope, settings):
                         "Trusted PR author is unavailable.",
                     )
                     action["pr_author_login"] = login
-                    owner = scope.get("decision_owner") or {}
+                    owner = (
+                        review_decision_owner(scope.get("decision_owner"), login, scope.get("github_account", "")) or {}
+                    )
                     decision_login = owner.get("login") or "wklken"
                     _require(
                         isinstance(decision_login, str)
@@ -497,6 +500,7 @@ def normalize(envelope, settings):
                         "Confirmed decision owner is invalid.",
                     )
                     action["decision_owner_login"] = decision_login
+                    action["decision_owner_policy"] = "pr_author"
                     action["body"] = f"@{decision_login}\n\n" + action["body"]
                 action["body"] += "\n\n" + comment_marker(envelope["task_id"], envelope["attempt_id"], index)
         elif kind == GitHubActionType.OPEN_PR.value:

@@ -24,6 +24,7 @@ from robert_agent.foundation import tapd_identity
 from robert_agent.foundation.commands import emit
 from robert_agent.security import redaction
 from robert_agent.work import tapd_policy
+from robert_agent.foundation import review_recipient
 from robert_agent.workflows.review import publish as review_publish
 from robert_agent.workflows.vote import publish as vote_publish
 
@@ -391,10 +392,20 @@ def _audit_pr_review_author_mention(result, action_scope):
         if not pr_author_login:
             return "pr_review_comment comment action requires pr_author_login"
         decision_login = _string_value(action, "decision_owner_login")
+        policy = action.get("decision_owner_policy")
+        if policy is not None and policy != "pr_author":
+            return "pr_review_comment decision owner policy is invalid"
         if decision_login and action_scope is not None and "decision_owner" in action_scope:
-            expected = (action_scope.get("decision_owner") or {}).get("login") or "wklken"
+            owner = action_scope.get("decision_owner")
+            if policy == "pr_author":
+                owner = review_recipient.decision_owner(
+                    owner,
+                    action_scope.get("pr_authors", {}).get(action.get("target_url"), pr_author_login),
+                    action_scope.get("github_account", ""),
+                )
+            expected = (owner or {}).get("login") or "wklken"
             if decision_login != expected:
-                return "pr_review_comment decision owner does not match the confirmed request owner"
+                return "pr_review_comment decision owner does not match the confirmed review recipient"
         # Historical normalized results have only the author field.
         required_mention = f"@{decision_login or pr_author_login}"
         if not re.search(re.escape(required_mention) + r"(?![A-Za-z0-9-])", _string_value(action, "body")):
