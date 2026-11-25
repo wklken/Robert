@@ -71,6 +71,7 @@ class FinalVerificationTests(ReviewWorkspaceFixture):
                 "sources": [],
             },
         }
+        plan = {}
         self.driver = SimpleNamespace(
             db_path="fixture-unused.sqlite3",
             round_id="round-1",
@@ -83,7 +84,8 @@ class FinalVerificationTests(ReviewWorkspaceFixture):
                     "candidate_sha256": coordinator.store.digest(self.candidate),
                 },
             },
-            request={},
+            request={"plan": plan},
+            plan=plan,
             original_request=None,
             final_feedback=None,
             handoff_source_run_id=None,
