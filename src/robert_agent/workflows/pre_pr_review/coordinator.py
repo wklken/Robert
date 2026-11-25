@@ -32,7 +32,7 @@ from robert_agent.workflows.review import files, workspace, report_checkpoint
 from robert_agent.workflows.review.coordinator import ReviewStages
 from robert_agent.workflows.pre_pr_review import base_impact, final_verification, handoff_repair, final_repair
 from robert_agent.workflows.pre_pr_review.verification import final_verification_checks
-from robert_agent.workflows.pre_pr_review import decisions, single_round
+from robert_agent.workflows.pre_pr_review import decisions, single_round, verification_retry
 
 
 class ReviewDecisionRequired(StageStopped):
@@ -100,12 +100,14 @@ class Coordinator(ReviewStages):
         self.final_feedback = self.request.get("final_feedback")
         self.final_decision_feedback = None
         self.handoff_source_run_id = None
+        self.verification_retry = None
         if reply and reply["decision"].get("stage") == "implement" and not self.manifest.get("candidate"):
             decisions.verify_implementation_source(self, reply["decision"])
 
     def check_active(self):
         super().check_active()
         final_repair.validate_feedback(self)
+        verification_retry.verify(self.verification_retry)
         if self.original_request and store.digest(self.original_request["path"]) != self.original_request["sha256"]:
             raise StageStopped("pinned original request changed")
         if self.deadline and datetime.now(timezone.utc) >= self.deadline:
@@ -146,11 +148,14 @@ class Coordinator(ReviewStages):
         if single_round.enabled(self) and stage in single_round.PHASES:
             if any(artifact_available(run) for run in previous):
                 raise StageStopped("completed single-round " + stage + " must be reused; no second invocation")
+        recovering_required_checks = (
+            stage == "address_findings" and single_round.enabled(self) and self.verification_retry
+        )
         failed = [
             run
             for run in previous
             if run["status"] in {ModelRunStatus.FAILED, ModelRunStatus.INTERRUPTED}
-            and run["prompt_sha256"] == prompt_hash
+            and (run["prompt_sha256"] == prompt_hash or recovering_required_checks)
             and (run["dispatch"].get("pid") or run["status"] == ModelRunStatus.FAILED)
         ]
         override = self.request.get("retry_attempt_id") == self.attempt_id and not any(
@@ -159,11 +164,16 @@ class Coordinator(ReviewStages):
         if len(failed) >= retry.MAX_ATTEMPTS and (stage == "repair_handoff" or not override):
             raise StageStopped(f"{stage} retry budget exhausted")
 
-    def phase_input_changed(self, stage):
+    def phase_input_changed(self, stage, run):
         if single_round.enabled(self) and stage in single_round.PHASES:
-            return False
+            return (
+                stage == "address_findings"
+                and bool(self.verification_retry)
+                and run["status"] in {ModelRunStatus.FAILED, ModelRunStatus.INTERRUPTED}
+                and not run["slot_reserved"]
+            )
         reply = self.request.get("operator_reply", {}).get("decision", {})
-        return stage != "implement" or reply.get("stage") == "implement" or super().phase_input_changed(stage)
+        return stage != "implement" or reply.get("stage") == "implement" or super().phase_input_changed(stage, run)
 
     def preserve_phase_artifact(self, run):
         return artifact_available(run) and (
@@ -193,7 +203,13 @@ class Coordinator(ReviewStages):
             path = self.address_workspace(run["run_id"])
             if not path.exists():
                 path.parent.mkdir(parents=True, exist_ok=True)
-                start = self.final_feedback["final_sha"] if self.final_feedback else self.manifest["head_sha"]
+                start = (
+                    self.verification_retry["final_sha"]
+                    if self.verification_retry
+                    else self.final_feedback["final_sha"]
+                    if self.final_feedback
+                    else self.manifest["head_sha"]
+                )
                 git(self.repo["repo_root"], "worktree", "add", "--detach", str(path), start)
             return str(path)
         return super().stage_worktree(run)
@@ -718,11 +734,17 @@ class Coordinator(ReviewStages):
         reply = self.request.get("operator_reply")
         generation = hashlib.sha256(json.dumps(reply, sort_keys=True).encode()).hexdigest() if reply else ""
         input_hash = report_sha + ("-" + generation if generation else "")
+        self.verification_report_sha = report_sha
+        self.verification_retry = verification_retry.inputs(self)
+        if self.verification_retry:
+            input_hash += "-" + self.verification_retry["input_sha256"]
         if self.original_request or self.final_feedback:
             generation = hashlib.sha256(
                 json.dumps([self.original_request, self.final_feedback], sort_keys=True).encode()
             ).hexdigest()
             input_hash += "-" + generation
+        if self.verification_retry:
+            input_hash = report_sha + "-" + hashlib.sha256(input_hash.encode()).hexdigest()
         prompt = self.prompt(
             "address-" + input_hash + ".md",
             render_prompt(
@@ -734,6 +756,7 @@ class Coordinator(ReviewStages):
                     ids,
                     operator_reply=reply,
                     final_feedback=self.final_feedback,
+                    verification_retry=self.verification_retry,
                 ),
                 stage_version=2 if single_round.enabled(self) else None,
             ).text,
@@ -799,7 +822,7 @@ class Coordinator(ReviewStages):
             draft = self.candidate_submission()
             draft["verification"] = final_verification_checks(value["verification"])
             open_pr = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
-            open_pr["body"] = value["body"]
+            open_pr["body"] = self.public_body(value["body"])
             self.validate_submission(draft)
             return {
                 "dispositions_path": str(disposition),
@@ -842,6 +865,13 @@ class Coordinator(ReviewStages):
             )
             raise ValueError(reason)
         return normalized
+
+    @staticmethod
+    def public_body(body):
+        safe = redaction.redact_text(body)
+        if not safe.get("ok"):
+            raise StageStopped("review PR body did not pass public content redaction")
+        return safe["text"]
 
     def finalize(self, report, report_sha, disposition):
         head, final = self.manifest["head_sha"], disposition["head"]
@@ -979,7 +1009,7 @@ class Coordinator(ReviewStages):
             )
         except report_checkpoint.RedactionBlocked as exc:
             raise StageStopped("review dispositions did not pass public content redaction") from exc
-        action["body"] = response["body"] + "\n\n" + appendix["path"].read_text(encoding="utf-8")
+        action["body"] = self.public_body(response["body"]) + "\n\n" + appendix["path"].read_text(encoding="utf-8")
         normalized = self.validate_submission(draft)
         normalized_pr = next(action for action in normalized["planned_github_actions"] if action["type"] == "open_pr")
         envelope = self.envelope(draft)

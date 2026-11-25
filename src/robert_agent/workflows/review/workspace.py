@@ -66,7 +66,7 @@ def _is_test_artifact(tree, name):
         return False
     relative = Path(name)
     return (
-        name == "bkcore_unittest.sqlite3"
+        relative.name == "bkcore_unittest.sqlite3"
         or (relative.parent.name == "__pycache__" and relative.suffix == ".pyc")
         or name
         in {

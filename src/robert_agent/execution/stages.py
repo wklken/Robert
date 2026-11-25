@@ -88,6 +88,15 @@ class ModelRateLimited(RuntimeError):
     pass
 
 
+def _database_busy(error):
+    message = str(error)
+    return message in {
+        "database is locked",
+        "database table is locked",
+        "database schema is locked",
+    } or message.startswith(("database table is locked:", "database schema is locked:"))
+
+
 def _raise_rate_limit(launched):
     logs = {}
     for kind in ("stdout", "stderr"):
@@ -324,12 +333,7 @@ class StageCoordinator:
                         raise StageStopped("review attempt is no longer current")
                     db_write_attempts.set_heartbeat_at_by_attempt_id(conn, store.now(), self.attempt_id)
             except db_errors.OperationalError as exc:
-                message = str(exc)
-                if message not in {
-                    "database is locked",
-                    "database table is locked",
-                    "database schema is locked",
-                } and not message.startswith(("database table is locked:", "database schema is locked:")):
+                if not _database_busy(exc):
                     raise
                 self._next_heartbeat_at = now + 1
             else:
@@ -801,6 +805,7 @@ class StageCoordinator:
         started = datetime.fromisoformat(current.get("started_at") or current["created_at"])
         workers = self.recovery_workers()
         worker = workers[run["worker_id"]]
+        saved_dispatch = json.dumps(current["dispatch"], sort_keys=True)
         if launched.get("prompt_path"):
             self.bind_native_session(run, launched, worker, Path(launched["prompt_path"]))
         next_binding_at = 0.0
@@ -808,8 +813,22 @@ class StageCoordinator:
             self.check_active()
             if launched.get("prompt_path") and time.monotonic() >= next_binding_at:
                 self.bind_native_session(run, launched, worker, Path(launched["prompt_path"]))
-                with store.connect(self.db_path) as conn:
-                    store.update_run(conn, run["run_id"], dispatch_json=json.dumps(launched))
+                payload = json.dumps(launched, sort_keys=True)
+                if payload != saved_dispatch:
+                    # Session discovery is recoverable from provider history.
+                    # Retry only this periodic checkpoint on a busy writer;
+                    # completion/source/slot checkpoints below remain strict.
+                    try:
+                        with closing(db_database.connect(self.db_path, timeout=0.1, foreign_keys=True)) as conn, conn:
+                            db_transactions.begin(conn, immediate=True)
+                            if not attempt_is_active(conn, self.task_id, self.attempt_id):
+                                raise StageStopped("review attempt is no longer current")
+                            store.update_run(conn, run["run_id"], dispatch_json=payload)
+                    except db_errors.OperationalError as exc:
+                        if not _database_busy(exc):
+                            raise
+                    else:
+                        saved_dispatch = payload
                 next_binding_at = time.monotonic() + 1
             proc = self.processes.get(launched.get("pid")) or dispatch.tracked_process(launched.get("pid"))
             if proc is not None:
@@ -861,7 +880,7 @@ class StageCoordinator:
         if launched.get("returncode", 0) != 0:
             raise RuntimeError(f"review worker exited with code {launched['returncode']}")
 
-    def phase_input_changed(self, stage):
+    def phase_input_changed(self, stage, run):
         return stage == "synthesis" or (stage == "prepare" and not self.manifest.get("frozen"))
 
     def preserve_phase_artifact(self, run):
@@ -893,7 +912,7 @@ class StageCoordinator:
                     )
                 continue
             if run["prompt_sha256"] != prompt_hash:
-                if self.phase_input_changed(stage):
+                if self.phase_input_changed(stage, run):
                     if run["status"] in {
                         ModelRunStatus.RUNNING,
                         ModelRunStatus.SUCCEEDED,
