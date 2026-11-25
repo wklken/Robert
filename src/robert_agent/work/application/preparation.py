@@ -449,6 +449,9 @@ def bind_pre_pr_review(
                     conn, previous_review["round_id"], request_json=json.dumps(updated, sort_keys=True)
                 )
         else:
+            # A newly bound round selects the current workflow contract. Rebinds
+            # retain their registered plan, including absent historical policy.
+            request["plan"] = {**review_plan, "review_policy": "single_review_single_repair"}
             pre_pr_review.create(conn, task_id, request)
 
 

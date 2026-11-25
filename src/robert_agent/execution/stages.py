@@ -880,7 +880,7 @@ class StageCoordinator:
         if launched.get("returncode", 0) != 0:
             raise RuntimeError(f"review worker exited with code {launched['returncode']}")
 
-    def phase_input_changed(self, stage):
+    def phase_input_changed(self, stage, run):
         return stage == "synthesis" or (stage == "prepare" and not self.manifest.get("frozen"))
 
     def preserve_phase_artifact(self, run):
@@ -912,7 +912,7 @@ class StageCoordinator:
                     )
                 continue
             if run["prompt_sha256"] != prompt_hash:
-                if self.phase_input_changed(stage):
+                if self.phase_input_changed(stage, run):
                     if run["status"] in {
                         ModelRunStatus.RUNNING,
                         ModelRunStatus.SUCCEEDED,

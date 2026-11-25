@@ -39,7 +39,7 @@ robert_agent/
     application/              # 知识人工审核事务
   workflows/                  # review、vote、PR remediation、maintenance
   configuration/              # 严格 v2、schema、路由、监督配置
-  readmodels/                 # dashboard/board/status/workbench/history/usage
+  readmodels/                 # dashboard/board/status/tasks/workbench/history/usage
   models/                     # SQLAlchemy 2 mapped tables; existing column/storage contracts
   persistence/                # shared queries/stores/transactions/schema/dialects
   adapters/                   # github/git/tapd/processes/notifications/services

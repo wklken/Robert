@@ -13,6 +13,34 @@ robert doctor --config ~/.config/robert/config.yml --output json
 robert status --config ~/.config/robert/config.yml --output json
 ```
 
+## 任务耗时、阶段与停滞排查
+
+先读取一次汇总，再用明确 task ID 查看证据：
+
+```bash
+robert status --tasks --quick --config ~/.config/robert/config.yml
+robert task list --state running --latest --config ~/.config/robert/config.yml
+robert task list --query 073 --latest --config ~/.config/robert/config.yml --output json
+robert task show TASK_ID --config ~/.config/robert/config.yml --output json
+robert task stages TASK_ID --config ~/.config/robert/config.yml --output json
+robert task stages TASK_ID --history --config ~/.config/robert/config.yml --output json
+robert task snapshots TASK_ID --config ~/.config/robert/config.yml --output json
+robert task logs TASK_ID --config ~/.config/robert/config.yml --lines 40 --max-bytes 8192
+```
+
+“重新触发后多久了”看 `inspection.current_attempt.started_at` 和
+`elapsed_seconds`，并记录新 task/attempt ID。历史 failed task 和旧 round
+保留在数据库中；只看失败总数会把已恢复的历史误当成当前故障。
+
+“卡住了”需要结合 phase 上报时间、模型 run 的状态和 owner、进程身份、
+日志修改时间、等待原因与发布回执。连续保存两次 `--output json` 比较；
+只有 heartbeat 更新或 PID 存活不能证明模型仍在执行。模型完成后的登记延迟
+与模型实际耗时分开呈现；没有完成时间的记录显示 unknown。
+
+若错误涉及 snapshot/prompt，先比对 `task snapshots` 的当前和历史身份，
+以及 `task stages --history` 的 owner 与 prompt hash。上述命令读取已登记证据，
+不会修复文件或重触发任务。命令参数和 JSON 字段见[CLI 参考](reference.md#cli)。
+
 ## 安装或启动失败
 
 | 症状 | 检查与处理 |

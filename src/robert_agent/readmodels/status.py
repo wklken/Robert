@@ -30,7 +30,7 @@ from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.persistence.queries.readviews import run_history, task_history
 from robert_agent.persistence.queries.readviews import sources as source_history
 from robert_agent.readmodels import dashboard as web
-from robert_agent.readmodels import execution_metrics
+from robert_agent.readmodels import execution_metrics, tasks
 from robert_agent.readmodels.history import diagnostic_detail, step_output
 
 DEFAULT_DB = "~/.local/share/robert/robert.sqlite3"
@@ -220,11 +220,11 @@ def _compact_task(task):
     }
 
 
-def build_status(db_path, history_limit=5):
+def build_status(db_path, history_limit=5, *, include_timings=True):
     db_path = Path(db_path).expanduser()
     data = web.build_dashboard_data(Path(db_path).expanduser(), history_limit=history_limit)
     with closing(db_database.connect(db_path)) as conn:
-        timings = execution_metrics.summarize(conn)
+        timings = execution_metrics.summarize(conn) if include_timings else None
         from robert_agent.supervision import store as supervision_store
 
         supervision = (
@@ -355,6 +355,7 @@ def build_task(conn, task_id, result_limit=5):
     if candidate := pre_pr_review.task_status(conn, task_id):
         task["pre_pr_review"] = candidate
     task["events"] = [_row_dict(row) for row in db_read_task_events.find_for_build_task(conn, task_id)]
+    task["inspection"] = tasks.inspect_task_from_connection(conn, task_id)
     return task
 
 

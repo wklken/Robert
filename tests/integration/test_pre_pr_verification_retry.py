@@ -48,6 +48,43 @@ class VerificationRetryTests(PrePRReviewFixture):
         self.assertEqual(saved["dispatch"], original["dispatch"])
         self.assertEqual(entry["status"], "waiting_for_user")
 
+    def test_single_round_gate_failure_recovers_the_repaired_source_without_another_review(self):
+        driver = self.start(["claude"], legacy=False)
+        self.with_finding = True
+        launch = driver.launcher
+        prompts = []
+        repaired_head = []
+
+        def fail_first_checks(**kwargs):
+            prompt = Path(kwargs["prompt_path"])
+            if prompt.name.startswith("address-") and prompts:
+                self.assertIn("verification-retry", prompt.read_text())
+                self.assertEqual(git(kwargs["worktree_path"], "rev-parse", "HEAD"), repaired_head[0])
+            result = launch(**kwargs)
+            if prompt.name.startswith("address-"):
+                prompts.append(prompt)
+                if len(prompts) == 1:
+                    path = Path(kwargs["log_dir"]) / "dispositions.json"
+                    value = json.loads(path.read_text())
+                    repaired_head.append(value["final_sha"])
+                    failed = deepcopy(value["verification"][0])
+                    failed.update(status="failed", exit_code=2)
+                    value["verification"].insert(0, failed)
+                    path.write_text(json.dumps(value))
+            return result
+
+        driver.launcher = fail_first_checks
+        driver.prepare()
+        report, report_sha, ids = driver.report(driver.review())
+        with self.assertRaisesRegex(ValueError, "required check"):
+            driver.address(report, report_sha, ids)
+        disposition = driver.address(report, report_sha, ids)
+        self.assertTrue(driver.finalize(report, report_sha, disposition)["ok"])
+        self.assertEqual(len(prompts), 2)
+        self.assertNotEqual(prompts[0], prompts[1])
+        self.assertEqual(self.launches["reviewer-prompt.md"], 1)
+        self.assertEqual(self.launches["verify_final"], 0)
+
     def test_required_failure_retries_from_repaired_head_with_pinned_feedback(self):
         driver = self.start(["claude"])
         self.with_finding = True

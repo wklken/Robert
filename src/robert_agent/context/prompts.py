@@ -20,6 +20,10 @@ _SECTIONS = ("Stage", "Task", "Boundaries", "Context", "Work", "Verification", "
 _CONTRACT_VERSION = "robert.prompt.v1"
 _STAGE_VERSIONS = {
     "review.evaluate": {1: "review-evaluate-model-preparation-v1.md", 2: "review-evaluate.md"},
+    "review.address_findings": {
+        1: "review-address-findings.md",
+        2: "review-address-findings-single-round-v2.md",
+    },
 }
 
 
@@ -149,7 +153,8 @@ def render_prompt(request: PromptInput, *, stage_version: int | None = None) -> 
     else:
         for section, content in _split_sections(load(f"protocols/{protocol}.md")).items():
             sections[section].append(content)
-    if protocol == "helper" or request.stage in {"vote.prepare", "review.address_findings", "supervision.decide"}:
+    address_question = request.stage == "review.address_findings" and stage_version != 2
+    if protocol == "helper" or address_question or request.stage in {"vote.prepare", "supervision.decide"}:
         sections["Delivery"].append(load(question_choices.PROMPT_RESOURCE))
     sections["Boundaries"].insert(0, load("common.md"))
     if request.stage.startswith("task.") or request.stage == "maintenance.repair":

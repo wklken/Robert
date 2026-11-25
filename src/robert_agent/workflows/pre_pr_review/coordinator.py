@@ -32,7 +32,7 @@ from robert_agent.workflows.review import files, workspace, report_checkpoint
 from robert_agent.workflows.review.coordinator import ReviewStages
 from robert_agent.workflows.pre_pr_review import base_impact, final_verification, handoff_repair, final_repair
 from robert_agent.workflows.pre_pr_review.verification import final_verification_checks
-from robert_agent.workflows.pre_pr_review import decisions, verification_retry
+from robert_agent.workflows.pre_pr_review import decisions, single_round, verification_retry
 
 
 class ReviewDecisionRequired(StageStopped):
@@ -70,6 +70,8 @@ class Coordinator(ReviewStages):
     def __init__(self, db_path, task_id, attempt_id, *, observe_base=remote_branch_sha, **kwargs):
         super().__init__(db_path, task_id, attempt_id, **kwargs)
         self.plan = self.request["plan"]
+        if self.plan.get("review_policy") not in (None, single_round.POLICY):
+            raise StageStopped("unsupported pre-publication review policy")
         self.request = {**self.request, "workers": self.plan["workers"]}
         self.repo = self.request["repo"]
         self.observe_base = observe_base
@@ -116,6 +118,14 @@ class Coordinator(ReviewStages):
             transactions.begin(conn, immediate=True)
             if not attempt_is_active(conn, self.task_id, self.attempt_id):
                 raise StageStopped("candidate owner changed")
+            entry = store.session(conn, task_id=self.task_id)
+            if (
+                single_round.enabled(self)
+                and entry["snapshot_id"]
+                and entry["snapshot_id"] != self.manifest["snapshot_id"]
+                and any(run["stage"] in single_round.PHASES for run in store.runs(conn, self.round_id))
+            ):
+                raise StageStopped("single-round review snapshot changed; preserve the existing checkpoint")
             store.save_snapshot(conn, self.round_id, self.manifest)
             entry = store.session(conn, task_id=self.task_id)
             request = dict(entry["request"])
@@ -135,11 +145,17 @@ class Coordinator(ReviewStages):
                 self.request.pop("final_feedback", None)
 
     def check_launch_budget(self, stage, prompt_hash, previous):
+        if single_round.enabled(self) and stage in single_round.PHASES:
+            if any(artifact_available(run) for run in previous):
+                raise StageStopped("completed single-round " + stage + " must be reused; no second invocation")
+        recovering_required_checks = (
+            stage == "address_findings" and single_round.enabled(self) and self.verification_retry
+        )
         failed = [
             run
             for run in previous
             if run["status"] in {ModelRunStatus.FAILED, ModelRunStatus.INTERRUPTED}
-            and run["prompt_sha256"] == prompt_hash
+            and (run["prompt_sha256"] == prompt_hash or recovering_required_checks)
             and (run["dispatch"].get("pid") or run["status"] == ModelRunStatus.FAILED)
         ]
         override = self.request.get("retry_attempt_id") == self.attempt_id and not any(
@@ -148,9 +164,16 @@ class Coordinator(ReviewStages):
         if len(failed) >= retry.MAX_ATTEMPTS and (stage == "repair_handoff" or not override):
             raise StageStopped(f"{stage} retry budget exhausted")
 
-    def phase_input_changed(self, stage):
+    def phase_input_changed(self, stage, run):
+        if single_round.enabled(self) and stage in single_round.PHASES:
+            return (
+                stage == "address_findings"
+                and bool(self.verification_retry)
+                and run["status"] in {ModelRunStatus.FAILED, ModelRunStatus.INTERRUPTED}
+                and not run["slot_reserved"]
+            )
         reply = self.request.get("operator_reply", {}).get("decision", {})
-        return stage != "implement" or reply.get("stage") == "implement" or super().phase_input_changed(stage)
+        return stage != "implement" or reply.get("stage") == "implement" or super().phase_input_changed(stage, run)
 
     def preserve_phase_artifact(self, run):
         return artifact_available(run) and (
@@ -192,14 +215,35 @@ class Coordinator(ReviewStages):
         return super().stage_worktree(run)
 
     def validate_output(self, run, validate, model):
+        if single_round.enabled(self) and artifact_available(run) and run["artifact"].get("handoff_repair_path"):
+            return handoff_repair.reuse(self, run, validate, model)
         try:
             return super().validate_output(run, validate, model)
-        except ValueError as exc:
+        except (ValueError, OSError, RuntimeError) as exc:
+            if single_round.enabled(self) and artifact_available(run):
+                raise StageStopped("completed single-round artifact changed: " + str(exc)) from exc
             if run["stage"] not in {"implement", "address_findings"} or not handoff_repair.repairable(exc):
                 raise
             with store.connect(self.db_path) as conn:
                 current = next(item for item in store.runs(conn, self.round_id) if item["run_id"] == run["run_id"])
             return handoff_repair.repair(self, current, validate, model, exc)
+
+    def run_phase(self, stage, worker, prompt_path, validate, *, input_hash=None):
+        if single_round.enabled(self) and stage in single_round.PHASES:
+            with store.connect(self.db_path) as conn:
+                completed = [
+                    run
+                    for run in store.runs(conn, self.round_id)
+                    if run["stage"] == stage and run["worker_id"] == worker["name"] and artifact_available(run)
+                ]
+            if len(completed) > 1:
+                raise StageStopped("single-round phase has multiple completed artifacts")
+            for run in completed:
+                if run["prompt_sha256"] != store.digest(prompt_path) or (
+                    input_hash is not None and run["artifact"].get("input_sha256") != input_hash
+                ):
+                    raise StageStopped("completed single-round " + stage + " input changed; preserve its artifact")
+        return super().run_phase(stage, worker, prompt_path, validate, input_hash=input_hash)
 
     def address_workspace(self, run_id):
         with store.connect(self.db_path) as conn:
@@ -291,6 +335,7 @@ class Coordinator(ReviewStages):
         with store.connect(self.db_path) as conn:
             saved_merge = store.session(conn, task_id=self.task_id)["request"].get("base_merge")
         if saved_merge:
+            single_round.preserve_snapshot(self)
             # Reconcile the already charged operation against its pinned base
             # before observing a newer remote revision or creating another intent.
             preserved = self.preserve_completed_repair(candidate, align=False)
@@ -306,7 +351,8 @@ class Coordinator(ReviewStages):
                 candidate = self.merge_current_base(preserved, saved_merge["base_sha"])
             self.save_candidate_snapshot(candidate, saved_merge["base_sha"])
         base_sha = self.observe_base(self.repo["repo_root"], "upstream", self.base)
-        candidate = base_impact.reconcile_operator_merge(self, candidate, base_sha)
+        if not single_round.review_started(self):
+            candidate = base_impact.reconcile_operator_merge(self, candidate, base_sha)
         original_matches = self.manifest.get("original_request") == self.original_request
         if self.manifest.get("base_sha") != base_sha and original_matches:
             preserved = self.preserve_completed_repair(candidate, align=False)
@@ -316,6 +362,7 @@ class Coordinator(ReviewStages):
                 self.prepare_context()
                 return
         if self.manifest.get("base_sha") != base_sha or not original_matches:
+            single_round.preserve_snapshot(self)
             changed_base = bool(self.manifest.get("base_sha") and self.manifest["base_sha"] != base_sha)
             candidate = self.preserve_completed_repair(candidate, align=not changed_base)
             git(self.repo["repo_root"], "fetch", "upstream", base_sha)
@@ -338,6 +385,7 @@ class Coordinator(ReviewStages):
         self.prepare_context()
 
     def save_candidate_snapshot(self, candidate, base_sha):
+        single_round.preserve_snapshot(self)
         self.manifest = workspace.prepare_candidate_snapshot(
             self.repo["repo_root"],
             self.repo["worktree_root"],
@@ -519,6 +567,7 @@ class Coordinator(ReviewStages):
         final = changed.disposition["head"] if changed.disposition else preserved["head"]
         if self.accept_base_refresh(changed.current, final):
             return
+        single_round.preserve_snapshot(self)
         candidate = preserved
         if changed.disposition:
             candidate = {**candidate, "head": changed.disposition["head"]}
@@ -635,6 +684,29 @@ class Coordinator(ReviewStages):
                     store.now(),
                 )
 
+        if single_round.enabled(self):
+            with store.connect(self.db_path) as conn:
+                saved = store.session(conn, task_id=self.task_id)
+            if saved["report_path"]:
+                saved_path = Path(saved["report_path"])
+                if store.digest(saved_path) != saved["report_sha256"]:
+                    raise StageStopped("registered single-round report changed")
+                try:
+                    pinned = report_checkpoint.report_input_identity(
+                        self.db_path,
+                        self.round_id,
+                        self.manifest,
+                        saved_path,
+                        saved["report_sha256"],
+                        check_active=self.check_active,
+                        load_anchor=load_anchor,
+                        redact=redact_report,
+                    )
+                except (ValueError, OSError) as exc:
+                    raise StageStopped("registered single-round report changed: " + str(exc)) from exc
+                if pinned != evaluation_identity:
+                    raise StageStopped("registered single-round report input changed")
+                return saved_path, saved["report_sha256"], [item["id"] for item in items]
         try:
             report = report_checkpoint.seal_rendered_report(
                 self.db_path,
@@ -685,7 +757,8 @@ class Coordinator(ReviewStages):
                     operator_reply=reply,
                     final_feedback=self.final_feedback,
                     verification_retry=self.verification_retry,
-                )
+                ),
+                stage_version=2 if single_round.enabled(self) else None,
             ).text,
             stage="address_findings",
         )
@@ -721,7 +794,7 @@ class Coordinator(ReviewStages):
             if seen != set(ids):
                 raise ValueError("disposition handoff omitted a finding")
             pending = [item for item in value["dispositions"] if item["status"] == "needs_decision"]
-            if pending:
+            if pending and not single_round.enabled(self):
                 summary = "Review findings require a decision within the original task scope.\n" + "\n".join(
                     f"{item['id']}: {item['reason']}" for item in pending
                 )
@@ -811,7 +884,18 @@ class Coordinator(ReviewStages):
         draft = self.candidate_submission()
         response = json.loads(Path(disposition["dispositions_path"]).read_text(encoding="utf-8"))
         finding_ids = [item["id"] for item in response["dispositions"]]
-        verification = final_verification.verify(self, report, report_sha, finding_ids, disposition)
+        if single_round.enabled(self):
+            if (
+                response.get("candidate_sha") != head
+                or response.get("final_sha") != final
+                or response.get("report_sha256") != report_sha
+            ):
+                raise StageStopped("single-round final handoff identity changed")
+            final_verification_checks(response["verification"])
+            completion = single_round.completion(self, report_sha, disposition)
+            verification = None
+        else:
+            verification = final_verification.verify(self, report, report_sha, finding_ids, disposition)
         self.stage = "finalize"
         self.phase(self.stage)
         draft["verification"] = response["verification"]
@@ -824,7 +908,7 @@ class Coordinator(ReviewStages):
         deferred = [
             f"- {item['id']}（{item['status']}）：{item['reason']}"
             for item in response["dispositions"]
-            if item["status"] in ("deferred", "dismissed")
+            if item["status"] != "fixed"
         ]
         load_anchor, save_anchor = ReviewStages.report_anchor_callbacks(self)
         evaluation_identity = report_checkpoint.report_input_identity(
@@ -870,6 +954,11 @@ class Coordinator(ReviewStages):
                     "## Review 报告",
                     f"送审提交：`{head}`",
                     f"最终提交：`{final}`",
+                    *(
+                        ["评审策略：一轮 review、一轮整改；未执行独立的最终模型复核。"]
+                        if single_round.enabled(self)
+                        else []
+                    ),
                     "",
                     body,
                     "",
@@ -940,7 +1029,11 @@ class Coordinator(ReviewStages):
             if clean_head(self.assigned_path, self.branch) != final:
                 raise StageSuperseded("assigned branch changed before final review handoff")
             proof = {
-                "final_verification": verification,
+                **(
+                    {"review_policy": single_round.POLICY, "single_round_completion": completion}
+                    if single_round.enabled(self)
+                    else {"final_verification": verification}
+                ),
                 "round_id": self.round_id,
                 "attempt_id": self.attempt_id,
                 "snapshot_id": self.manifest["snapshot_id"],
@@ -1049,6 +1142,8 @@ class Coordinator(ReviewStages):
         except ReviewDecisionRequired as exc:
             return self.wait_for_decision(exc, locals().get("sha"))
         except final_verification.FinalReviewBlocked as exc:
+            if single_round.enabled(self):
+                raise StageStopped("single-round policy cannot enter final model review or repair") from exc
             decision = final_repair.handle(self, exc)
             if decision:
                 return self.wait_for_decision(ReviewDecisionRequired(*decision), sha)
