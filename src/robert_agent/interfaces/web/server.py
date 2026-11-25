@@ -593,6 +593,8 @@ def _handle_proposal_post(route, body, db_path, control_context, headers):
             expected_version=payload.get("expected_version"),
             idempotency_key=headers.get("x-idempotency-key"),
             reason=payload.get("reason", ""),
+            defer_days=payload.get("defer_days"),
+            repository_label=payload.get("repository_label"),
         )
     except work_items.WorkItemNotFoundError:
         return _json_response({"status": "not_found"}, 404)

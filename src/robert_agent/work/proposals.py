@@ -17,10 +17,19 @@ def digest(value):
     return hashlib.sha256(encoded(value).encode()).hexdigest()
 
 
-def github_source(repo, issue, allowed):
+def github_source(repo, issue, allowed, *, in_progress_labels=()):
     repository = repo["full_name"]
     owners = tuple(assignee["login"].casefold() for assignee in issue["assignees"])
-    if issue["state"] != "open" or any(owner not in allowed for owner in owners):
+    labels = issue.get("labels", [])
+    if in_progress_labels and (
+        not isinstance(labels, list)
+        or any(not isinstance(label, dict) or not isinstance(label.get("name"), str) for label in labels)
+    ):
+        raise ValueError("GitHub returned incomplete Issue labels")
+    started = bool(in_progress_labels) and bool(
+        {label["name"].casefold() for label in labels} & {label.casefold() for label in in_progress_labels}
+    )
+    if issue["state"] != "open" or started or allowed is not None and any(owner not in allowed for owner in owners):
         return None
     key = github_key(repository, "issue", issue["number"])
     return {
@@ -41,19 +50,25 @@ def github_source(repo, issue, allowed):
     }
 
 
-def tapd_source(project, item, terminal, allowed):
+def tapd_source(project, item, terminal, allowed, *, allow_unbound=False, todo_states=()):
     _, repository, label = tapd_policy.select_repository(item.labels, project["label_rules"])
     if (
-        not repository
+        (not repository and not allow_unbound)
         or item.owners is None
         or any(owner not in allowed for owner in item.owners)
         or item.archived is True
+        or todo_states
+        and item.status not in todo_states
         or tapd_policy.is_ended(item.status, terminal)
     ):
         return None
     host, workspace = project["host"], project["workspace_id"]
-    key = tapd_identity.source_key(host, workspace, item.kind, item.external_id, repository)
-    return {
+    key = (
+        tapd_identity.source_key(host, workspace, item.kind, item.external_id, repository)
+        if repository
+        else f"tapd:{host}/{workspace}/{item.kind}/{item.external_id}"
+    )
+    source = {
         "provider": "tapd",
         "source_type": tapd_identity.SOURCE_TYPES[item.kind],
         "identity": f"tapd:{host}/{workspace}/{item.kind}/{item.external_id}",
@@ -71,15 +86,19 @@ def tapd_source(project, item, terminal, allowed):
         "created_at": item.created,
         "owners": sorted(item.owners),
     }
+    if allow_unbound and not repository:
+        source["repository_candidates"] = [dict(rule) for rule in project["label_rules"]]
+    return source
 
 
 def validate_assessment(output, commit, excerpts):
     if output == {"decision": "skip"}:
         return None
     fields = ("summary", "scope", "exclusions", "verification", "risks")
+    ratings = {"priority", "recommendation", "recommendation_reason"}
     if (
         not isinstance(output, dict)
-        or set(output) != {"decision", "kind", "evidence", *fields}
+        or set(output) - ratings != {"decision", "kind", "evidence", *fields}
         or output["decision"] != "propose"
         or output["kind"] not in ("implementation", "investigation")
         or any(not isinstance(output[key], str) or not output[key].strip() or len(output[key]) > 1500 for key in fields)
@@ -107,7 +126,23 @@ def validate_assessment(output, commit, excerpts):
             raise ValueError("proposal cited unavailable code evidence")
         references.add((item["id"], line))
         evidence.append({"path": excerpt["path"], "line": line, "reason": safe_text(reason, 500)})
+    rank = {}
+    if ratings.intersection(output):
+        if (
+            str(output.get("priority")) not in {"high", "medium", "low"}
+            or str(output.get("recommendation")) not in {"high", "medium", "low"}
+            or not isinstance(output.get("recommendation_reason"), str)
+            or not output["recommendation_reason"].strip()
+            or len(output["recommendation_reason"]) > 500
+        ):
+            raise ValueError("invalid proposal ratings")
+        rank = {
+            "priority": output["priority"],
+            "recommendation": output["recommendation"],
+            "recommendation_reason": safe_text(output["recommendation_reason"], 500),
+        }
     return {
+        **rank,
         "kind": output["kind"],
         "commit": commit,
         "evidence": evidence,

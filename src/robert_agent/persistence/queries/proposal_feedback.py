@@ -28,7 +28,7 @@ def pending(conn, now, limit=10):
     return [dict(row) for row in statements.read(conn, query)]
 
 
-def unreported(conn, repo_ids, projects, *, limit=20):
+def unreported(conn, repo_ids, projects, *, limit=20, scheduled=False):
     proposal, revision, notice, event = (
         tables[name]
         for name in (
@@ -72,9 +72,11 @@ def unreported(conn, repo_ids, projects, *, limit=20):
         .correlate(proposal)
     )
     event_task = func.json_extract(event.c.metadata_json, "$.task_id")
+    repo = tables["repos"]
+    repository = select(repo.c.full_name).where(repo.c.repo_id == proposal.c.repo_id).scalar_subquery()
     pr_for_event = (
         literal("https://github.com/")
-        + func.json_extract(revision.c.source_json, "$.repository")
+        + repository
         + literal("/pull/")
         + cast(func.json_extract(event.c.metadata_json, "$.number"), Text)
     )
@@ -133,7 +135,37 @@ def unreported(conn, repo_ids, projects, *, limit=20):
             ~select(1).where(notice.c.notification_id == opened_id).exists(),
         )
     )
-    query = accepted.union_all(progress, opened).order_by("occurred_at", "notification_id").limit(limit)
+    milestone_queries = [progress, opened]
+    if scheduled:
+        attempt = tables["attempts"]
+        worker_started = func.json_extract(attempt.c.metadata_json, "$.worker_started_at")
+        started_at = (
+            select(func.min(worker_started))
+            .where(attempt.c.task_id.in_(bound_task))
+            .correlate(proposal)
+            .scalar_subquery()
+        )
+        started_id = literal("proposal-comment:") + proposal.c.proposal_id + literal(":started")
+        milestone_queries.append(
+            select(
+                started_id.label("notification_id"),
+                proposal.c.proposal_id,
+                proposal.c.revision,
+                revision.c.source_json,
+                literal("started").label("event_type"),
+                literal("{}").label("event_json"),
+                started_at.label("occurred_at"),
+            )
+            .select_from(source)
+            .where(
+                proposal.c.status == "admitted",
+                scope,
+                started_at.is_not(None),
+                func.json_extract(revision.c.report_json, "$.analyzed_at").is_not(None),
+                ~select(1).where(notice.c.notification_id == started_id).exists(),
+            )
+        )
+    query = accepted.union_all(*milestone_queries).order_by("occurred_at", "notification_id").limit(limit)
     return [dict(row) for row in statements.read(conn, query)]
 
 

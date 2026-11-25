@@ -11,7 +11,7 @@ from robert_agent.delivery.application import proposal_feedback, tapd_comments
 from robert_agent.persistence import database
 from robert_agent.persistence.queries.proposal_feedback import status
 from robert_agent.work.application.web_setup import prepare_repositories
-from robert_agent.work.proposal_feedback import record_created
+from robert_agent.work.proposal_feedback import record_comment, record_created
 
 
 class ProposalFeedbackTests(unittest.TestCase):
@@ -112,3 +112,39 @@ class ProposalFeedbackTests(unittest.TestCase):
             result = proposal_feedback.deliver_pending(self.config, now=self.now)
         self.assertEqual(result, {"skipped": 1})
         client.add_comment.assert_not_called()
+
+    def test_confirmed_start_updates_tapd_and_preserves_other_labels(self):
+        source = {
+            "provider": "tapd",
+            "repository": "test/repo",
+            "repository_label": "backend",
+            "status": "pending",
+            "owners": ["alice"],
+            "project_key": "tapd.example.test/101",
+            "url": "https://tapd.example.test/101/prong/stories/view/31",
+        }
+        self.config["tapd"]["projects"][0]["label_rules"] = [{"repository": "test/repo", "label": "backend"}]
+        self.config["proposer"].update(
+            tapd_started_states={"story": "progress"}, tapd_todo_states={"story": ["pending"]}
+        )
+        with closing(database.connect(self.db_path)) as conn, conn:
+            for event in ("tag_sync", "status_sync"):
+                record_comment(conn, event, event, "p-abc", 1, source, self.now)
+        client = Mock()
+        item = SimpleNamespace(status="pending", archived=False, labels="regression", owners=("alice",))
+        client.get_item.return_value = item
+
+        def update(*_target, status=None, labels=None):
+            if status:
+                item.status = status
+            if labels:
+                item.labels = "|".join(labels)
+
+        client.update_proposal_ticket.side_effect = update
+        publisher = tapd_comments.Publisher(self.config["tapd"], self.config["data_dir"], client=client)
+        with patch.object(tapd_comments, "publisher_for", return_value=publisher):
+            self.assertEqual(proposal_feedback.deliver_pending(self.config, now=self.now), {"sent": 2})
+            self.assertEqual(proposal_feedback.deliver_pending(self.config, now=self.later), {})
+        self.assertEqual(set(item.labels.split("|")), {"backend", "regression"})
+        self.assertEqual(item.status, "progress")
+        self.assertEqual(client.update_proposal_ticket.call_count, 2)

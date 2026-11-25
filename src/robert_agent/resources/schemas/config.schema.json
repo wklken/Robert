@@ -842,6 +842,33 @@
         "github_assignees": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []},
         "tapd_projects": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []},
         "tapd_assignees": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []},
+        "github_all_registered": {"type": "boolean", "default": false},
+        "github_in_progress_labels": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": ["in progress", "in-progress"]},
+        "tapd_todo_states": {
+          "type": "object", "additionalProperties": false, "default": {},
+          "properties": {
+            "story": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []},
+            "bug": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "default": []}
+          }
+        },
+        "tapd_started_states": {
+          "type": "object", "additionalProperties": false, "default": {},
+          "properties": {
+            "story": {"type": "string", "minLength": 1},
+            "bug": {"type": "string", "minLength": 1}
+          }
+        },
+        "schedule": {
+          "type": "object", "additionalProperties": false, "default": {},
+          "properties": {
+            "enabled": {"type": "boolean", "default": false},
+            "analysis_time": {"type": "string", "default": "08:30"},
+            "digest_time": {"type": "string", "default": "09:30"},
+            "analysis_limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+            "worker": {"type": "string", "minLength": 1},
+            "web_url": {"type": "string", "minLength": 1}
+          }
+        },
         "gateway_metadata": {"type": "string", "minLength": 1},
         "model": {"type": "string", "minLength": 1}
       },

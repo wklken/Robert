@@ -134,13 +134,31 @@ messaging:
   #   events: [pr_opened, report_delivered]
   #   chromium: chromium
 
-# Discover proposals in explicitly selected sources. See docs/features/proposer.md.
+# Proposal discovery and daily recommendations. See docs/features/proposer.md.
 proposer:
   enabled: false
   publish_comments: false
+  github_all_registered: false
   github_repositories: []
   github_assignees: []
+  github_in_progress_labels: ["in progress", "in-progress"]
+  # Daily scheduling supports one configured gateway project, e.g. tapd.example.com/20001234.
   tapd_projects: []
   tapd_assignees: []
+  tapd_todo_states:
+    story: []
+    bug: []
+  # Configure real workflow status IDs before enabling TAPD daily scheduling.
+  # tapd_started_states:
+  #   story: status_2
+  #   bug: in_progress
   # gateway_metadata: /path/to/local-messages-gateway.json
   # model: your-local-gateway-model
+  schedule:
+    enabled: false
+    analysis_time: "08:30"
+    digest_time: "09:30"
+    analysis_limit: 20
+    # Select a configured worker whose model is accepted by the Messages gateway.
+    # worker: coder
+    # web_url: https://robert.example.internal

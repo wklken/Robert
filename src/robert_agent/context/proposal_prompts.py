@@ -18,6 +18,9 @@ def assessment(source, commit):
                     "decision": "propose",
                     "kind": "implementation",
                     "summary": "<proposed outcome>",
+                    "priority": "medium",
+                    "recommendation": "high",
+                    "recommendation_reason": "<why it belongs here today>",
                     "scope": "<bounded implementation or investigation>",
                     "exclusions": "<out of scope>",
                     "verification": "<checks and expected results>",
@@ -43,6 +46,27 @@ def assessment(source, commit):
                     revision=commit,
                     locator="$.code",
                 ),
+            ),
+        )
+    )
+
+
+def routing(source):
+    return render_prompt(
+        PromptInput(
+            "proposer.route",
+            {"provider": source["provider"], "repository_labels": source["repository_candidates"]},
+            OutputContract(
+                "stdout-json",
+                "proposal_route",
+                "stdout",
+                "Robert proposal routing validator",
+                example={"label": None, "reason": "<reason for selecting a listed label or abstaining>"},
+            ),
+            authority={"tools": []},
+            context_items=(
+                ContextItem("ticket", "Title and description", source["provider"], locator="$.ticket"),
+                ContextItem("discussion", "Recent discussion", source["provider"], locator="$.discussion"),
             ),
         )
     )

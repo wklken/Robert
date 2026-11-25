@@ -89,8 +89,8 @@ class ProposalScanTests(unittest.TestCase):
             "evidence": [{"id": "code-1", "line": 1, "reason": "Route owner."}],
         }
         for target, value in (
-            ("issues.list_recent", self.issues),
-            ("issues.discussion", ()),
+            ("proposal_sources.issues.list_recent", self.issues),
+            ("proposal_sources.issues.discussion", ()),
             ("model_gateway.gateway_endpoint", "http://127.0.0.1:7001"),
             ("tapd_client.client_for", self.tapd),
         ):
@@ -130,6 +130,31 @@ class ProposalScanTests(unittest.TestCase):
             "2026-11-20 09:03:00",
             owners,
         )
+
+    def test_scheduled_discovery_persists_backlog_before_evaluation_and_keeps_it_after_a_week(self):
+        self.config["proposer"].update(
+            github_all_registered=True,
+            schedule={"enabled": True, "analysis_limit": 1},
+            tapd_todo_states={"story": ["open"]},
+        )
+        with patch.object(proposal_sources.issues, "has_open_pull_request", return_value=False):
+            stats = proposal_scan.scan_daily(self.config, now="2026-11-22T01:00:00+00:00")
+        pending = read(self.db, status="pending")
+        self.assertEqual((stats["discovered"], stats["evaluated"]), (3, 1))
+        self.assertEqual(len(pending), 3)
+        self.assertEqual(len(read(self.db, status="today")), 1)
+        self.tapd.get_item.return_value = self._ticket("12", ("alice",))
+        self.tapd.recent_items.side_effect = None
+        self.tapd.recent_items.return_value = []
+        with (
+            patch.object(proposal_sources.issues, "has_open_pull_request", return_value=False),
+            patch.object(proposal_sources.issues, "list_recent", return_value=[]),
+            patch.object(proposal_sources.issues, "get", side_effect=lambda _repo, number: self.issues[number - 1]),
+        ):
+            rep = proposal_scan.scan_daily(self.config, now="2026-12-02T01:00:00+00:00")
+        self.assertEqual(rep["updated"], 1)
+        self.assertEqual(len(read(self.db, status="today")), 2)
+        self.assertEqual(len(read(self.db, status="pending")), 3)
 
     def test_scan_records_gateway_usage_when_assessment_fails_validation(self):
         def response(**kwargs):
@@ -189,8 +214,8 @@ class ProposalScanTests(unittest.TestCase):
         self.tapd.recent_items.side_effect = None
         self.tapd.recent_items.return_value = ()
         with (
-            patch.object(proposal_scan.issues, "list_recent", return_value=()),
-            patch.object(proposal_scan.issues, "get", return_value=self.issues[0]),
+            patch.object(proposal_sources.issues, "list_recent", return_value=()),
+            patch.object(proposal_sources.issues, "get", return_value=self.issues[0]),
         ):
             report = proposal_scan.scan(self.config, now="2026-12-02T01:00:00+00:00")
         self.assertEqual(report["proposed"], 1, report)
@@ -206,7 +231,7 @@ class ProposalScanTests(unittest.TestCase):
         self.assertEqual(before["description"], after["description"])
         self.assertNotEqual(before["content_digest"], after["content_digest"])
         with patch.object(
-            proposal_scan.issues, "discussion", side_effect=[("a" * 650 + "Analyze",), ("a" * 650 + "Change",)]
+            proposal_sources.issues, "discussion", side_effect=[("a" * 650 + "Analyze",), ("a" * 650 + "Change",)]
         ):
             first = proposal_sources.discussion(before, {}, self.config["tapd"])
             second = proposal_sources.discussion(before, {}, self.config["tapd"])

@@ -52,6 +52,7 @@ class TapdItem:
     url: str | None
     created: str | None = None
     owners: tuple[str, ...] | None = None
+    priority: str | None = None
 
 
 def _id(value, code="invalid_input"):
@@ -224,6 +225,7 @@ class TapdClient:
             url=_text(raw, "url"),
             created=_text(raw, "created"),
             owners=_owners(raw, "owner" if kind == "story" else "current_owner"),
+            priority=_text(raw, "priority"),
         )
 
     def recent_items(self, workspace_id, kind, *, since, until, max_pages=10):
@@ -274,6 +276,23 @@ class TapdClient:
         if not data or any(not isinstance(key, str) or not isinstance(value, str) for key, value in data.items()):
             raise TapdError("invalid_response")
         return data
+
+    def update_proposal_ticket(self, workspace_id, kind, external_id, *, status=None, labels=None):
+        """Update a single confirmed Proposal field; the caller verifies the observed effect."""
+        if (
+            kind not in _ENTRY_TYPES
+            or (status is None) == (labels is None)
+            or (status is not None and (not isinstance(status, str) or not status or "\0" in status))
+            or (
+                labels is not None
+                and (not labels or any(not label or "|" in label or "\0" in label for label in labels))
+            )
+        ):
+            raise TapdError("invalid_input")
+        flag = f"--status={status}" if status is not None else "--label=" + "|".join(labels)
+        result = self._request(workspace_id, [kind, "update", _id(external_id), flag], payload=b"")
+        if result.get("success") is not True or result.get("id") != external_id:
+            raise TapdError("invalid_response", effect_unknown=True)
 
     def add_comment(self, workspace_id, kind, external_id, body):
         """Return the acknowledged comment ID; callers confirm the effect by reading it back."""

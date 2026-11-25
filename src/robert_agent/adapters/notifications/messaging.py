@@ -11,6 +11,7 @@ from robert_agent.foundation.question_choices import option_lines
 
 
 EVENT_LABELS = {
+    "proposal_digest": "今日推荐",
     "source_reconcile_failed": "来源状态同步失败",
     "pr_remediation_needs_evidence": "CI 自动修复缺少失败详情",
     "agent_receipt_digest": "工作交付小票",
