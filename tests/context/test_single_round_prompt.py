@@ -23,6 +23,14 @@ class SingleRoundPromptTests(unittest.TestCase):
         self.assertNotIn("Unresolved decisions need answer choices", prompt.text)
         self.assertIn("stages/review-address-findings-single-round-v2.md", prompt.metadata["resources"])
 
+    def test_pr_first_resource_allows_targeted_verification_with_one_repair(self):
+        prompt = render_prompt(self.request(), stage_version=3)
+        self.assertIn("exactly one repair pass", prompt.text)
+        self.assertIn("independently verify specific risks or coverage gaps", prompt.text)
+        self.assertIn("keeps a draft on hold", prompt.text)
+        self.assertIn("When verification-retry is supplied", prompt.text)
+        self.assertIn("every required final gate must pass", prompt.text)
+
     def test_historical_resource_keeps_the_frozen_decision_contract(self):
         current = render_prompt(self.request())
         historical = render_prompt(self.request(), stage_version=1)

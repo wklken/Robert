@@ -23,6 +23,7 @@ _STAGE_VERSIONS = {
     "review.address_findings": {
         1: "review-address-findings.md",
         2: "review-address-findings-single-round-v2.md",
+        3: "review-address-findings-pr-first-v3.md",
     },
 }
 

@@ -100,6 +100,7 @@ class PrePRReportCheckpointTests(unittest.TestCase):
             stage=None,
             check_active=Mock(),
             evaluate=Mock(return_value=deepcopy(self.evaluation)),
+            public_body=module.Coordinator.public_body,
         )
         self.driver.report = MethodType(module.Coordinator.report, self.driver)
 
@@ -149,6 +150,26 @@ class PrePRReportCheckpointTests(unittest.TestCase):
                 "dispositions_sha256": store.digest(response),
             },
         )
+
+    def test_finalize_redacts_body_without_mutating_sealed_dispositions(self):
+        report, sha, disposition = self.appendix_inputs()
+        path = Path(disposition["dispositions_path"])
+        response = json.loads(path.read_text())
+        local_path = "/data/workspace/example/backend"
+        response["body"] = f"Validated in {local_path}; relevant checks passed."
+        files.atomic_json(path, response)
+        disposition["dispositions_sha256"] = store.digest(path)
+        original = path.read_bytes()
+        with patch.object(module, "clean_head", return_value=self.manifest["head_sha"]):
+            with patch.object(module.submission, "record_result", return_value={"ok": True}) as submit:
+                result = self.driver.finalize(report, sha, disposition)
+        self.assertTrue(result["ok"])
+        body = submit.call_args.args[1]["submission"]["planned_github_actions"][0]["body"]
+        self.assertNotIn(local_path, body)
+        self.assertIn("<local-path>", body)
+        self.assertIn("relevant checks passed.", body)
+        self.assertIn("## Review 报告", body)
+        self.assertEqual(path.read_bytes(), original)
 
     def test_appendix_seal_registration_failure_retries_without_redaction_or_model_repeat(self):
         report, sha, disposition = self.appendix_inputs()

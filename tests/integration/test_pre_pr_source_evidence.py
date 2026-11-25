@@ -1,4 +1,4 @@
-"""Incomplete environment pins do not block ordinary pre-publication progress."""
+"""Generated environments allow ordinary progress and exact recovery pins."""
 
 from pathlib import Path
 
@@ -20,7 +20,7 @@ class PrePRSourceEvidenceTests(PrePRReviewFixture):
             run = next(r for r in store.runs(conn, driver.round_id) if r["stage"] == "implement")
         self.assertEqual(run["status"], "succeeded")
         self.assertTrue(run["artifact"])
-        self.assertTrue(run["dispatch"]["result_checkpoint"]["source_pin_error"])
+        self.assertNotIn("source_pin_error", run["dispatch"]["result_checkpoint"])
 
     def test_1001_ignored_node_modules_files_allow_normal_launch_and_completion(self):
         driver = self.start_with_ignored_environment()

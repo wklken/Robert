@@ -26,6 +26,14 @@ def check(*, required=True, status="passed", purpose="Verify the final repaired 
 
 
 class FinalVerificationTests(ReviewWorkspaceFixture):
+    def test_retry_prompt_name_is_bounded_with_original_request_and_operator_reply(self):
+        self.driver.request["operator_reply"] = {"decision": {"stage": "address_findings"}}
+        self.driver.original_request = {"path": "/original.md", "sha256": "a" * 64}
+        with patch.object(coordinator.verification_retry, "inputs", return_value={"input_sha256": "b" * 64}):
+            artifact = self.address()
+        self.assertEqual(artifact["head"], self.head)
+        self.assertTrue(all(len(path.name.encode()) <= 255 for path in self.root.iterdir()))
+
     def setUp(self):
         super().setUp()
         self.output = self.root / "address-output"
@@ -65,6 +73,7 @@ class FinalVerificationTests(ReviewWorkspaceFixture):
         }
         self.driver = SimpleNamespace(
             db_path="fixture-unused.sqlite3",
+            round_id="round-1",
             task_id="task-1",
             attempt_id="attempt-1",
             manifest={
@@ -83,6 +92,7 @@ class FinalVerificationTests(ReviewWorkspaceFixture):
             address_workspace=Mock(return_value=self.repo),
             prompt=self.prompt,
             run_phase=self.run_phase,
+            public_body=coordinator.Coordinator.public_body,
         )
         for name in ("candidate_submission", "validate_submission", "envelope"):
             setattr(self.driver, name, MethodType(getattr(coordinator.Coordinator, name), self.driver))
@@ -111,6 +121,7 @@ class FinalVerificationTests(ReviewWorkspaceFixture):
         # audit. The actual coordinator composes both original validators.
         with (
             patch.object(coordinator.store, "connect", return_value=nullcontext(None)),
+            patch.object(coordinator.store, "runs", return_value=[]),
             patch.object(coordinator.validation, "context", return_value=(self.settings, None)),
         ):
             return coordinator.Coordinator.address(self.driver, self.report, self.report_sha, ["F1"])

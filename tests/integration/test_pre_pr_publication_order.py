@@ -195,6 +195,37 @@ class EarlyReviewPublicationTests(PrePRReviewFixture):
         self.assertEqual(state["complete"]["head_sha"], remote.head)
         self.assertIn("Updated the value", remote.comments[-1]["body"])
 
+    def test_required_gate_retry_updates_the_existing_draft_without_another_review(self):
+        driver, remote = self.setup_publication()
+        self.with_finding = True
+        launch = driver.launcher
+        failed_head = []
+
+        def fail_first_gate(**kwargs):
+            prompt = Path(kwargs["prompt_path"])
+            addressing = prompt.name.startswith("address-")
+            if addressing and failed_head:
+                self.assertIn("verification-retry", prompt.read_text())
+                self.assertEqual(git(kwargs["worktree_path"], "rev-parse", "HEAD"), failed_head[0])
+            process = launch(**kwargs)
+            if addressing and not failed_head:
+                output = Path(kwargs["log_dir"]) / "dispositions.json"
+                result = json.loads(output.read_text())
+                failed_head.append(result["final_sha"])
+                result["verification"][0].update(status="failed", exit_code=1)
+                output.write_text(json.dumps(result))
+            return process
+
+        driver.launcher = fail_first_gate
+        self.assertTrue(driver.run()["ok"])
+        self.assertEqual(self.launches["reviewer-prompt.md"], 1)
+        self.assertEqual(self.launches["address"], 2)
+        self.assertEqual(self.launches["verify_final"], 0)
+        self.assertEqual(remote.events.count("open"), 1)
+        self.assertEqual(remote.events.count("report"), 1)
+        self.assertEqual(remote.events.count("completion"), 1)
+        self.assertEqual(remote.head, failed_head[0])
+
     def test_unknown_create_or_report_is_adopted_without_repeating_models_or_comments(self):
         driver, remote = self.setup_publication(("claude", "codex"))
         remote.lose = "open"
