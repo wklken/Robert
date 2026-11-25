@@ -65,6 +65,7 @@ def run(config_path):
                                     values.utc_now(),
                                     allow_recovery=False,
                                     task_id=task_id,
+                                    task_lock_held=True,
                                     resume_attempt=None,
                                 )
                                 conn.commit()

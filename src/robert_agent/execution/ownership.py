@@ -107,6 +107,13 @@ def claim_episode(conn, episode_id, run_now=None):
     )
 
 
+def terminal_subject_for_task(conn, task_id):
+    """Read ended authority for cleanup without claiming or reopening it."""
+    subject_type, subject_id = subject_for_task(conn, task_id)
+    binding = execution_store.get_binding(conn, subject_type, subject_id)
+    return binding if binding and binding["binding_status"] == BindingStatus.TERMINAL else None
+
+
 def parent_allows_child(conn, parent_task_id, *, retrigger_wakeup_id=None):
     if not parent_task_id:
         return True

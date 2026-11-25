@@ -563,9 +563,11 @@ def create_task_attempt_and_prompt(
         related_events = [event]
     related_events = _prompt_events(event, related_events)
     refreshed_context = None
+    operator_recovery_event_id = None
     if retrigger_wakeup_id:
         saved = db_records.first(db_read_wakeups.find_metadata_json_by_wakeup_id(conn, retrigger_wakeup_id))
         refreshed_context = json.loads(saved[0]).get("refreshed_context") if saved else None
+        operator_recovery_event_id = json.loads(saved[0]).get("operator_recovery_event_id") if saved else None
     elif parent_task_id and new_request_event is None:
         saved = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, parent_task_id))
         refreshed_context = json.loads(saved[0]).get("refreshed_context") if saved else None
@@ -664,6 +666,7 @@ def create_task_attempt_and_prompt(
     # prompts after preparing and freezing their own round inputs.
     prompt_path.write_text(rendered.text if rendered else "", encoding="utf-8")
     task_metadata = {
+        **({"trigger_work_item_event_id": operator_recovery_event_id} if operator_recovery_event_id else {}),
         **(values.json_object(existing[0]) if existing else {}),
         **({supervision_lineage.LINEAGE_FIELD: lineage_key} if lineage_key else {}),
         "review_input_policy": task["review_input_policy"],

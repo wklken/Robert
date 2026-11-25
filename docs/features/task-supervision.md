@@ -98,6 +98,18 @@ supervisor question without calling the model or asking for another decision.
 An unknown publication effect, active process or unfinished request keeps
 supervision active. This closeout preserves tasks, attempts, results and budgets.
 
+When a repair Episode is superseded by a new PR snapshot, its execution authority
+stays closed. Once the old Worker and all registered model children are proven
+stopped, the controller finishes its attempt and task with
+`execution_authority_ended`, clearing the workstream's old active-task pointer.
+This also works while admission is paused. It neither resumes the old Worker nor
+accepts its late results. Unknown process identity or a saved result requiring
+reconciliation keeps cleanup pending; a successor task remains unchanged.
+An explicit operator retrigger of an ended repair verifies the current managed
+PR and pins its latest head/base in an audited recovery request. It creates a
+new human-request task; the old Episode and original GitHub event stay closed
+and unchanged.
+
 Existing repository `pr_automation` enablement, CI check allowlists and episode
 budgets still apply. Known recovery candidates require the existing
 `supervision.recovery` repository/action allowlists. Worker retry retains its

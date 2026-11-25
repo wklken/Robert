@@ -213,6 +213,17 @@ def update_for_finalize_failed_task(conn, run_now, value_2, workstream_id):
     return statements.write(conn, stmt, {"p0": run_now, "p1": value_2, "p2": workstream_id})
 
 
+def finish_ended_task(conn, workstream_id, task_id, now):
+    """Clear only the old task pointer; never change a successor's lifecycle."""
+    stream = tables["workstreams"]
+    return statements.write(
+        conn,
+        update(stream)
+        .where(stream.c.workstream_id == workstream_id, stream.c.active_task_id == task_id)
+        .values(lifecycle=WorkstreamLifecycle.FAILED.value, active_task_id=None, updated_at=now),
+    )
+
+
 def mark_task_waiting_for_user(conn, task_id, run_now, workstream_id):
     stmt = (
         update(tables["workstreams"])
