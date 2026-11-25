@@ -625,6 +625,24 @@ class EarlyReviewPublicationTests(PrePRReviewFixture):
         with database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM review_sessions").fetchone()[0], 1)
 
+    def test_compatible_source_base_advance_reuses_verified_head_before_draft(self):
+        driver, remote = self.setup_publication()
+        driver.prepare()
+        original_head = driver.manifest["head_sha"]
+        upstream = self.git_fixture.upstream
+        git(upstream, "checkout", "main")
+        (upstream / "independent.py").write_text("independent_value = 42\n")
+        git(upstream, "add", "independent.py")
+        git(upstream, "commit", "-m", "advance independent source")
+        remote.base = git(upstream, "rev-parse", "HEAD")
+
+        result = driver.run()
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.launches, {"implement": 1, "reviewer-prompt.md": 1})
+        self.assertEqual(remote.head, original_head)
+        self.assertEqual(remote.pr["base"]["sha"], remote.base)
+
     def test_related_base_refresh_validates_new_head_before_publishing(self):
         driver, remote = self.setup_publication()
         driver.prepare()

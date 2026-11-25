@@ -1432,6 +1432,7 @@ class Coordinator(ReviewStages):
             manifest["head_sha"],
             manifest["base_sha"],
             candidate_evidence=candidate_evidence,
+            base_refresh=self.base_refresh,
         )
 
     def advance_stages(self):

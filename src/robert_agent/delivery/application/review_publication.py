@@ -323,7 +323,7 @@ class Publication:
             raise StageStopped("could not uniquely reconcile the candidate pull request")
         return rows[0]["number"] if rows else None
 
-    def preliminary(self, normalized, snapshot_id, head, base_sha, *, candidate_evidence):
+    def preliminary(self, normalized, snapshot_id, head, base_sha, *, candidate_evidence, base_refresh=None):
         with self._locked():
             if self.current is None or not self.current.get("pr"):
                 scope = self._validate(normalized, head, base_sha, expected=(self.current or {}).get("authority"))
@@ -345,6 +345,7 @@ class Publication:
                     snapshot_id=snapshot_id,
                     candidate_sha=head,
                     base_sha=base_sha,
+                    **({"initial_base_refresh": base_refresh} if base_refresh else {}),
                     head_repo=head_repo,
                     title=action["title"],
                     body=action["body"] + "\n\n" + marker,
@@ -367,6 +368,15 @@ class Publication:
                 return existing
             git(scope["worktree_path"], "merge-base", "--is-ancestor", base_sha, head, runner=self._run)
             base_proof = {"base_sha": base_sha, "head_sha": head}
+            if refresh := self.current.get("initial_base_refresh"):
+                base_proof.update(
+                    base_sha=refresh["base_sha"],
+                    reviewed_base_sha=base_sha,
+                    round_id=self.round_id,
+                    snapshot_id=snapshot_id,
+                    candidate_sha=head,
+                    base_refresh=refresh,
+                )
             self._push("initial_push", scope, head, None, base_proof)
             number = self._find_pull(scope)
             if number is None:
