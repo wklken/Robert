@@ -47,6 +47,14 @@ attempt record. Accepted operations still unpublished after two minutes use
 a separate publication-delay reason. Both notices explain the specific wait
 and support acknowledgement only.
 
+Source state synchronization failures remain in the local notification history.
+External delivery waits until the failure has remained unresolved for five minutes;
+recovery before then closes the record without a message. The same source is notified
+at most once per hour, including failures after recovery. Other sources continue and
+the failed source is retried automatically. A sustained-failure notice identifies the
+repository, source and available PR or Issue link, includes bounded redacted error
+details, and directs the operator to `/operations`. Acknowledgement only records receipt.
+
 | Owner | Responsibility |
 | --- | --- |
 | `work/messaging.py` | Attention event/outbox correlation and response action policy |

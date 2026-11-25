@@ -13,10 +13,101 @@ from robert_agent.adapters.github import discovery
 from robert_agent.execution.application import monitor
 from robert_agent.work.application import source_lifecycle
 from robert_agent.application import repository_cycle
+from robert_agent.persistence import database
+from robert_agent.persistence.stores import github_sources as source_store
+from robert_agent.work import queries as work_queries
 from tests.support.reconcile_isolation import ReconcileIsolationFixture
 
 
 class ReconcileIsolationTests(ReconcileIsolationFixture):
+    def test_source_failure_records_bounded_redacted_error_and_scope(self):
+        self.seed()
+        for text in ("database is locked", "password=private-value", "x" * 3000):
+            with (
+                self.subTest(error=text[:40]),
+                closing(database.connect(self.db)) as conn,
+                conn,
+                mock.patch.object(source_lifecycle, "record_remote_terminal_state", side_effect=ValueError(text)),
+            ):
+                source_lifecycle.reconcile_remote_source_states(
+                    conn,
+                    "repo:example/backend",
+                    {"full_name": "example/backend"},
+                    self.remote,
+                    "2026-11-25T02:25:00Z",
+                )
+            with closing(sqlite3.connect(self.db)) as conn, conn:
+                row = conn.execute(
+                    "SELECT metadata_json FROM notifications WHERE notification_type='source_reconcile_failed'"
+                ).fetchone()
+                metadata = json.loads(row[0])
+                self.assertEqual(metadata["repo_id"], "repo:example/backend")
+                self.assertEqual(metadata["workstream_id"], "github:example/backend#123")
+                self.assertNotIn("private-value", metadata["safe_error"])
+                self.assertLessEqual(len(metadata["safe_error"]), 2000)
+                if text == "database is locked":
+                    self.assertEqual(metadata["safe_error"], text)
+                conn.execute("DELETE FROM notifications WHERE notification_type='source_reconcile_failed'")
+
+    def test_task_created_during_remote_observation_is_reobserved_before_taskless_changes(self):
+        task_id = self.seed()
+        with (
+            closing(database.connect(self.db)) as conn,
+            conn,
+            mock.patch.object(work_queries, "latest_task_id", side_effect=[None, task_id]),
+        ):
+            result = source_lifecycle.reconcile_remote_source_states(
+                conn,
+                "repo:example/backend",
+                {"full_name": "example/backend"},
+                self.remote,
+                "2026-11-25T02:25:00Z",
+            )
+        self.assertEqual(result, 0)
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "open")
+
+    def test_taskless_terminal_source_reconciles_despite_competing_writer(self):
+        self.seed()
+        original = source_store.record_remote_terminal_state_locked
+        contention = []
+
+        def competing_write(conn, *args):
+            with closing(sqlite3.connect(self.db, timeout=0)) as other:
+                try:
+                    with other:
+                        other.execute("UPDATE repos SET github_account='concurrent-writer'")
+                    contention.append("committed")
+                except sqlite3.OperationalError:
+                    contention.append("blocked")
+            return original(conn, *args)
+
+        def remote(args, **kwargs):
+            # Remote waits must allow another writer to commit.
+            with closing(sqlite3.connect(self.db, timeout=0)) as other, other:
+                other.execute("UPDATE repos SET github_account='remote-observation'")
+            return self.remote(args, **kwargs)
+
+        with (
+            closing(database.connect(self.db)) as conn,
+            conn,
+            mock.patch.object(work_queries, "latest_task_id", return_value=None),
+            mock.patch.object(source_store, "record_remote_terminal_state_locked", side_effect=competing_write),
+        ):
+            reconciled = source_lifecycle.reconcile_remote_source_states(
+                conn, "repo:example/backend", {"full_name": "example/backend"}, remote, "2026-11-25T02:25:00Z"
+            )
+        self.assertEqual(reconciled, 1)
+        self.assertEqual(contention, ["blocked"])
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT state FROM github_sources").fetchone()[0], "closed")
+            self.assertEqual(
+                conn.execute(
+                    "SELECT count(*) FROM notifications WHERE notification_type='source_reconcile_failed'"
+                ).fetchone()[0],
+                0,
+            )
+
     def test_configured_merge_records_one_receipt_at_the_confirmed_merge_time(self):
         self.seed()
         config = {

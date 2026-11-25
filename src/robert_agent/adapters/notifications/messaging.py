@@ -11,6 +11,7 @@ from robert_agent.foundation.question_choices import option_lines
 
 
 EVENT_LABELS = {
+    "source_reconcile_failed": "来源状态同步失败",
     "pr_remediation_needs_evidence": "CI 自动修复缺少失败详情",
     "agent_receipt_digest": "工作交付小票",
     "execution_delayed": "任务进度延迟",
@@ -72,6 +73,7 @@ ROUTE_LABELS = {
 }
 
 REASON_LABELS = {
+    "source_reconcile_failed": "同步来源的远端状态与本地记录时发生错误，系统会自动重试。",
     "failure_evidence_unavailable": "已发现 CI 失败，但无法取得失败详情。",
     "queue_delayed": "任务排队超过 5 分钟，尚未记录正在执行的 Worker。",
     "publication_delayed": "已审核通过的操作超过 2 分钟仍未发布。",
@@ -199,6 +201,7 @@ def render_message(payload, *, contextual_replies=False):
     }
     for key, name in (
         ("repository", "仓库"),
+        ("source_key", "来源"),
         ("title", "任务"),
         ("summary", "说明"),
         ("occurred_at", "发生时间"),
@@ -211,6 +214,7 @@ def render_message(payload, *, contextual_replies=False):
         ("reason_code", "原因"),
         ("recovery_status", "恢复状态"),
         ("safe_error", "错误详情"),
+        ("error_type", "错误类型"),
         ("exit_code", "退出码"),
         ("workstream_id", "工作流"),
         ("decision_id", "决策记录"),

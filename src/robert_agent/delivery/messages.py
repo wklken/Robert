@@ -102,6 +102,8 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         "result_url",
         "reason_code",
         "error_class",
+        "source_key",
+        "error_type",
         "required_action",
         "retryable",
         "incident_id",
@@ -113,6 +115,14 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
             payload[key] = metadata[key]
     if metadata.get("safe_error"):
         payload["safe_error"] = str(metadata["safe_error"])[:2000]
+    if kind == "source_reconcile_failed":
+        payload["summary"] = "来源状态同步持续失败；其他来源继续处理，系统会自动重试。"
+        payload["required_action"] = (
+            "请在 /operations 通知中心检查此来源的错误记录；ack 仅记录收悉，不会重试任务或解决故障。"
+        )
+        if status == "resolved":
+            payload["summary"] = "来源状态同步已恢复；这条通知保留为历史记录。"
+            payload["required_action"] = "无需处理；ack 仅记录收悉。"
     if kind.startswith("pr_remediation_"):
         payload["reason_code"] = metadata.get("reason_code") or metadata.get("reason") or payload.get("reason_code")
     if kind == "pr_remediation_needs_evidence":
