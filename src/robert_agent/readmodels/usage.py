@@ -359,6 +359,11 @@ def _activity_totals(payloads):
     return {
         "activity_seconds": sum(activity) if activity else None,
         "activity_union_seconds": _union_seconds(intervals),
+        "activity_span_seconds": (
+            (max(end for _, end in intervals) - min(start for start, _ in intervals)).total_seconds()
+            if intervals and not unknown and len(intervals) == len(activity)
+            else None
+        ),
         "measured_activity_count": len(activity),
         "unknown_activity_count": unknown,
         "queue_seconds": sum(queue) if queue else None,

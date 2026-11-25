@@ -1,7 +1,10 @@
 """Capture model launch, measurement and checkpoint facts independently."""
 
+import json
+
 from robert_agent.adapters.processes import model_usage
 from robert_agent.foundation.values import utc_now
+from robert_agent.persistence.queries import model_usage as queries
 from robert_agent.persistence.stores import model_usage as store
 
 
@@ -28,8 +31,10 @@ def _metadata(dispatch, stage):
     return result
 
 
-def start_call(conn, root, kind, call_id, task_id, dispatch, *, stage=None, segment_id=None, started_at=None):
-    """Write pending before launch in the caller's durable checkpoint.
+def start_call(
+    conn, root, kind, call_id, task_id, dispatch, *, stage=None, segment_id=None, started_at=None, confirmed=True
+):
+    """Record a launch request or an independently observed launch.
 
     Native coordinator wrappers have no model receipt. A new resume launch
     must use a new call_id or an explicit independent usage_segment_id.
@@ -42,8 +47,15 @@ def start_call(conn, root, kind, call_id, task_id, dispatch, *, stage=None, segm
         "source": model_usage.source_for_agent(dispatch.get("worker_agent")),
         "measurement_status": "pending",
         "usage_available": False,
-        "launched": True,
-        "events": {"started": {"at": at, "source": "controller", "precision": "observed"}},
+        "launched": confirmed,
+        "events": {
+            ("started" if confirmed else "launch_requested"): {
+                "at": at,
+                "observed_at": at,
+                "source": "controller",
+                "precision": "observed",
+            }
+        },
     }
     return store.record(
         conn, kind, call_id, task_id, at, {"segments": {_segment(call_id, dispatch, segment_id): segment}}
@@ -71,8 +83,6 @@ def record_dispatch_usage(
     """
     if root is None or not isinstance(dispatch, dict) or dispatch.get("model_coordinator"):
         return
-    observed = model_usage.read_dispatch(root, dispatch) if observed is None else observed
-    observed = dict(observed) if isinstance(observed, dict) else {}
     at = finished_at or utc_now()
     terminal = (
         bool(dispatch.get("process_exited") or dispatch.get("group_exit_confirmed")) if terminal is None else terminal
@@ -80,6 +90,30 @@ def record_dispatch_usage(
     launch_failed = (
         dispatch.get("ok") is False and dispatch.get("status") == "failed_dispatch" and not dispatch.get("pid")
     )
+    terminal = terminal and not launch_failed
+    if observed is None:
+        observed = model_usage.read_dispatch(root, dispatch)
+        if (
+            terminal
+            and dispatch.get("native_usage_cursor")
+            and (
+                not observed.get("usage_available")
+                or observed.get("partial")
+                or "model_completed" not in observed.get("events", {})
+            )
+        ):
+            prior = queries.get(conn, kind, call_id)
+            segments = json.loads(prior["usage_json"]).get("segments", {}) if prior else {}
+            previous = segments.get(_segment(call_id, dispatch, segment_id), {})
+            if "process_exit_observed" not in previous.get("events", {}):
+                native = model_usage.read_bound_resume_usage(dispatch)
+                if native.get("usage_available") and (
+                    not observed.get("usage_available") or (observed.get("partial") and not native.get("partial"))
+                ):
+                    observed = native
+                elif native.get("events"):
+                    observed = {**observed, "events": {**native["events"], **observed.get("events", {})}}
+    observed = dict(observed) if isinstance(observed, dict) else {}
     if not observed.get("usage_available") and not terminal and not launch_failed:
         return 0
     status = observed.get("measurement_status")
@@ -87,20 +121,20 @@ def record_dispatch_usage(
         status = (
             ("partial" if observed.get("partial") else "complete") if observed.get("usage_available") else "unavailable"
         )
+    observed_at = {"at": at, "observed_at": at, "source": "controller", "precision": "observed"}
     segment = {
         **_metadata(dispatch, stage),
         **observed,
         "source": observed.get("source") or model_usage.source_for_agent(dispatch.get("worker_agent")),
         "measurement_status": status,
         "usage_available": bool(observed.get("usage_available")),
-        "launched": True,
+        "launched": not launch_failed,
         "events": {
-            **observed.get("events", {}),
-            "process_exit_observed" if terminal else "launch_failed" if launch_failed else "activity_observed": {
-                "at": at,
-                "source": "controller",
-                "precision": "observed",
-            },
+            **{key: {**value, "observed_at": at} for key, value in observed.get("events", {}).items()},
+            ("process_exit_observed" if terminal else "launch_failed" if launch_failed else "activity_observed"): (
+                observed_at
+            ),
+            **({"group_exit_observed": observed_at} if terminal and dispatch.get("group_exit_confirmed") else {}),
         },
     }
     if not segment["usage_available"]:
@@ -122,6 +156,8 @@ def record_call_event(conn, kind, call_id, task_id, event, *, at=None, stage=Non
         "queued",
         "registered",
         "artifact_adopted",
+        "artifact_ready",
+        "artifact_validated",
         "result_saved",
         "delivered",
         "model_completed",
@@ -139,7 +175,7 @@ def record_call_event(conn, kind, call_id, task_id, event, *, at=None, stage=Non
         "measurement_status": "pending",
         "usage_available": False,
         "launched": False,
-        "events": {event: {"at": at, **facts}},
+        "events": {event: {"at": at, "observed_at": at, **facts}},
     }
     if stage is not None:
         segment["stage"] = stage

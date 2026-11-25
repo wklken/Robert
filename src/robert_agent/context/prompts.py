@@ -23,6 +23,7 @@ _STAGE_VERSIONS = {
     "review.address_findings": {
         1: "review-address-findings.md",
         2: "review-address-findings-single-round-v2.md",
+        3: "review-address-findings-pr-first-v3.md",
     },
 }
 
@@ -174,6 +175,13 @@ def render_prompt(request: PromptInput, *, stage_version: int | None = None) -> 
             + "\nConfigured Robert GitHub account: "
             + json.dumps(request.values.get("github_account", ""))
             + "."
+        )
+    if "review_summary_guidance" in identifiers:
+        supplied.add("deterministic_report")
+        template_values["review_summary_guidance"] = (
+            "\n\n" + load("guidance/review-deterministic-report.md").strip()
+            if request.values.get("deterministic_report") is True
+            else ""
         )
     if set(request.values) - supplied:
         raise ValueError(f"unexpected prompt template data: {sorted(set(request.values) - supplied)}")

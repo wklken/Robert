@@ -16,7 +16,7 @@ Check correctness, security, concurrency and lifecycle, performance, boundaries,
 
 Check declared assumptions and decisions against the original request, source, and compatibility contracts. Look for material undisclosed decisions. A product tradeoff requiring human judgment is not a defect by itself. Record unresolved product decisions in `coverage.notes`, separate from concrete defects. Use the controller-confirmed decision owner for human decisions. Include its decision_mention, snapshot, and evidence in `coverage.notes`. For an existing concrete finding, explain in `suggestion` whether it blocks. Do not invent a finding to carry a decision request.
 
-${review_policy}
+${review_policy}${review_summary_guidance}
 
 ## Verification
 

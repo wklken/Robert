@@ -10,9 +10,9 @@ from robert_agent.models.rounds import PrePrReviewRun, PrePrReviewSession, PrePr
 from robert_agent.persistence.dialects.sqlite import execute_control
 
 
-def _upgrade_final_verifier(conn, table, sqlite):
+def _upgrade_stage_contract(conn, table, sqlite):
     row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table.name,)).fetchone()
-    if not row or ("verify_final" in row[0] and "repair_handoff" in row[0]):
+    if not row or all(stage in row[0] for stage in ("verify_final", "repair_handoff", "validate_candidate")):
         return
     # Only rows physically present under the old stage contract can retain
     # their exact already-recorded result. This never authorizes a new result.
@@ -71,7 +71,7 @@ def initialize(conn):
     for model in (PrePrReviewSession, PrePrReviewSnapshot, PrePrReviewRun):
         table = model.__table__
         if model is PrePrReviewRun:
-            _upgrade_final_verifier(conn, table, sqlite)
+            _upgrade_stage_contract(conn, table, sqlite)
         execute_control(conn, str(CreateTable(table, if_not_exists=True).compile(dialect=sqlite)))
         for index in table.indexes:
             execute_control(conn, str(CreateIndex(index, if_not_exists=True).compile(dialect=sqlite)))

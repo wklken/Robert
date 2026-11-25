@@ -3,6 +3,7 @@
 from robert_agent.foundation.contracts.delivery import GitHubActionType, PublicationStatus, PublishStatus
 
 from robert_agent.persistence.stores import github_actions as db_write_github_actions
+from robert_agent.persistence.queries import github_actions as action_queries
 import re
 from robert_agent.workflows.review import publish as review_publish
 from robert_agent.workflows.vote import publish as vote_publish
@@ -10,6 +11,7 @@ from robert_agent.persistence import execution_control as execution_store
 
 from robert_agent.delivery.application import effects as publication_effects
 from robert_agent.delivery.application import scope as publication_scope
+from robert_agent.delivery.application.reconcile import derive_publication_keys
 from robert_agent.delivery import notifications as publication_notifications
 from robert_agent.delivery import values as publication_values
 
@@ -103,3 +105,56 @@ def mark_published(conn, action, result, now, intent=None):
                     "receipt": receipt,
                 },
             )
+
+
+def adopt_review_publication(conn, result_id, scope, now):
+    """Attach confirmed PR-first effects to the audited actions in the audit transaction."""
+    publication = scope.get("pre_pr_review", {}).get("publication")
+    if not publication:
+        return
+    initial, pushed = publication["initial"], publication["push"]
+    head, number = scope["result_head_sha"], initial["number"]
+    if (
+        type(number) is not int
+        or number <= 0
+        or initial["repo"] != scope["repo"]
+        or initial["workstream_id"] != scope["workstream_id"]
+        or initial["branch"] != scope["branch_name"]
+        or initial["url"] != f"https://github.com/{scope['repo']}/pull/{number}"
+        or pushed["branch"] != initial["branch"]
+        or pushed["head_sha"] != head
+        or publication["head_sha"] != head
+    ):
+        raise ValueError("confirmed review publication differs from its audited target")
+
+    for row in action_queries.find_for_publication_facts(conn, now, result_id, None):
+        kind = row["action_type"]
+        if kind not in {GitHubActionType.OPEN_PR, GitHubActionType.PUSH_EXISTING_PR}:
+            continue
+        opened = kind == GitHubActionType.OPEN_PR
+        action = {**dict(row), "result_id": result_id}
+        key, fingerprint = derive_publication_keys(action, scope)
+        intent = execution_store.prepare_publication_intent(conn, action["action_id"], key, fingerprint, now)
+        intent = execution_store.transition_publication_intent(
+            conn, intent["publication_id"], PublicationStatus.EXECUTING.value, now
+        )
+        evidence = initial if opened else pushed
+        mark_published(
+            conn,
+            action,
+            {
+                "external_id": str(number) if opened else pushed["branch"],
+                "target_url": initial["url"] if opened else action["target_url"],
+                "result_head_sha": head,
+                "deduplicated": True,
+                "response": {
+                    "reconciliation": {
+                        "source_sha": head,
+                        "round_id": scope["pre_pr_review"]["round_id"],
+                        "observed_at": evidence["confirmed_at"],
+                    }
+                },
+            },
+            now,
+            intent=intent,
+        )

@@ -77,6 +77,9 @@ robert_agent/
 定义 TAPD 主机、项目键、单据 URL、来源键和评论 fingerprint 的语法，供配置、适配器、
 来源 owner 和发布合同共用。
 
+[`foundation/review_findings.py`](../src/robert_agent/foundation/review_findings.py) 使用标准库计算确定性的
+finding 标识，并识别 reviewer 声明的后续核查需求。报告生成与新 PR 发布证明共用这份规则。
+
 [`foundation/question_choices.py`](../src/robert_agent/foundation/question_choices.py) 提供有序选项的共享格式和校验。
 Worker 结果和原生阶段在进入等待前校验新提问。看板和 OpenClaw 的点选复用版本化回复命令，
 从当前问题记录解析选项，发布与监督继续使用各自的授权边界。
@@ -546,8 +549,9 @@ flowchart TD
 
 ## 多模型评审与投票
 
-[新 PR 发布前 Review](features/pre-pr-review.md) 使用本地候选快照和独立 run，
-复用共享模型阶段和并发额度。结构化处置与验证绑定最终提交，审计和发布核对持久证明。
+[新 PR 的首轮 Review](features/pre-pr-review.md) 的协调器使用本地候选快照和独立 run。
+[评审发布用例](../src/robert_agent/delivery/application/review_publication.py) 在首次发布前校验实施证据，登记草稿、报告和同一 PR 的最终更新。
+回执按轮次和 SHA 绑定，受任务发布锁和当前授权约束。结构化处置与验证绑定最终提交，最终审计核对持久证明。
 
 两种内建协调器共用 `StageCoordinator` 和 SQLite 模型进程池。一轮占一个任务并发槽，
 各阶段模型再申请共享额度。图用两个模型说明阶段顺序，实际数量来自配置。

@@ -130,7 +130,7 @@ class QuestionRecoveryBoundaryTests(unittest.TestCase):
             reconcile_running=Mock(),
             prepare=Mock(),
             review=Mock(return_value=[]),
-            report=Mock(return_value=(Path("report.md"), "report-hash", ["F1"])),
+            report=Mock(return_value=(Path("report.md"), "report-hash", ["F1"], True)),
             address=Mock(return_value={}) if final_blocker else Mock(side_effect=decision),
             finalize=Mock(side_effect=final_verification.FinalReviewBlocked({}, {}, {})),
             check_active=Mock(),

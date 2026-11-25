@@ -8,7 +8,9 @@ from uuid import uuid4
 from sqlalchemy import delete, func, insert, select, update as sql_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from robert_agent.foundation.contracts.execution import ModelRunStatus
+from robert_agent.foundation.contracts.delivery import ReviewPublicationMode
+from robert_agent.foundation.contracts.execution import ModelRunStatus, ReviewReportMode, RoundStatus
+from robert_agent.foundation.review_findings import deterministic_finding_id, review_requires_followup
 from robert_agent.persistence import records, statements
 from robert_agent.persistence.catalog import tables
 from robert_agent.persistence.queries import sqlite_master
@@ -111,6 +113,95 @@ def session(conn, *, round_id=None, task_id=None):
             binding["source_run_id"]
         )
     return entry
+
+
+def attach_equivalent_pr_trigger(conn, canonical, observed_body, event, observed_at):
+    """Attach independently authorized full-review requests to the managed round."""
+    identity = canonical["identity"]
+    acceptance = identity["acceptance"]
+    if any(acceptance.get(key) for key in ("acceptance_intent", "acceptance_criteria", "metadata")):
+        return None
+    publication = "$.review_publication"
+    matches = list(
+        statements.read(
+            conn,
+            select(SESSION.c.round_id).where(
+                func.lower(func.json_extract(SESSION.c.request_json, publication + ".authority.repo"))
+                == identity["repo"],
+                func.json_extract(SESSION.c.request_json, publication + ".candidate_sha") == identity["head_sha"],
+                func.json_extract(SESSION.c.request_json, publication + ".base_sha") == identity["base_sha"],
+                func.json_extract(SESSION.c.request_json, publication + ".authority.base_branch")
+                == identity["base_ref"],
+            ),
+        )
+    )
+    eligible = []
+    for row in matches:
+        entry = session(conn, round_id=row[0])
+        request = entry["request"]
+        state = request.get("review_publication") or {}
+        pr = state.get("pr") or {}
+        if event.get("event_type") == "comment" or not state.get("report"):
+            if entry["status"] in {RoundStatus.FAILED, RoundStatus.WAITING_FOR_USER} or not review.advanceable(
+                conn, entry
+            ):
+                continue
+        if request["plan"]["workers"] != identity["workers"]:
+            continue
+        if state["authority"]["github_account"].casefold() != identity["eligibility"]["pr_author"]:
+            continue
+        if acceptance["title"] != state["title"]:
+            continue
+        if pr and pr["number"] != identity["pr_number"]:
+            continue
+        # A source edit may contain new requirements. Match exact controller
+        # text, including the final description if its write was interrupted.
+        if observed_body != state["body"]:
+            suffix = "\n\n" + state["marker"]
+            final = state.get("final_intent") or {}
+            if not pr or not isinstance(observed_body, str) or not observed_body.endswith(suffix):
+                continue
+            if hashlib.sha256(observed_body.removesuffix(suffix).encode()).hexdigest() != final.get("body_sha256"):
+                continue
+        eligible.append(entry)
+    if len(eligible) != 1:
+        return None
+    entry = eligible[0]
+    request = entry["request"]
+    triggers = dict(request.get("review_publication_triggers") or {})
+    fingerprint = event["event_fingerprint"]
+    if fingerprint not in triggers:
+        item = {
+            "event": event,
+            "canonical_key": canonical["key"],
+            "pr_number": identity["pr_number"],
+            "authorized_at": observed_at,
+        }
+        report = request["review_publication"].get("report")
+        if report:
+            item["completion"] = report
+        triggers[fingerprint] = item
+        update(
+            conn,
+            entry["round_id"],
+            request_json=json.dumps(
+                {**request, "review_publication_triggers": triggers}, ensure_ascii=False, sort_keys=True
+            ),
+        )
+    return entry["round_id"]
+
+
+def review_publication_request(request, publication):
+    """Commit the first-round report receipt and consume attached triggers together."""
+    triggers = request.get("review_publication_triggers")
+    if triggers and publication.get("report"):
+        request = {
+            **request,
+            "review_publication_triggers": {
+                fingerprint: {**item, "completion": publication["report"]} for fingerprint, item in triggers.items()
+            },
+        }
+    return {**request, "review_publication": publication}
 
 
 def create(conn, task_id, request):
@@ -426,12 +517,16 @@ def _matches_single_round(entry):
     marker = proof.get("single_round_completion")
     plan = entry["request"]["plan"]
     manifest = entry["manifest"]
+    mode = plan.get("review_report_mode", ReviewReportMode.MODEL_SYNTHESIS)
+    deterministic = mode == ReviewReportMode.DETERMINISTIC_V1
     if (
-        proof.get("review_policy") != "single_review_single_repair"
+        mode not in (ReviewReportMode.MODEL_SYNTHESIS, ReviewReportMode.DETERMINISTIC_V1)
+        or (deterministic and manifest.get("review_report_mode") != mode)
+        or proof.get("review_policy") != "single_review_single_repair"
         or "final_verification" in proof
         or not isinstance(marker, dict)
         or type(marker.get("version")) is not int
-        or marker.get("version") != 1
+        or marker.get("version") != (2 if deterministic else 1)
         or not isinstance(marker.get("review_run_ids"), list)
         or not marker["review_run_ids"]
     ):
@@ -462,30 +557,39 @@ def _matches_single_round(entry):
         reviews = [selected[run_id] for run_id in review_ids]
         if [run["worker_id"] for run in reviews] != workers:
             return False
-        address = selected[marker["address_run_id"]]
-        if address["worker_id"] != plan["implementer"]["name"]:
+        skip_address = deterministic and marker["address_run_id"] is None
+        requires_synthesis = not deterministic and len(reviews) > 1
+        if not requires_synthesis and marker.get("synthesis_run_id") is not None:
             return False
-        synthesis = selected[marker["synthesis_run_id"]] if len(reviews) > 1 else None
-        if len(reviews) == 1 and marker.get("synthesis_run_id") is not None:
+        synthesis = selected[marker["synthesis_run_id"]] if requires_synthesis else None
+        phase_runs = [("review", run) for run in reviews]
+        address = None
+        if not skip_address:
+            address = selected[marker["address_run_id"]]
+            if address["worker_id"] != plan["implementer"]["name"]:
+                return False
+            phase_runs.append(("address_findings", address))
+        elif any(run["stage"] == "address_findings" for run in history):
             return False
-        phase_runs = [("review", run) for run in reviews] + [("address_findings", address)]
         if synthesis:
             if synthesis["worker_id"] != workers[0]:
                 return False
             phase_runs.append(("synthesis", synthesis))
+        if not _matches_targeted_verification(plan, marker, history, expected, workers[0]):
+            return False
         if any(
             run["stage"] in {"review", "synthesis", "address_findings"}
-            and round_records.artifact_available(run)
+            and round_records.completed_stage_artifact(run)
             and run["run_id"] not in {source["run_id"] for _, source in phase_runs}
             for run in history
-        ) or any(run["stage"] == "verify_final" for run in history):
+        ):
             return False
         for stage, run in phase_runs:
             checkpoint = run.get("dispatch", {}).get("result_checkpoint", {})
             if (
                 run["round_id"] != entry["round_id"]
                 or run["stage"] != stage
-                or not round_records.artifact_available(run)
+                or not round_records.completed_stage_artifact(run)
                 or run["slot_reserved"]
                 or checkpoint.get("run_id") != run["run_id"]
                 or checkpoint.get("prompt_sha256") != run["prompt_sha256"]
@@ -497,6 +601,7 @@ def _matches_single_round(entry):
         if digest(entry["report_path"]) != expected["report_sha256"]:
             return False
         finding_ids = []
+        requires_followup = False
         for run in reviews:
             artifact = run["artifact"]
             for kind in ("result", "report"):
@@ -512,7 +617,12 @@ def _matches_single_round(entry):
                 }.items()
             ):
                 return False
-            if not synthesis:
+            if deterministic:
+                requires_followup |= review_requires_followup(result)
+                finding_ids.extend(
+                    deterministic_finding_id(item) for item in result["findings"] + result["dismissed_findings"]
+                )
+            elif not synthesis:
                 finding_ids = [item["id"] for item in result["findings"] + result["dismissed_findings"]]
         if synthesis:
             artifact = synthesis["artifact"]
@@ -531,14 +641,23 @@ def _matches_single_round(entry):
             if not artifact.get("input_sha256"):
                 return False
             finding_ids = [item["id"] for item in result["items"]]
-        artifact = address["artifact"]
-        if artifact.get("dispositions_sha256") != expected["dispositions_sha256"]:
-            return False
-        if artifact.get("head") != expected["final_sha"] or artifact.get("operator_question"):
-            return False
-        if digest(artifact["dispositions_path"]) != expected["dispositions_sha256"]:
-            return False
-        response = json.loads(Path(artifact["dispositions_path"]).read_text())
+        if deterministic:
+            finding_ids = sorted(set(finding_ids))
+        if address is None:
+            if requires_followup or expected["candidate_sha"] != expected["final_sha"]:
+                return False
+            response = _no_repair_response(entry, selected, expected)
+            if response is None:
+                return False
+        else:
+            artifact = address["artifact"]
+            if artifact.get("dispositions_sha256") != expected["dispositions_sha256"]:
+                return False
+            if artifact.get("head") != expected["final_sha"] or artifact.get("operator_question"):
+                return False
+            if digest(artifact["dispositions_path"]) != expected["dispositions_sha256"]:
+                return False
+            response = json.loads(Path(artifact["dispositions_path"]).read_text())
         if any(response.get(key) != expected[key] for key in ("candidate_sha", "final_sha", "report_sha256")):
             return False
         dispositions = response["dispositions"]
@@ -562,6 +681,152 @@ def _matches_single_round(entry):
         return False
 
 
+def _matches_targeted_verification(plan, marker, history, expected, worker):
+    targeted = marker.get("targeted_verification")
+    runs = [run for run in history if run["stage"] == "verify_final"]
+    if not targeted:
+        return not runs
+    reasons = targeted["reasons"]
+    artifact = targeted["artifact"]
+    if (
+        plan.get("review_publication") != ReviewPublicationMode.PR_FIRST_V1
+        or not isinstance(reasons, list)
+        or not reasons
+        or not artifact.get("input_sha256")
+    ):
+        return False
+    completed = [run for run in runs if round_records.artifact_available(run)]
+    if len(completed) != 1:
+        return False
+    run = completed[0]
+    expected_artifact = {
+        key: expected[key]
+        for key in ("round_id", "snapshot_id", "candidate_sha", "final_sha", "report_sha256", "dispositions_sha256")
+    }
+    if (
+        run["slot_reserved"]
+        or run["run_id"] != artifact["run_id"]
+        or run["worker_id"] != worker
+        or any(artifact.get(key) != value for key, value in expected_artifact.items())
+        or any(
+            run["artifact"].get(key) != value for key, value in artifact.items() if key not in {"run_id", "worker_id"}
+        )
+        or digest(artifact["final_verification_path"]) != artifact["final_verification_sha256"]
+    ):
+        return False
+    verdict = json.loads(Path(artifact["final_verification_path"]).read_text())
+    return (
+        verdict.get("recommendation") == "approved"
+        and verdict.get("blocking_findings") == []
+        and all(item["status"] in {"resolved", "dismissed", "deferred"} for item in verdict["checked_findings"])
+    )
+
+
+def candidate_validation(run, manifest):
+    """Return fresh verification only for the registered candidate and base."""
+    if not run or run["stage"] != "validate_candidate" or run["slot_reserved"]:
+        return None
+    artifact = run["artifact"]
+    checkpoint = run.get("dispatch", {}).get("result_checkpoint", {})
+    if (
+        not round_records.artifact_available(run)
+        or artifact.get("head") != manifest["head_sha"]
+        or artifact.get("base_sha") != manifest["base_sha"]
+        or checkpoint.get("snapshot_id") != manifest["snapshot_id"]
+        or checkpoint.get("worktree_head") != manifest["head_sha"]
+        or checkpoint.get("run_id") != run["run_id"]
+        or checkpoint.get("prompt_sha256") != run["prompt_sha256"]
+    ):
+        return None
+    path = Path(artifact["candidate_verification_path"])
+    if digest(path) != artifact["candidate_verification_sha256"]:
+        return None
+    evidence = json.loads(path.read_text(encoding="utf-8"))
+    if evidence.get("head_sha") != manifest["head_sha"] or evidence.get("base_sha") != manifest["base_sha"]:
+        return None
+    return evidence["verification"]
+
+
+def _no_repair_response(entry, selected, expected):
+    manifest = entry["manifest"]
+    candidate = manifest["candidate"]
+    publication = entry["request"].get("review_publication") or {}
+    refreshed_id = (publication.get("candidate_evidence") or {}).get("validation_run_id")
+    run = selected[refreshed_id or candidate["run_id"]]
+    artifact = run["artifact"]
+    checkpoint = run.get("dispatch", {}).get("result_checkpoint", {})
+    if (
+        run["round_id"] != entry["round_id"]
+        or run["stage"] != ("validate_candidate" if refreshed_id else "implement")
+        or run["worker_id"] != entry["request"]["plan"]["implementer"]["name"]
+        or not round_records.artifact_available(run)
+        or run["slot_reserved"]
+        or checkpoint.get("run_id") != run["run_id"]
+        or checkpoint.get("prompt_sha256") != run["prompt_sha256"]
+        or checkpoint.get("worktree_head") != expected["candidate_sha"]
+        or "untracked_sha256" not in checkpoint
+        or checkpoint.get("source_pin_error")
+        or artifact.get("head") != expected["candidate_sha"]
+        or (
+            not refreshed_id
+            and any(artifact.get(key) != candidate[key] for key in ("candidate_path", "candidate_sha256"))
+        )
+        or digest(candidate["candidate_path"]) != candidate["candidate_sha256"]
+    ):
+        return None
+    folder = Path(manifest["artifact_root"])
+    response_path = folder / f"no-repair-{expected['report_sha256']}.json"
+    if response_path.resolve() != response_path or digest(response_path) != expected["dispositions_sha256"]:
+        return None
+    response = json.loads(response_path.read_text())
+    handoff = json.loads(Path(candidate["candidate_path"]).read_text())
+    payload = handoff["submission"] if "output_type" in handoff and "submission" in handoff else handoff
+    bodies = [action["body"] for action in payload["planned_github_actions"] if action["type"] == "open_pr"]
+    verification = candidate_validation(run, manifest) if refreshed_id else payload["verification"]
+    if (
+        response.get("source") != ("candidate_revalidation" if refreshed_id else "implementation")
+        or response.get("source_checkpoint_sha256")
+        != hashlib.sha256(json.dumps(checkpoint, sort_keys=True).encode()).hexdigest()
+        or response.get("dispositions") != []
+        or verification is None
+        or response.get("verification") != verification
+        or bodies != [response.get("body")]
+    ):
+        return None
+    return response
+
+
+def matches_review_completion(entry, proof):
+    """Validate real completed stages before final effects, independently of their receipt."""
+    return _matches_single_round({**entry, "proof": proof})
+
+
+def _matches_review_publication(entry):
+    request = entry.get("request", {})
+    plan = request.get("plan", {})
+    proof = entry["proof"]
+    if plan.get("review_publication") != ReviewPublicationMode.PR_FIRST_V1:
+        return "publication" not in proof
+    if entry["status"] == "waiting_for_user":
+        return True
+    state = request.get("review_publication") or {}
+    publication = proof.get("publication")
+    initial = state.get("pr")
+    return bool(
+        initial
+        and isinstance(publication, dict)
+        and publication == state.get("complete")
+        and publication.get("initial") == initial
+        and initial.get("initial_head") == proof.get("candidate_sha")
+        and publication.get("head_sha") == proof.get("head_sha")
+        and (publication.get("push") or {}).get("head_sha") == proof.get("head_sha")
+        and publication.get("report_sha256") == proof.get("report_sha256")
+        and publication.get("dispositions_sha256") == proof.get("dispositions_sha256")
+        and (publication.get("report") or {}).get("id")
+        and (publication.get("completion") or {}).get("id")
+    )
+
+
 def matches_submission(entry, attempt_id, fingerprint, *, head=None, result_id=None):
     proof = entry["proof"]
     return bool(
@@ -577,6 +842,7 @@ def matches_submission(entry, attempt_id, fingerprint, *, head=None, result_id=N
             or (entry["status"] == "waiting_for_user" and head == proof.get("decision", {}).get("candidate_sha"))
         )
         and (result_id is None or entry["final_result_id"] == result_id)
+        and _matches_review_publication(entry)
         and (entry["status"] != "ready" or _matches_final_verification(entry, result_id))
     )
 
@@ -711,9 +977,26 @@ def task_status_from_records(entry, model_runs, process_pool):
     """Public status from records already loaded for this request."""
     from robert_agent.security.text import safe_text
 
+    publication = entry["request"].get("review_publication") or {}
     return {
         "round_id": entry["round_id"],
         "status": entry["status"],
+        **(
+            {
+                "pr_delivery": {
+                    "url": (publication.get("pr") or {}).get("url"),
+                    "initial_head": publication.get("candidate_sha"),
+                    "final_head": (publication.get("complete") or {}).get("head_sha"),
+                    "effects": {
+                        name: receipt["confirmed_at"]
+                        for name in ("initial_push", "pr", "report", "waiting", "blocked", "final_push", "completion")
+                        if (receipt := publication.get(name))
+                    },
+                }
+            }
+            if publication
+            else {}
+        ),
         "error": safe_text(entry["error"] or ""),
         "head_sha": entry["manifest"].get("head_sha"),
         "final_sha": entry["proof"].get("head_sha"),

@@ -2,6 +2,9 @@
 
 from collections.abc import Mapping
 
+from robert_agent.foundation.contracts.delivery import ReviewPublicationMode
+from robert_agent.foundation.contracts.execution import ReviewReportMode
+
 
 MAX_PIPELINE_QUEUE_SECONDS = 3600
 MAX_HANDOFF_REPAIR_SECONDS = 120
@@ -18,8 +21,8 @@ def pipeline_timeout(plan: Mapping) -> int:
     """Bound the stages selected by the durable pre-publication review plan.
 
     Each stage uses its recorded worker timeout. Reviews overlap; the first
-    reviewer owns synthesis. A single-round plan reserves implementation and
-    one address pass, without a final model verification or another repair.
+    reviewer owns synthesis for historical report plans. A single-round plan
+    reserves implementation, one address pass and, for PR-first plans, one targeted review.
     Historical plans retain two address and two verification passes. Each write
     pass reserves at most three artifact-only repairs, capped at 120 seconds.
     Pool waiting shares one allowance, capped at an hour and at the plan timeout.
@@ -43,7 +46,10 @@ def pipeline_timeout(plan: Mapping) -> int:
     if policy not in (None, "single_review_single_repair"):
         raise ValueError("unsupported review policy")
     write_passes = 2 if policy else 3
-    reviewer_passes = 1 if policy else 3
+    mode = ReviewReportMode(plan.get("review_report_mode", ReviewReportMode.MODEL_SYNTHESIS))
+    synthesis_passes = int(mode == ReviewReportMode.MODEL_SYNTHESIS)
+    targeted_pass = plan.get("review_publication") == ReviewPublicationMode.PR_FIRST_V1
+    reviewer_passes = synthesis_passes + (int(targeted_pass) if policy else 2)
     handoff_repairs = write_passes * MAX_HANDOFF_REPAIR_ATTEMPTS * min(implement, MAX_HANDOFF_REPAIR_SECONDS)
     return (
         write_passes * implement

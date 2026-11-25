@@ -36,6 +36,9 @@ def model_input(prompt):
     outputs = tuple(re.findall(rf"(?m)^- {env}/([^\n]+)$", delivery))
     if outputs != _OUTPUTS[stage] or not delivery.startswith("Transport: atomic-files\n"):
         raise ValueError("native output contract changed")
+    if stage == "review.address_findings":
+        example = json.loads(delivery.split("Example:\n\n```json\n", 1)[1].split("\n```", 1)[0])
+        facts["finding_ids"] = [item["id"] for item in example["dispositions"]]
     if stage in {"review.address_findings", "review.verify_final"}:
         return stage, env, facts, sections["Context"]
     manifest_path = context_file(sections["Context"], "manifest.json")
@@ -75,6 +78,8 @@ def outputs(stage, manifest, context, worker, policy):
             coverage={"reviewed_paths": ["calc.py"], "unreviewed_paths": [], "notes": "Read the changed file."},
             merge_recommendation="ready to merge",
         )
+        if manifest.get("review_report_mode") == "deterministic_v1":
+            value["requires_judgment"] = False
     elif stage == "review.synthesize":
         evidence = json.loads(context_file(context, "selected-reviewer-results").read_text())
         if len(evidence["records"]) < 2:

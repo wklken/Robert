@@ -118,6 +118,15 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             if isinstance(node, ast.Import):
                 self.assertEqual([alias.name for alias in node.names], ["re"], (name, node.lineno))
 
+    def test_shared_review_findings_are_a_standard_library_leaf(self):
+        name = "robert_agent.foundation.review_findings"
+        self.assert_dependencies(name, ())
+        path = PACKAGE / "foundation/review_findings.py"
+        for node in ast.walk(ast.parse(path.read_text())):
+            self.assertNotIsInstance(node, ast.ImportFrom)
+            if isinstance(node, ast.Import):
+                self.assertTrue(all(alias.name in {"hashlib", "json"} for alias in node.names), node.lineno)
+
     def test_shared_question_choices_have_no_domain_dependencies(self):
         self.assert_dependencies("robert_agent.foundation.question_choices", ())
 
@@ -180,6 +189,11 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             for dependency in dependencies - {"robert_agent"}:
                 if name.startswith("robert_agent.persistence.") and (
                     dependency in VALUE_CONTRACTS or dependency == "robert_agent.foundation.timestamps"
+                ):
+                    continue
+                if (
+                    name == "robert_agent.persistence.rounds.pre_pr_review"
+                    and dependency == "robert_agent.foundation.review_findings"
                 ):
                     continue
                 self.assertIn(dependency.split(".")[1], allowed, (name, dependency))

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from robert_agent.context.prompt_contract import ContextItem, OutputContract, PromptInput
 from robert_agent.context.decision_owner import context_item as decision_owner_context
+from robert_agent.foundation.contracts.execution import ReviewReportMode
 
 
 _REVIEW_DIR = "ROBERT_REVIEW_OUTPUT_DIR"
@@ -170,10 +171,14 @@ def review_evaluate_input(manifest, *, severities, recommendations):
         },
         "merge_recommendation": recommendations[1],
     }
-    output = _files_output("review_result", _REVIEW_DIR, ("result.json",), "Review synthesis", example)
-    return _review_input(
-        "review.evaluate", manifest, output, prepared=True, values=_review_values(manifest, severities, recommendations)
-    )
+    values = _review_values(manifest, severities, recommendations)
+    consumer = "Review synthesis"
+    if manifest.get("review_report_mode") == ReviewReportMode.DETERMINISTIC_V1:
+        example["requires_judgment"] = True
+        values["deterministic_report"] = True
+        consumer = "Robert's review report controller"
+    output = _files_output("review_result", _REVIEW_DIR, ("result.json",), consumer, example)
+    return _review_input("review.evaluate", manifest, output, prepared=True, values=values)
 
 
 def review_synthesize_input(manifest, inputs, *, severities, recommendations, dispositions):
@@ -392,6 +397,32 @@ def address_findings_input(
     )
 
 
+def candidate_verification_input(manifest, candidate):
+    heads = {key: manifest[key] for key in ("head_sha", "base_sha")}
+    return PromptInput(
+        "review.validate_candidate",
+        heads,
+        _files_output(
+            "candidate_verification",
+            _REVIEW_DIR,
+            ("candidate-verification.json",),
+            "Draft PR verification gate",
+            {**heads, "verification": []},
+        ),
+        authority={"source_access": "read-only", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
+        context_items=(
+            *original_request_context(manifest.get("original_request")),
+            _file_item(
+                "implementation-handoff",
+                "Prior check commands and rationale",
+                "Robert",
+                candidate["candidate_path"],
+                candidate["candidate_sha256"],
+            ),
+        ),
+    )
+
+
 def final_review_input(inputs, input_path):
     identity = {
         key: inputs[key]
@@ -439,6 +470,19 @@ def final_review_input(inputs, input_path):
                     ),
                 )
                 if inputs.get("operator_reply")
+                else ()
+            ),
+            *(
+                (
+                    ContextItem(
+                        "targeted_review_reasons",
+                        "Independently check these specific risks or coverage gaps before deciding approval",
+                        "Robert",
+                        requirement="required",
+                        content=inputs["risk_reasons"],
+                    ),
+                )
+                if inputs.get("risk_reasons")
                 else ()
             ),
             _file_item(

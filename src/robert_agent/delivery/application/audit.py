@@ -308,6 +308,33 @@ def action_scope_violation(actions, action_scope):
     return None
 
 
+def managed_review_comment_violation(stage, receipt, scope, allowed_actions):
+    """Scope controller-generated review comments to the registered PR."""
+    if stage not in {"report", "waiting", "blocked", "completion"}:
+        return "comment stage is outside managed review publication"
+    if not {GitHubActionType.OPEN_PR, GitHubActionType.PUSH_EXISTING_PR}.issubset(allowed_actions):
+        return "current route does not authorize managed review publication"
+    number = receipt.get("number")
+    repo = scope.get("repo")
+    branch = scope.get("branch_name")
+    if (
+        type(number) is not int
+        or number <= 0
+        or not repo
+        or not branch
+        or receipt.get("repo") != repo
+        or receipt.get("branch") != branch
+        or receipt.get("workstream_id") != scope.get("workstream_id")
+        or receipt.get("publisher") != scope.get("github_account")
+        or receipt.get("url") != f"https://github.com/{repo}/pull/{number}"
+    ):
+        return "comment target differs from the registered review pull request"
+    return action_scope_violation(
+        [{"type": GitHubActionType.COMMENT, "target_url": receipt["url"]}],
+        {"repo": repo, "sources": [{"source_type": "pull_request", "number": number}]},
+    )
+
+
 def _audit_expected_actions(output_type, actual_types):
     if output_type in {OutputType.LOCAL_RESULT, OutputType.CLASSIFICATION_RESULT} and actual_types:
         return f"output_type {output_type} requires no publication actions"

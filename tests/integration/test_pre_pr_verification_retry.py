@@ -75,7 +75,8 @@ class VerificationRetryTests(PrePRReviewFixture):
 
         driver.launcher = fail_first_checks
         driver.prepare()
-        report, report_sha, ids = driver.report(driver.review())
+        report, report_sha, ids, requires_followup = driver.report(driver.review())
+        self.assertTrue(requires_followup)
         with self.assertRaisesRegex(ValueError, "required check"):
             driver.address(report, report_sha, ids)
         disposition = driver.address(report, report_sha, ids)

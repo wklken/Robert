@@ -9,6 +9,7 @@ from robert_agent.execution import stage_evidence
 from robert_agent.execution.stages import StageStopped, attempt_is_active
 from robert_agent.foundation import question_choices
 from robert_agent.foundation.commands import ControlDeadlineExceeded
+from robert_agent.foundation.contracts.delivery import ReviewPublicationMode
 from robert_agent.persistence import transactions
 from robert_agent.persistence.queries import attempts
 from robert_agent.persistence.rounds import pre_pr_review as store
@@ -157,6 +158,15 @@ def submit(coordinator, decision, report_sha):
     comment = "\n\n".join(
         [question["summary"], "\n".join(question_choices.option_lines(question["choices"], recommended="（推荐）"))]
     ).strip()
+    if (
+        decision.stage == "address_findings"
+        and coordinator.request["plan"].get("review_publication") == ReviewPublicationMode.PR_FIRST_V1
+    ):
+        if coordinator.origin_type == "github":
+            owner = (coordinator.scope.get("decision_owner") or {}).get("login")
+            if owner:
+                comment = f"@{owner}\n\n{comment}"
+        comment += "\n\n请在 Robert 工作台回复这条待决定事项，答复将绑定本轮原问题。"
     draft = {
         **draft,
         "planned_github_actions": [] if coordinator.origin_type == "web" else [{"type": "comment", "body": comment}],
@@ -211,3 +221,13 @@ def verify_implementation_source(coordinator, binding):
     manifest = {"implementing": True, **{key: source.get(key) for key in ("snapshot_id", "head_sha", "base_sha")}}
     if stage_evidence.observe_source(run, manifest, source["worktree_path"]) != source:
         raise StageStopped("implementation question source changed before continuation")
+
+
+def verify_address_source(coordinator, binding):
+    with store.connect(coordinator.db_path) as conn:
+        entry = store.session(conn, task_id=coordinator.task_id)
+    store.validate_reply_checkpoint(entry, binding)
+    run = entry["question_run"]
+    checkpoint = binding["source_checkpoint"]
+    if stage_evidence.observe_source(run, coordinator.manifest, checkpoint["worktree_path"]) != checkpoint:
+        raise StageStopped("review question source changed before continuing the repair")

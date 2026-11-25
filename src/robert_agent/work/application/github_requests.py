@@ -13,7 +13,7 @@ from robert_agent.execution import ownership as execution_ownership
 from robert_agent.foundation import values
 from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.work import policies as work_policies
-from robert_agent.persistence.rounds import vote as vote_store
+from robert_agent.persistence.rounds import vote as vote_store, pre_pr_review
 from robert_agent.persistence.rounds import review as review_store
 from robert_agent.work import source_policy, review_identity
 from robert_agent.workflows import routing
@@ -93,7 +93,21 @@ def enqueue_native_request(conn, store, repo, event, route, workers, admission, 
     lineage = supervision_lineage.github_key(event)
     options = {}
     if store is review_store:
-        options["canonical_identity"] = review_identity.canonical_request(repo, event, route, workers, observed_pr)
+        canonical = review_identity.canonical_request(repo, event, route, workers, observed_pr)
+        options["canonical_identity"] = canonical
+        if canonical and (
+            managed := pre_pr_review.attach_equivalent_pr_trigger(conn, canonical, observed_pr.get("body"), event, now)
+        ):
+            supervision_lineage.record_disposition(
+                conn,
+                admission,
+                disposition="queued_native_round",
+                now=now,
+                target_type="pre_pr_review_round",
+                target_id=managed,
+                lineage_key=lineage,
+            )
+            return
     round_entry = store.enqueue(
         conn, repo, {**event, supervision_lineage.LINEAGE_FIELD: lineage}, route, workers, **options
     )

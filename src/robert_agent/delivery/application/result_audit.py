@@ -16,6 +16,7 @@ from robert_agent.persistence.stores import attempts as db_write_attempts
 from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import worker_results as db_write_worker_results
 from robert_agent.delivery.application import audit as audit_result
+from robert_agent.delivery.application import receipts
 from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.delivery import results
 from robert_agent.delivery.application import scope as result_scope
@@ -309,6 +310,7 @@ def audit_completed_results(
             continue
 
         results.set_github_actions_status(conn, payload["result_id"], "accepted")
+        receipts.adopt_review_publication(conn, payload["result_id"], audit.get("action_scope") or {}, run_now)
         memory_status = project_memory.record_memory_delta(
             conn,
             payload,

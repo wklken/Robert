@@ -12,6 +12,7 @@ from pathlib import Path
 import stat
 import tempfile
 
+from robert_agent.foundation.contracts.execution import ReviewReportMode
 from robert_agent.workflows.review import files, workspace
 
 
@@ -232,6 +233,8 @@ def report_input_identity(
     # provenance only after checking that public hash and all original hashes.
     anchor = load_anchor(base.name) if load_anchor is not None else None
     if anchor is None:
+        if manifest.get("review_report_mode") == ReviewReportMode.DETERMINISTIC_V1:
+            raise ValueError("deterministic report checkpoint has no trusted seal")
         if _hash(_read(path, root)) != sha256:
             raise ValueError("registered report checkpoint identity changed")
         if identity.get("manifest") != manifest or identity.get("db_path") != str(Path(db_path).resolve()):
@@ -287,8 +290,8 @@ def seal_rendered_report(
 ):
     """Resume render → redaction → seal → idempotent caller registration.
 
-    ``evaluation_identity`` contains records and, for merged reports, the exact
-    registered evaluation_path/evaluation_sha256. The caller passes its existing
+    ``evaluation_identity`` binds reviewer records and either deterministic finding
+    provenance or the exact registered evaluation. The caller passes its existing
     redactor unchanged. A blocked result keeps private evidence and retries only
     redaction; changed code contents select a new input identity, never a model.
     ``register(descriptor)`` runs after sealing, including retries after a failed
@@ -334,7 +337,11 @@ def seal_rendered_report(
         for kind in ("result", "report"):
             if not record.get(kind + "_path") or not record.get(kind + "_sha256"):
                 raise ValueError("report checkpoint reviewer identity missing")
-    if len(records) > 1 or "evaluation_path" in evaluation_identity:
+    deterministic = manifest.get("review_report_mode") == ReviewReportMode.DETERMINISTIC_V1
+    if deterministic:
+        if not records or {"evaluation_path", "evaluation_sha256"} & evaluation_identity.keys():
+            raise ValueError("deterministic report checkpoint requires independent reviewer records")
+    elif len(records) > 1 or "evaluation_path" in evaluation_identity:
         if not evaluation_identity.get("evaluation_path") or not evaluation_identity.get("evaluation_sha256"):
             raise ValueError("report checkpoint requires exact evaluation identity")
 
@@ -372,10 +379,16 @@ def seal_rendered_report(
         for path, expected in source_hashes.items():
             if _hash(read_source(path)) != expected:
                 raise ValueError("report checkpoint source input hash changed")
-        for record in records:
-            files.read_result(record["result_path"], manifest)
-        if evaluation_identity.get("evaluation_path"):
-            files.read_evaluation(evaluation_identity["evaluation_path"], manifest, records)
+        if deterministic:
+            merged = files.merge_reviewer_results(manifest, records)
+            provenance = files.neutral_report_identity(merged)
+            if any(evaluation_identity.get(key) != value for key, value in provenance.items()):
+                raise ValueError("deterministic finding provenance changed")
+        else:
+            for record in records:
+                files.read_result(record["result_path"], manifest)
+            if evaluation_identity.get("evaluation_path"):
+                files.read_evaluation(evaluation_identity["evaluation_path"], manifest, records)
         if _json(identity) != _json(
             {
                 "schema_version": 1,

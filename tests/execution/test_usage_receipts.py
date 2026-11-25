@@ -3,6 +3,7 @@
 import json
 import sqlite3
 
+from robert_agent.adapters.processes import model_usage
 from robert_agent.execution import usage
 from robert_agent.persistence.stores import model_usage as store
 from tests.support.temp_workspace import TemporaryWorkspace
@@ -102,6 +103,80 @@ class UsageReceiptTests(TemporaryWorkspace):
         self.assertEqual(self.saved()["usage"]["input_tokens"], 100)
         self.assertEqual(len(self.saved()["segments"]), 1)
         self.assertEqual(self.saved()["segments"]["call"]["events"]["registered"]["at"], "2026-11-24T02:01:00Z")
+
+    def test_unconfirmed_launch_does_not_count_until_process_is_observed(self):
+        usage.start_call(self.conn, self.root, "stage", "call", "task", {}, confirmed=False)
+        before = self.saved()["segments"]["call"]
+        self.assertFalse(before["launched"])
+        self.assertIn("launch_requested", before["events"])
+        self.assertNotIn("started", before["events"])
+        usage.start_call(self.conn, self.root, "stage", "call", "task", {"pid": 20})
+        after = self.saved()["segments"]["call"]
+        self.assertTrue(after["launched"])
+        self.assertIn("started", after["events"])
+
+    def test_failed_spawn_records_launch_failure_without_inventing_exit(self):
+        dispatch = {"worker_agent": "codex", "ok": False, "status": "failed_dispatch"}
+        usage.start_call(self.conn, self.root, "stage", "call", "task", dispatch, confirmed=False)
+        usage.record_dispatch_usage(self.conn, self.root, "stage", "call", "task", dispatch, terminal=True)
+        segment = self.saved()["segments"]["call"]
+        self.assertFalse(segment["launched"])
+        self.assertIn("launch_failed", segment["events"])
+        self.assertNotIn("process_exit_observed", segment["events"])
+
+    def test_bound_native_resume_is_one_receipt_even_after_history_grows_or_stdout_arrives(self):
+        history = self.root / "native.jsonl"
+
+        def write(tokens):
+            row = {
+                "type": "event_msg",
+                "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": tokens}}},
+            }
+            with history.open("a") as stream:
+                stream.write(json.dumps(row) + "\n")
+
+        write(100)
+        info = history.stat()
+        binding = {
+            "history_path": str(history),
+            "history_root": str(self.root),
+            "agent": "codex",
+            "history_identity": {"dev": info.st_dev, "ino": info.st_ino},
+        }
+        cursor = model_usage.native_resume_usage_cursor(binding)
+        write(160)
+        terminal = "2026-11-24T12:00:00+00:00"
+        with history.open("a") as stream:
+            stream.write(
+                json.dumps({"timestamp": terminal, "type": "event_msg", "payload": {"type": "task_complete"}}) + "\n"
+            )
+        dispatch = {
+            "worker_agent": "codex",
+            "native_resume": {"segment": 1},
+            "native_session": binding,
+            "native_usage_cursor": cursor,
+            "process_exited": True,
+        }
+        usage.record_dispatch_usage(self.conn, self.root, "stage", "call", "task", dispatch)
+        self.assertEqual(self.saved()["usage"]["input_tokens"], 60)
+        receipt = self.saved()["segments"]["call"]
+        self.assertEqual(receipt["events"]["model_completed"]["at"], terminal)
+        self.assertEqual(receipt["measurement_status"], "complete")
+        write(300)
+        usage.record_dispatch_usage(self.conn, self.root, "stage", "call", "task", dispatch)
+        self.assertEqual(self.saved()["usage"]["input_tokens"], 60)
+        usage.record_dispatch_usage(
+            self.conn,
+            self.root,
+            "stage",
+            "call",
+            "task",
+            dispatch,
+            observed={"measurement_status": "complete", "usage_available": True, "usage": {"input_tokens": 60}},
+        )
+        self.assertEqual(self.saved()["usage"]["input_tokens"], 60)
+        self.assertEqual(self.saved()["measurement_status"], "complete")
+        self.assertEqual(len(self.saved()["segments"]), 1)
 
     def test_scope_rebind_refused_and_complete_counters_never_decrease(self):
         store.record(

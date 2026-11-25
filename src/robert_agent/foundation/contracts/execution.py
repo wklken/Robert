@@ -30,6 +30,12 @@ class RoundStatus(StrEnum):
 
 
 @unique
+class ReviewReportMode(StrEnum):
+    MODEL_SYNTHESIS = "model_synthesis"
+    DETERMINISTIC_V1 = "deterministic_v1"
+
+
+@unique
 class ModelRunStatus(StrEnum):
     PREPARED = "prepared"
     WAITING = "waiting"
