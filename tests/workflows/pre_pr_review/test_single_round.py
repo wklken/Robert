@@ -87,8 +87,12 @@ class SingleRoundReviewTests(PrePRReviewFixture):
             return result
 
         driver.launcher = failed_check
-        with self.assertRaisesRegex((StageStopped, ValueError), "required check"):
+        with (
+            patch.object(driver.stopping, "wait", return_value=False) as wait,
+            self.assertRaisesRegex((StageStopped, ValueError), "required check"),
+        ):
             driver.run()
+        self.assertEqual([delay.args[0] for delay in wait.call_args_list if delay.args[0] >= 5], [5, 10])
         with database.connect(self.db) as conn:
             self.assertEqual(queries.ready_actions(conn, 10), [])
 
@@ -207,8 +211,12 @@ class SingleRoundReviewTests(PrePRReviewFixture):
             return result
 
         driver.launcher = malformed
-        with self.assertRaisesRegex(ValueError, "final worktree HEAD"):
+        with (
+            patch.object(driver.stopping, "wait", return_value=False) as wait,
+            self.assertRaisesRegex(ValueError, "final worktree HEAD"),
+        ):
             driver.run()
+        self.assertEqual([delay.args[0] for delay in wait.call_args_list if delay.args[0] >= 5], [5, 10])
         with database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM worker_results").fetchone()[0], 0)
         self.assertEqual(self.launches["verify_final"], 0)

@@ -58,7 +58,8 @@ print(json.dumps({"type": "result", "usage": {"input_tokens": 4, "output_tokens"
             str(self.gate),
         ]
         kwargs["worker_agent_config"] = worker
-        result = dispatch.dispatch_worker(**kwargs, startup_probe_seconds=0.01)
+        # Give the macOS Python launcher time to exec before recording its command identity.
+        result = dispatch.dispatch_worker(**kwargs)
         with self.mutex:
             self.started.append((result, output))
         return result
@@ -126,10 +127,15 @@ print(json.dumps({"type": "result", "usage": {"input_tokens": 4, "output_tokens"
             try:
                 self.wait_registered()
                 self.driver.stopping.set()
-                with fixture_database.connect(self.fixture.db) as conn:
-                    self.assertNotEqual(native_rounds.terminate_children(conn, self.driver.task_id), "attention")
+                # Drain the coordinator's writes before the canceller takes its snapshot.
                 with self.assertRaises(StageStopped):
                     future.result(timeout=10)
+                for record, _ in self.started:
+                    process = dispatch.tracked_process(record["pid"])
+                    self.assertIsNotNone(process)
+                    self.assertIsNone(process.poll())
+                with fixture_database.connect(self.fixture.db) as conn:
+                    self.assertEqual(native_rounds.terminate_children(conn, self.driver.task_id), "terminated")
             finally:
                 self.gate.touch()
         with fixture_database.connect(self.fixture.db) as conn:
