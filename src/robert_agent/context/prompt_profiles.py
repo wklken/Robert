@@ -27,6 +27,7 @@ STAGES = {
     "maintenance.repair": StageProfile("stdout-json", (OutputType.NEW_PR,)),
     "review.prepare": StageProfile("atomic-files", ("review_context",), boundary="review"),
     "review.evaluate": StageProfile("atomic-files", ("review_result",), boundary="review"),
+    "review.validate_candidate": StageProfile("atomic-files", ("candidate_verification",), boundary="review"),
     "review.verify_final": StageProfile("atomic-files", ("final_review",), boundary="review"),
     "review.repair_handoff": StageProfile("atomic-files", ("repaired_handoff",), boundary="review"),
     "review.address_findings": StageProfile("atomic-files", ("review_dispositions",), guidance=("receipt-summary",)),

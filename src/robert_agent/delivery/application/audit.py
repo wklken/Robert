@@ -310,7 +310,7 @@ def action_scope_violation(actions, action_scope):
 
 def managed_review_comment_violation(stage, receipt, scope, allowed_actions):
     """Scope controller-generated review comments to the registered PR."""
-    if stage not in {"report", "blocked", "completion"}:
+    if stage not in {"report", "waiting", "blocked", "completion"}:
         return "comment stage is outside managed review publication"
     if not {GitHubActionType.OPEN_PR, GitHubActionType.PUSH_EXISTING_PR}.issubset(allowed_actions):
         return "current route does not authorize managed review publication"

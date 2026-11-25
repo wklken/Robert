@@ -141,6 +141,8 @@ def attach_equivalent_pr_trigger(conn, canonical, observed_body, event, observed
         request = entry["request"]
         state = request.get("review_publication") or {}
         pr = state.get("pr") or {}
+        if not review.advanceable(conn, entry) and (event.get("event_type") == "comment" or not state.get("report")):
+            continue
         if request["plan"]["workers"] != identity["workers"]:
             continue
         if state["authority"]["github_account"].casefold() != identity["eligibility"]["pr_author"]:
@@ -574,7 +576,7 @@ def _matches_single_round(entry):
             return False
         if any(
             run["stage"] in {"review", "synthesis", "address_findings"}
-            and round_records.artifact_available(run)
+            and round_records.completed_stage_artifact(run)
             and run["run_id"] not in {source["run_id"] for _, source in phase_runs}
             for run in history
         ):
@@ -584,7 +586,7 @@ def _matches_single_round(entry):
             if (
                 run["round_id"] != entry["round_id"]
                 or run["stage"] != stage
-                or not round_records.artifact_available(run)
+                or not round_records.completed_stage_artifact(run)
                 or run["slot_reserved"]
                 or checkpoint.get("run_id") != run["run_id"]
                 or checkpoint.get("prompt_sha256") != run["prompt_sha256"]
@@ -717,15 +719,42 @@ def _matches_targeted_verification(plan, marker, history, expected, worker):
     )
 
 
+def candidate_validation(run, manifest):
+    """Return fresh verification only for the registered candidate and base."""
+    if not run or run["stage"] != "validate_candidate" or run["slot_reserved"]:
+        return None
+    artifact = run["artifact"]
+    checkpoint = run.get("dispatch", {}).get("result_checkpoint", {})
+    if (
+        not round_records.artifact_available(run)
+        or artifact.get("head") != manifest["head_sha"]
+        or artifact.get("base_sha") != manifest["base_sha"]
+        or checkpoint.get("snapshot_id") != manifest["snapshot_id"]
+        or checkpoint.get("worktree_head") != manifest["head_sha"]
+        or checkpoint.get("run_id") != run["run_id"]
+        or checkpoint.get("prompt_sha256") != run["prompt_sha256"]
+    ):
+        return None
+    path = Path(artifact["candidate_verification_path"])
+    if digest(path) != artifact["candidate_verification_sha256"]:
+        return None
+    evidence = json.loads(path.read_text(encoding="utf-8"))
+    if evidence.get("head_sha") != manifest["head_sha"] or evidence.get("base_sha") != manifest["base_sha"]:
+        return None
+    return evidence["verification"]
+
+
 def _no_repair_response(entry, selected, expected):
     manifest = entry["manifest"]
     candidate = manifest["candidate"]
-    run = selected[candidate["run_id"]]
+    publication = entry["request"].get("review_publication") or {}
+    refreshed_id = (publication.get("candidate_evidence") or {}).get("validation_run_id")
+    run = selected[refreshed_id or candidate["run_id"]]
     artifact = run["artifact"]
     checkpoint = run.get("dispatch", {}).get("result_checkpoint", {})
     if (
         run["round_id"] != entry["round_id"]
-        or run["stage"] != "implement"
+        or run["stage"] != ("validate_candidate" if refreshed_id else "implement")
         or run["worker_id"] != entry["request"]["plan"]["implementer"]["name"]
         or not round_records.artifact_available(run)
         or run["slot_reserved"]
@@ -735,7 +764,10 @@ def _no_repair_response(entry, selected, expected):
         or "untracked_sha256" not in checkpoint
         or checkpoint.get("source_pin_error")
         or artifact.get("head") != expected["candidate_sha"]
-        or any(artifact.get(key) != candidate[key] for key in ("candidate_path", "candidate_sha256"))
+        or (
+            not refreshed_id
+            and any(artifact.get(key) != candidate[key] for key in ("candidate_path", "candidate_sha256"))
+        )
         or digest(candidate["candidate_path"]) != candidate["candidate_sha256"]
     ):
         return None
@@ -747,12 +779,14 @@ def _no_repair_response(entry, selected, expected):
     handoff = json.loads(Path(candidate["candidate_path"]).read_text())
     payload = handoff["submission"] if "output_type" in handoff and "submission" in handoff else handoff
     bodies = [action["body"] for action in payload["planned_github_actions"] if action["type"] == "open_pr"]
+    verification = candidate_validation(run, manifest) if refreshed_id else payload["verification"]
     if (
-        response.get("source") != "implementation"
+        response.get("source") != ("candidate_revalidation" if refreshed_id else "implementation")
         or response.get("source_checkpoint_sha256")
         != hashlib.sha256(json.dumps(checkpoint, sort_keys=True).encode()).hexdigest()
         or response.get("dispositions") != []
-        or response.get("verification") != payload["verification"]
+        or verification is None
+        or response.get("verification") != verification
         or bodies != [response.get("body")]
     ):
         return None
@@ -952,7 +986,7 @@ def task_status_from_records(entry, model_runs, process_pool):
                     "final_head": (publication.get("complete") or {}).get("head_sha"),
                     "effects": {
                         name: receipt["confirmed_at"]
-                        for name in ("initial_push", "pr", "report", "blocked", "final_push", "completion")
+                        for name in ("initial_push", "pr", "report", "waiting", "blocked", "final_push", "completion")
                         if (receipt := publication.get(name))
                     },
                 }

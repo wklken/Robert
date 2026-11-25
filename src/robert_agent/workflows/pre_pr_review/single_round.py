@@ -5,7 +5,7 @@ from pathlib import Path
 from robert_agent.execution.stages import StageStopped
 from robert_agent.foundation.contracts.execution import ReviewReportMode
 from robert_agent.persistence.rounds import pre_pr_review as store
-from robert_agent.persistence.rounds.records import artifact_available
+from robert_agent.persistence.rounds.records import completed_stage_artifact
 
 
 POLICY = "single_review_single_repair"
@@ -42,7 +42,9 @@ def completion(driver, report_sha, disposition):
 
     def completed(stage, worker):
         selected = [
-            run for run in history if run["stage"] == stage and run["worker_id"] == worker and artifact_available(run)
+            run
+            for run in history
+            if run["stage"] == stage and run["worker_id"] == worker and completed_stage_artifact(run)
         ]
         if len(selected) != 1:
             raise StageStopped("single-round completion requires exactly one registered " + stage + " artifact")

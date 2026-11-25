@@ -397,6 +397,32 @@ def address_findings_input(
     )
 
 
+def candidate_verification_input(manifest, candidate):
+    heads = {key: manifest[key] for key in ("head_sha", "base_sha")}
+    return PromptInput(
+        "review.validate_candidate",
+        heads,
+        _files_output(
+            "candidate_verification",
+            _REVIEW_DIR,
+            ("candidate-verification.json",),
+            "Draft PR verification gate",
+            {**heads, "verification": []},
+        ),
+        authority={"source_access": "read-only", "allowed_github_actions": [], "output_directory": _REVIEW_DIR},
+        context_items=(
+            *original_request_context(manifest.get("original_request")),
+            _file_item(
+                "implementation-handoff",
+                "Prior check commands and rationale",
+                "Robert",
+                candidate["candidate_path"],
+                candidate["candidate_sha256"],
+            ),
+        ),
+    )
+
+
 def final_review_input(inputs, input_path):
     identity = {
         key: inputs[key]

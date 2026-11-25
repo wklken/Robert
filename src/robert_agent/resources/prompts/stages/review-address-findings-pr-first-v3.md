@@ -18,4 +18,4 @@ Keep the worker-declared required policy honest: every required final gate must 
 
 ## Delivery
 
-Write dispositions.json.tmp under the output directory and rename it to dispositions.json once complete. Include the final_sha, verification and updated body even when findings remain deferred or need a decision. Do not submit another question instead of the final handoff.
+Write dispositions.json.tmp under the output directory and rename it to dispositions.json once complete. Include the final_sha, verification and updated body even when findings remain deferred or need a decision. For needs_decision, include two to five concrete choices at the top level that answer the pending finding IDs. If an authenticated reply is supplied, continue from the pinned question source and preserve its prior repair and scope.

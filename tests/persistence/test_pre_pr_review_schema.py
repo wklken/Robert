@@ -42,7 +42,7 @@ class PrePrReviewSchemaTests(unittest.TestCase):
 
     def old_stage_contract(self, *, has_final_verifier):
         ddl = self.conn.execute("SELECT sql FROM sqlite_master WHERE name='pre_pr_review_runs'").fetchone()[0]
-        ddl = ddl.replace(",'repair_handoff'", "")
+        ddl = ddl.replace(",'repair_handoff'", "").replace(",'validate_candidate'", "")
         if not has_final_verifier:
             ddl = ddl.replace(",'verify_final'", "")
         self.conn.execute("DROP TABLE pre_pr_review_runs")
@@ -80,10 +80,11 @@ class PrePrReviewSchemaTests(unittest.TestCase):
         ddl = self.conn.execute("SELECT sql FROM sqlite_master WHERE name='pre_pr_review_runs'").fetchone()[0]
         self.assertIn("verify_final", ddl)
         self.assertIn("repair_handoff", ddl)
+        self.assertIn("validate_candidate", ddl)
         self.assertIsNotNone(
             self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='pre_pr_review_runs_reserved'").fetchone()
         )
-        for stage in ("verify_final", "repair_handoff"):
+        for stage in ("verify_final", "repair_handoff", "validate_candidate"):
             self.conn.execute(
                 "INSERT INTO pre_pr_review_runs SELECT ?,round_id,?,worker_id,model,attempt_no,owner_attempt_id,status,"
                 "?,prompt_sha256,slot_reserved,started_at,dispatch_json,artifact_json,error,created_at,updated_at "

@@ -211,3 +211,13 @@ def verify_implementation_source(coordinator, binding):
     manifest = {"implementing": True, **{key: source.get(key) for key in ("snapshot_id", "head_sha", "base_sha")}}
     if stage_evidence.observe_source(run, manifest, source["worktree_path"]) != source:
         raise StageStopped("implementation question source changed before continuation")
+
+
+def verify_address_source(coordinator, binding):
+    with store.connect(coordinator.db_path) as conn:
+        entry = store.session(conn, task_id=coordinator.task_id)
+    store.validate_reply_checkpoint(entry, binding)
+    run = entry["question_run"]
+    checkpoint = binding["source_checkpoint"]
+    if stage_evidence.observe_source(run, coordinator.manifest, checkpoint["worktree_path"]) != checkpoint:
+        raise StageStopped("review question source changed before continuing the repair")

@@ -75,3 +75,10 @@ def update_run(conn, table_name, run_id, fields):
     if not set(fields) <= set(table.c.keys()) - {"run_id", "round_id"}:
         raise ValueError("invalid round run fields")
     return statements.write(conn, update(table).where(table.c.run_id == run_id).values(fields))
+
+
+def completed_stage_artifact(run):
+    """A sealed operator question leaves the address stage open for a reply."""
+    return artifact_available(run) and not (
+        run["stage"] == "address_findings" and run["artifact"].get("operator_question")
+    )

@@ -11,7 +11,7 @@ import subprocess
 from robert_agent.adapters.git.review_revision import clean_head, git, remote_branch_sha
 from robert_agent.adapters.git.workspace import check_worktree_reuse
 from robert_agent.adapters.git.merge_preflight import check_merge_environment, MergePreflightError
-from robert_agent.context.native_prompts import address_findings_input
+from robert_agent.context.native_prompts import address_findings_input, candidate_verification_input
 from robert_agent.context.prompts import render_prompt
 from robert_agent.delivery import contract
 from robert_agent.delivery.base_revisions import compatibility_refresh
@@ -26,7 +26,7 @@ from robert_agent.paths import default_config_path
 from robert_agent.persistence import transactions
 from robert_agent.persistence.stores import artifacts as db_write_artifacts
 from robert_agent.persistence.rounds import pre_pr_review as store
-from robert_agent.persistence.rounds.records import artifact_available
+from robert_agent.persistence.rounds.records import artifact_available, completed_stage_artifact
 from robert_agent.security.redaction import redact_and_truncate, redact_report
 from robert_agent.security import redaction
 from robert_agent.workflows.review import files, workspace, report_checkpoint
@@ -66,10 +66,17 @@ class Coordinator(ReviewStages):
         **ReviewStages.handoff_files,
         "verify_final": ("final-verification.json",),
         "implement": ("candidate.json",),
+        "validate_candidate": ("candidate-verification.json",),
         "address_findings": ("dispositions.json",),
         "repair_handoff": ("handoff.json",),
     }
-    artifact_kinds = (*ReviewStages.artifact_kinds, "candidate", "dispositions", "final_verification")
+    artifact_kinds = (
+        *ReviewStages.artifact_kinds,
+        "candidate",
+        "candidate_verification",
+        "dispositions",
+        "final_verification",
+    )
     stage = "implement"
 
     def __init__(self, db_path, task_id, attempt_id, *, observe_base=remote_branch_sha, config_path=None, **kwargs):
@@ -108,6 +115,9 @@ class Coordinator(ReviewStages):
         self.final_decision_feedback = None
         self.handoff_source_run_id = None
         self.verification_retry = None
+        self.address_reply = None
+        if reply and review_publication.enabled(self.plan) and reply["decision"].get("stage") == "address_findings":
+            self.address_reply = reply["decision"]
         if reply and reply["decision"].get("stage") == "implement" and not self.manifest.get("candidate"):
             decisions.verify_implementation_source(self, reply["decision"])
 
@@ -153,17 +163,24 @@ class Coordinator(ReviewStages):
 
     def check_launch_budget(self, stage, prompt_hash, previous):
         if single_round.enabled(self) and stage in single_round.PHASES:
-            if any(artifact_available(run) for run in previous):
+            if any(completed_stage_artifact(run) for run in previous):
                 raise StageStopped("completed single-round " + stage + " must be reused; no second invocation")
         recovering_required_checks = (
-            stage == "address_findings" and single_round.enabled(self) and self.verification_retry
+            stage == "address_findings"
+            and single_round.enabled(self)
+            and (self.verification_retry or self.address_reply)
         )
         failed = [
             run
             for run in previous
-            if run["status"] in {ModelRunStatus.FAILED, ModelRunStatus.INTERRUPTED}
+            if (
+                run["status"] in {ModelRunStatus.FAILED, ModelRunStatus.INTERRUPTED}
+                and (run["dispatch"].get("pid") or run["status"] == ModelRunStatus.FAILED)
+                or self.address_reply
+                and stage == "address_findings"
+                and run["artifact"].get("operator_question")
+            )
             and (run["prompt_sha256"] == prompt_hash or recovering_required_checks)
-            and (run["dispatch"].get("pid") or run["status"] == ModelRunStatus.FAILED)
         ]
         override = self.request.get("retry_attempt_id") == self.attempt_id and not any(
             run["owner_attempt_id"] == self.attempt_id for run in failed
@@ -175,9 +192,13 @@ class Coordinator(ReviewStages):
         if single_round.enabled(self) and stage in single_round.PHASES:
             return (
                 stage == "address_findings"
-                and bool(self.verification_retry)
-                and run["status"] in {ModelRunStatus.FAILED, ModelRunStatus.INTERRUPTED}
                 and not run["slot_reserved"]
+                and (
+                    self.verification_retry
+                    and run["status"] in {ModelRunStatus.FAILED, ModelRunStatus.INTERRUPTED}
+                    or self.address_reply
+                    and run["artifact"].get("operator_question")
+                )
             )
         reply = self.request.get("operator_reply", {}).get("decision", {})
         return stage != "implement" or reply.get("stage") == "implement" or super().phase_input_changed(stage, run)
@@ -202,6 +223,8 @@ class Coordinator(ReviewStages):
     def stage_worktree(self, run):
         if (run.get("dispatch") or {}).get("native_resume"):
             return super().stage_worktree(run)
+        if run["stage"] == "validate_candidate":
+            return self.assigned_path
         if run["stage"] == "repair_handoff":
             return self.handoff_repair_worktree
         if run["stage"] == "verify_final":
@@ -210,11 +233,15 @@ class Coordinator(ReviewStages):
             path = self.address_workspace(run["run_id"])
             if not path.exists():
                 path.parent.mkdir(parents=True, exist_ok=True)
+                if self.address_reply:
+                    decisions.verify_address_source(self, self.address_reply)
                 start = (
                     self.verification_retry["final_sha"]
                     if self.verification_retry
                     else self.final_feedback["final_sha"]
                     if self.final_feedback
+                    else self.address_reply["source_checkpoint"]["worktree_head"]
+                    if self.address_reply
                     else self.manifest["head_sha"]
                 )
                 git(self.repo["repo_root"], "worktree", "add", "--detach", str(path), start)
@@ -241,7 +268,7 @@ class Coordinator(ReviewStages):
                 completed = [
                     run
                     for run in store.runs(conn, self.round_id)
-                    if run["stage"] == stage and run["worker_id"] == worker["name"] and artifact_available(run)
+                    if run["stage"] == stage and run["worker_id"] == worker["name"] and completed_stage_artifact(run)
                 ]
             if len(completed) > 1:
                 raise StageStopped("single-round phase has multiple completed artifacts")
@@ -753,30 +780,43 @@ class Coordinator(ReviewStages):
         candidate = self.manifest["candidate"]
         with store.connect(self.db_path) as conn:
             history = store.runs(conn, self.round_id)
+            publication = store.session(conn, round_id=self.round_id)["request"].get("review_publication") or {}
+        verification_id = (publication.get("candidate_evidence") or {}).get("validation_run_id")
         # Once verification was needed, keep its registered stage and evidence
         # across retries even if the original implementation inputs match again.
         if any(run["stage"] == "address_findings" for run in history):
             return None
-        implementation = next((run for run in history if run["run_id"] == candidate.get("run_id")), None)
-        if (
-            not implementation
-            or implementation["stage"] != "implement"
-            or not artifact_available(implementation)
-            or any(
-                implementation["artifact"].get(key) != candidate[key] for key in ("candidate_path", "candidate_sha256")
-            )
-            or implementation["artifact"].get("head") != head
-        ):
-            # Base refresh and preserved repairs can move the candidate beyond
-            # the original implementation checks. Require fresh verification.
-            return None
+        implementation = next(
+            (run for run in history if run["run_id"] == (verification_id or candidate["run_id"])), None
+        )
+        if verification_id:
+            verification = store.candidate_validation(implementation, self.manifest)
+            if verification is None:
+                return None
+        else:
+            if (
+                not implementation
+                or implementation["stage"] != "implement"
+                or not artifact_available(implementation)
+                or any(
+                    implementation["artifact"].get(key) != candidate[key]
+                    for key in ("candidate_path", "candidate_sha256")
+                )
+                or implementation["artifact"].get("head") != head
+            ):
+                return None
+            verification = None
         checkpoint = implementation.get("dispatch", {}).get("result_checkpoint", {})
         if "untracked_sha256" not in checkpoint or checkpoint.get("source_pin_error"):
             return None
-        implementation_source = {
-            "implementing": True,
-            **{key: checkpoint.get(key) for key in ("snapshot_id", "head_sha", "base_sha")},
-        }
+        implementation_source = (
+            self.manifest
+            if verification_id
+            else {
+                "implementing": True,
+                **{key: checkpoint.get(key) for key in ("snapshot_id", "head_sha", "base_sha")},
+            }
+        )
         try:
             current = stage_evidence.observe_source(
                 implementation, implementation_source, Path(self.assigned_path).resolve()
@@ -790,13 +830,13 @@ class Coordinator(ReviewStages):
         draft = self.candidate_submission()
         action = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
         evidence = {
-            "source": "implementation",
+            "source": "candidate_revalidation" if verification_id else "implementation",
             "source_checkpoint_sha256": hashlib.sha256(json.dumps(checkpoint, sort_keys=True).encode()).hexdigest(),
             "candidate_sha": head,
             "final_sha": head,
             "report_sha256": report_sha,
             "dispositions": [],
-            "verification": final_verification_checks(draft["verification"]),
+            "verification": final_verification_checks(verification if verification_id else draft["verification"]),
             "body": action["body"],
         }
         root = Path(self.manifest["artifact_root"])
@@ -849,7 +889,8 @@ class Coordinator(ReviewStages):
             ).text,
             stage="address_findings",
         )
-        require_choices = question_choices.PROMPT_MARKER in prompt.read_text(encoding="utf-8")
+        pr_first = review_publication.enabled(self.plan)
+        require_choices = pr_first or question_choices.PROMPT_MARKER in prompt.read_text(encoding="utf-8")
 
         def validate(output, _model):
             final_repair.validate_feedback(self)
@@ -881,7 +922,13 @@ class Coordinator(ReviewStages):
             if seen != set(ids):
                 raise ValueError("disposition handoff omitted a finding")
             pending = [item for item in value["dispositions"] if item["status"] == "needs_decision"]
-            if pending and not single_round.enabled(self):
+            if pending and (pr_first or not single_round.enabled(self)):
+                if pr_first:
+                    tree = self.address_workspace(self.handoff_source_run_id or output.name)
+                    partial = clean_head(tree)
+                    if partial != value.get("final_sha"):
+                        raise ValueError("question worktree differs from the reported repair SHA")
+                    git(tree, "merge-base", "--is-ancestor", head, partial)
                 summary = "Review findings require a decision within the original task scope.\n" + "\n".join(
                     f"{item['id']}: {item['reason']}" for item in pending
                 )
@@ -925,6 +972,13 @@ class Coordinator(ReviewStages):
         return artifact
 
     def wait_for_decision(self, decision, report_sha=None):
+        if decision.stage == "address_findings" and review_publication.enabled(getattr(self, "plan", {})):
+            head = self.manifest["head_sha"]
+            self.publication().waiting(
+                head,
+                f"## 第一轮处理待决定\n\n送审提交 `{head}`。等待请求归属人的范围确认，"
+                "答复后继续原修复和验证。本草稿保留已发布的送审提交与评审报告。",
+            )
         return decisions.submit(self, decision, report_sha)
 
     def candidate_submission(self):
@@ -1236,6 +1290,7 @@ class Coordinator(ReviewStages):
                     for history in failed.values()
                     if history[-1]["status"] == ModelRunStatus.FAILED
                 ]
+                transient = isinstance(exc, review_publication.TransientPublicationError)
                 can_retry = (
                     bool(counts)
                     and max(counts) < retry.MAX_ATTEMPTS
@@ -1248,13 +1303,33 @@ class Coordinator(ReviewStages):
                 with store.connect(self.db_path) as conn:
                     transactions.begin(conn, immediate=True)
                     if attempt_is_active(conn, self.task_id, self.attempt_id):
+                        fields = {}
+                        if transient:
+                            entry = store.session(conn, round_id=self.round_id)
+                            request = entry["request"]
+                            previous = request.get("publication_retry") or {}
+                            stages = previous["stages"] if previous.get("attempt_id") == self.attempt_id else {}
+                            count = stages.get(self.stage, 0) + 1
+                            delay = 5 * 2 ** (min(count, retry.MAX_ATTEMPTS) - 1)
+                            next_retry = datetime.now(timezone.utc) + timedelta(seconds=delay)
+                            can_retry = (
+                                count < retry.MAX_ATTEMPTS and stopped != "attention" and next_retry < self.deadline
+                            )
+                            request["publication_retry"] = {
+                                "attempt_id": self.attempt_id,
+                                "stages": {**stages, self.stage: count},
+                            }
+                            fields["request_json"] = json.dumps(request, sort_keys=True)
                         store.update(
                             conn,
                             self.round_id,
                             status="retry_wait" if can_retry else "attention",
                             next_retry_at=next_retry.isoformat() if can_retry else None,
                             error=f"{self.stage}: {error}",
+                            **fields,
                         )
+                    else:
+                        can_retry = False
                 if not can_retry:
                     raise
                 if self.manifest.get("implementing"):
@@ -1273,39 +1348,90 @@ class Coordinator(ReviewStages):
             runner=self.publication_runner,
         )
 
-    def preliminary_publication(self):
-        self.stage = "preliminary_publication"
+    def revalidate_candidate(self, draft):
+        self.stage = "validate_candidate"
         self.phase(self.stage)
+        manifest = self.manifest
+        head, base = manifest["head_sha"], manifest["base_sha"]
+        prompt = self.prompt(
+            f"verify-candidate-{manifest['snapshot_id']}.md",
+            render_prompt(candidate_verification_input(manifest, manifest["candidate"])).text,
+            stage=self.stage,
+        )
+
+        def validate(output, _model):
+            path = output / "candidate-verification.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                value.get("head_sha") != head
+                or value.get("base_sha") != base
+                or clean_head(self.assigned_path, self.branch) != head
+            ):
+                raise StageStopped("candidate verification is outside the pinned revision")
+            checks = final_verification_checks(value["verification"])
+            original_required = {item["command"] for item in draft["verification"] if item.get("required")}
+            if not original_required.issubset(item["command"] for item in checks if item.get("required")):
+                raise ValueError("candidate verification omitted a previously required check")
+            self.validate_submission({**draft, "verification": checks})
+            return {
+                "candidate_verification_path": str(path),
+                "candidate_verification_sha256": store.digest(path),
+                "head": head,
+                "base_sha": base,
+            }
+
+        return self.run_phase(self.stage, self.implementer, prompt, validate)["run_id"]
+
+    def preliminary_publication(self):
         draft = self.candidate_submission()
-        final_verification_checks(draft["verification"])
-        action = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
-        action["body"] += "\n\n本 PR 等待第一轮评审。评审报告和后续处置见评论。"
-        if "issue_resolution" in action:
-            action.update(issue_resolution="partial", remaining_scope="第一轮评审及必要整改")
-        normalized = self.validate_submission(draft)
         manifest = self.manifest
         candidate = manifest["candidate"]
         with store.connect(self.db_path) as conn:
-            implementation = next(
-                (run for run in store.runs(conn, self.round_id) if run["run_id"] == candidate["run_id"]),
-                None,
-            )
+            entry = store.session(conn, round_id=self.round_id)
+            history = store.runs(conn, self.round_id)
+        implementation = next((run for run in history if run["run_id"] == candidate["run_id"]), None)
         if (
             not implementation
             or implementation["stage"] != "implement"
             or implementation["slot_reserved"]
             or not artifact_available(implementation)
-            or implementation["artifact"].get("head") != manifest["head_sha"]
             or implementation["artifact"].get("candidate_sha256") != candidate["candidate_sha256"]
-            or implementation["dispatch"].get("result_checkpoint", {}).get("worktree_head") != manifest["head_sha"]
+            or implementation["dispatch"].get("result_checkpoint", {}).get("worktree_head")
+            != implementation["artifact"].get("head")
         ):
-            raise StageStopped("preliminary publication requires implementation verification for the reviewed SHA")
+            raise StageStopped("preliminary publication requires registered implementation evidence")
+        candidate_evidence = {key: candidate[key] for key in ("candidate_sha256", "run_id")}
+        state = entry["request"].get("review_publication") or {}
+        if implementation["artifact"].get("head") != manifest["head_sha"]:
+            # Recover the exact original gate after the Draft is created, including
+            # when the assigned branch already contains the final repair.
+            validation_id = (state.get("candidate_evidence") or {}).get("validation_run_id")
+            if not state:
+                validation_id = self.revalidate_candidate(draft)
+                with store.connect(self.db_path) as conn:
+                    history = store.runs(conn, self.round_id)
+            validation_run = next((run for run in history if run["run_id"] == validation_id), None)
+            verification = store.candidate_validation(validation_run, manifest)
+            if verification is None:
+                raise StageStopped("preliminary publication requires verification for the refreshed SHA")
+            draft["verification"] = verification
+            candidate_evidence["validation_run_id"] = validation_id
+
+        final_verification_checks(draft["verification"])
+        if not state:
+            self.check_base(manifest["head_sha"])
+        self.stage = "preliminary_publication"
+        self.phase(self.stage)
+        action = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
+        action["body"] += "\n\n本 PR 等待第一轮评审。评审报告和后续处置见评论。"
+        if "issue_resolution" in action:
+            action.update(issue_resolution="partial", remaining_scope="第一轮评审及必要整改")
         return self.publication().preliminary(
-            normalized,
+            self.validate_submission(draft),
             manifest["snapshot_id"],
             manifest["head_sha"],
             manifest["base_sha"],
-            candidate_evidence={key: manifest["candidate"][key] for key in ("candidate_sha256", "run_id")},
+            candidate_evidence=candidate_evidence,
         )
 
     def advance_stages(self):
@@ -1327,16 +1453,6 @@ class Coordinator(ReviewStages):
             if disposition is None:
                 disposition = self.address(report, sha, ids)
             if pr_first:
-                response = json.loads(Path(disposition["dispositions_path"]).read_text(encoding="utf-8"))
-                pending = [item for item in response["dispositions"] if item["status"] == "needs_decision"]
-                if pending:
-                    head = self.manifest["head_sha"]
-                    summary = "\n".join(
-                        ["## 第一轮处理待决定", "", f"送审提交 `{head}`。", ""]
-                        + [f"- {item['id']} · {item['reason']}" for item in pending]
-                    )
-                    self.publication().blocked(head, summary)
-                    raise StageStopped("first-round dispositions require an operator decision; draft retained")
                 reasons = targeted.reasons(self, records, disposition)
                 return self.finalize(report, sha, disposition, risk_reasons=reasons)
             return self.finalize(report, sha, disposition)

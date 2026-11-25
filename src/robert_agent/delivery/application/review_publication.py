@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
 
 from robert_agent.adapters.git.remotes import github_repository
 from robert_agent.adapters.git.review_revision import clean_head, git
@@ -25,6 +26,10 @@ from robert_agent.work.queries import tapd_origin
 
 _OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _MAX_EFFECT_ATTEMPTS = 3
+
+
+class TransientPublicationError(RuntimeError):
+    """A remote command failed with a retryable transport or service error."""
 
 
 def enabled(plan):
@@ -57,7 +62,44 @@ class Publication:
 
     def _run(self, command, **kwargs):
         kwargs.setdefault("timeout", 30)
-        return run_command(command, runner=self.runner, **kwargs)
+        remote = command[0] == "gh" or command[:2] in (["git", "ls-remote"], ["git", "push"])
+        try:
+            response = run_command(command, runner=self.runner, **kwargs)
+        except (subprocess.TimeoutExpired, ConnectionError) as exc:
+            if not remote:
+                raise
+            raise TransientPublicationError("remote publication command timed out or disconnected") from exc
+        except subprocess.CalledProcessError as exc:
+            if remote and self._retryable_remote_error(exc.stderr):
+                raise TransientPublicationError("remote publication service temporarily unavailable") from exc
+            raise
+        if (
+            remote
+            and getattr(response, "returncode", 0)
+            and self._retryable_remote_error(getattr(response, "stderr", None))
+        ):
+            raise TransientPublicationError("remote publication service temporarily unavailable")
+        return response
+
+    @staticmethod
+    def _retryable_remote_error(error):
+        text = str(error or "").casefold()
+        return bool(
+            re.search(r"\b(?:http|returned error:)\s*(?:429|50[0234])\b", text)
+            or any(
+                term in text
+                for term in (
+                    "connection reset",
+                    "connection timed out",
+                    "i/o timeout",
+                    "temporarily unavailable",
+                    "tls handshake timeout",
+                    "unexpected eof",
+                    "remote end hung up unexpectedly",
+                    "could not resolve host",
+                )
+            )
+        )
 
     def _entry(self, conn):
         entry = store.session(conn, round_id=self.round_id)
@@ -187,11 +229,15 @@ class Publication:
         self._check_base(scope, base_proof)
         attempts = self.current.get("attempts", {})
         count = attempts.get(effect, 0)
+        overrides = self.current.get("retry_attempts", {})
         if count >= _MAX_EFFECT_ATTEMPTS:
-            raise StageStopped(f"review publication retry budget exhausted for {effect}")
-        # Reserve before the command. If no receipt follows, the next pass
-        # observes the remote effect again before spending another attempt.
-        self._update(attempts={**attempts, effect: count + 1})
+            with store.connect(self.db_path) as conn:
+                request = self._entry(conn)["request"]
+            if request.get("retry_attempt_id") != self.attempt_id or overrides.get(effect) == self.attempt_id:
+                raise StageStopped(f"review publication retry budget exhausted for {effect}")
+            overrides = {**overrides, effect: self.attempt_id}
+        # Reserve before the command. Every retry first observes the effect.
+        self._update(attempts={**attempts, effect: count + 1}, retry_attempts=overrides)
         if comment:
             self._authorize_comment(effect)
         else:
@@ -428,6 +474,12 @@ class Publication:
             body = f"## 第一轮评审\n\n送审提交 `{reviewed_head}`\n\n{report}"
             return self._comment("report", reviewed_head, body)
 
+    def waiting(self, reviewed_head, summary):
+        with self._locked():
+            scope, _, _ = self._authorize(expected=self.current["authority"])
+            self._pull(scope, self.current["pr"]["number"], expected_heads=(reviewed_head,), require_marker=False)
+            return self._comment("waiting", reviewed_head, summary)
+
     def blocked(self, reviewed_head, summary):
         with self._locked():
             scope, _, _ = self._authorize(expected=self.current["authority"])
@@ -457,6 +509,7 @@ class Publication:
         self._push("final_push", scope, head, pr["initial_head"], base_proof)
         self._description(scope, pr["number"], head, draft["body"], base_proof)
         self._comment("completion", head, summary, base_proof=base_proof)
+        self._pull(scope, pr["number"], expected_heads=(head,), require_marker=False)
         self._check_base(scope, base_proof)
         final = {
             "initial": self.current["pr"],
