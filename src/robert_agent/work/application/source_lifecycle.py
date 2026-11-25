@@ -43,6 +43,7 @@ from robert_agent.foundation import tapd_identity, values
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.work import queries as work_queries
 from robert_agent.workflows import pr_remediation as remediation
+from robert_agent.security.redaction import redact_and_truncate
 import json
 import subprocess
 
@@ -112,7 +113,22 @@ def record_remote_terminal_state(
         receipt_config,
         repository,
     )
-    if not task_id or not database:
+    if not task_id:
+        # Remote observation is complete. Acquire the writer before local reads
+        # so a concurrent commit cannot invalidate a deferred WAL snapshot.
+        conn.commit()
+        db_transactions.begin_immediate(conn)
+        try:
+            if work_queries.latest_task_id(conn, workstream_id) or work_queries.active_task_id(conn, workstream_id):
+                conn.commit()
+                return False  # A newly owned task must use its publication lock on the next observation.
+            result = _record_remote_terminal_state_locked(*args)
+            conn.commit()
+            return result
+        except BaseException:
+            conn.rollback()
+            raise
+    if not database:
         return _record_remote_terminal_state_locked(*args)
     conn.commit()
     with task_publication_lock(database, task_id) as locked:
@@ -628,6 +644,7 @@ def reconcile_remote_source_states(
             raise
         except Exception as exc:
             transactions.finish_isolation(conn, "reconcile_source", rollback=True)
+            error = redact_and_truncate(str(exc), 2000, strict_assignments=True)
             execution_notifications.update_failure(
                 conn,
                 "source_reconcile_failed",
@@ -635,10 +652,13 @@ def reconcile_remote_source_states(
                 run_now,
                 {
                     "source_key": source_key,
+                    "repo_id": repo_id,
+                    "workstream_id": workstream_id,
                     "task_id": task_id,
                     "reason_code": "source_reconcile_failed",
                     "error_type": type(exc).__name__,
-                    "required_action": "Inspect this source; other sources continue and this source will be retried.",
+                    "safe_error": error["text"] if error["ok"] else "错误详情包含敏感信息，请检查本地诊断记录。",
+                    "retryable": True,
                 },
             )
         finally:

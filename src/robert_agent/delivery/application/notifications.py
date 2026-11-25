@@ -230,7 +230,7 @@ def deliver_pending(db_path, *, command=None, runner=subprocess.run, now=None, l
             with closing(db_database.connect(db_path)) as conn, conn:
                 db_write_notifications.set_delivery_state(conn, notification_id, json.dumps(state))
             with closing(db_database.connect(db_path)) as conn:
-                if not db_read_notifications.is_open_for_delivery(conn, notification_id):
+                if not db_read_notifications.is_open_for_delivery(conn, notification_id, now=now):
                     continue
             receipt = {}
             sent = transport.send(payload, config=config, command=command, runner=runner, receipt=receipt)

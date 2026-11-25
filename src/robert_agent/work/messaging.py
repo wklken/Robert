@@ -37,6 +37,9 @@ def notification_scope(conn, task_id, metadata):
     repo_id = metadata.get("repo_id")
     if repo_id is not None or metadata.get("repository_scoped"):
         return repo_id, True
+    if metadata.get("source_key"):
+        row = records.first(notifications.find_scope(conn, source_key=metadata["source_key"]))
+        return (row[0] if row else None), True
     if metadata.get("incident_id"):
         row = records.first(notifications.find_incident_scope(conn, metadata["incident_id"]))
         if row and row[0] == "controller":

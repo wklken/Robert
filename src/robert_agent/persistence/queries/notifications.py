@@ -290,7 +290,7 @@ def find_open_remediation_notices(conn, workstream_id, *, notification_type=None
     return statements.read(conn, stmt)
 
 
-def is_open_for_delivery(conn, notification_id):
+def is_open_for_delivery(conn, notification_id, *, now=None):
     notice = tables["notifications"]
     return statements.read(
         conn,
@@ -298,6 +298,7 @@ def is_open_for_delivery(conn, notification_id):
             notice.c.notification_id == notification_id,
             notice.c.status != "resolved",
             _active_remediation_notice(),
+            _source_failure_delivery_due(now) if now is not None else sql_constant(1) == sql_constant(1),
         ),
     )
 
@@ -482,11 +483,25 @@ def find_message_context(conn, notification_id):
             ),
         )
         .outerjoin(
+            source,
+            or_(
+                source.c.source_id == func.coalesce(stream.c.primary_source_id, item.c.origin_source_id),
+                and_(
+                    func.coalesce(stream.c.primary_source_id, item.c.origin_source_id).is_(None),
+                    source.c.source_key == func.json_extract(notice.c.metadata_json, "$.source_key"),
+                ),
+            ),
+        )
+        .outerjoin(
             repo,
             repo.c.repo_id
-            == func.coalesce(item.c.repo_id, stream.c.repo_id, func.json_extract(notice.c.metadata_json, "$.repo_id")),
+            == func.coalesce(
+                item.c.repo_id,
+                stream.c.repo_id,
+                source.c.repo_id,
+                func.json_extract(notice.c.metadata_json, "$.repo_id"),
+            ),
         )
-        .outerjoin(source, source.c.source_id == func.coalesce(stream.c.primary_source_id, item.c.origin_source_id))
         .outerjoin(attempt, and_(attempt.c.attempt_id == attempt_id, attempt.c.task_id == task.c.task_id))
     )
     return statements.read(
@@ -531,7 +546,7 @@ def _pending_delivery(now, repo_ids, *, card_only=False):
             ).not_in((sql_constant("sent"), sql_constant("exhausted"))),
             or_(retry_at.is_(None), func.julianday(retry_at) <= func.julianday(now)),
         )
-    predicate = and_(predicate, delivery)
+    predicate = and_(predicate, delivery, _source_failure_delivery_due(now))
     if repo_ids is not None:
         task, stream = tables["tasks"], tables["workstreams"]
         scoped = (
@@ -546,6 +561,38 @@ def _pending_delivery(now, repo_ids, *, card_only=False):
     return predicate
 
 
+def _source_failure_delivery_due(now):
+    """Keep transient source errors quiet, including failures after recovery."""
+    notice = tables["notifications"]
+    previous = notice.alias("previous_source_failure")
+    source_key = func.coalesce(
+        func.json_extract(notice.c.metadata_json, "$.failure_key"),
+        func.json_extract(notice.c.metadata_json, "$.source_key"),
+    )
+    previous_key = func.coalesce(
+        func.json_extract(previous.c.metadata_json, "$.failure_key"),
+        func.json_extract(previous.c.metadata_json, "$.source_key"),
+    )
+    recent_delivery = (
+        select(1)
+        .where(
+            previous.c.notification_type == "source_reconcile_failed",
+            previous.c.channel == "local",
+            previous.c.notification_id != notice.c.notification_id,
+            previous_key == source_key,
+            func.json_extract(previous.c.metadata_json, "$.delivery.status") == "sent",
+            func.julianday(func.json_extract(previous.c.metadata_json, "$.delivery.sent_at"))
+            > func.julianday(now, "-1 hour"),
+        )
+        .correlate(notice)
+        .exists()
+    )
+    return or_(
+        notice.c.notification_type != "source_reconcile_failed",
+        and_(func.julianday(notice.c.created_at) <= func.julianday(now, "-5 minutes"), ~recent_delivery),
+    )
+
+
 def _pending_attention(repo_ids):
     """Exclude closed attention and denied repositories before any queue limit."""
     notice = tables["notifications"]
@@ -553,7 +600,10 @@ def _pending_attention(repo_ids):
     resolved = event.alias("resolved_attention")
     attention_id = func.json_extract(notice.c.metadata_json, "$.attention_event_id")
     item_id = func.json_extract(notice.c.metadata_json, "$.work_item_id")
-    metadata_repo = func.json_extract(notice.c.metadata_json, "$.repo_id")
+    source = tables["github_sources"]
+    source_key = func.json_extract(notice.c.metadata_json, "$.source_key")
+    source_repo = select(source.c.repo_id).where(source.c.source_key == source_key).correlate(notice).scalar_subquery()
+    metadata_repo = func.coalesce(func.json_extract(notice.c.metadata_json, "$.repo_id"), source_repo)
     open_attention = (
         select(1)
         .select_from(event.join(item, item.c.work_item_id == event.c.work_item_id))
@@ -592,6 +642,7 @@ def _pending_attention(repo_ids):
         notice.c.task_id.is_(None),
         item_id.is_(None),
         metadata_repo.is_(None),
+        source_key.is_(None),
         func.coalesce(func.json_extract(notice.c.metadata_json, "$.repository_scoped"), 0) != 1,
     )
     return and_(
@@ -682,10 +733,13 @@ def find_chat_question(conn, *, messaging_repo_ids, messaging_settings, notifica
     )
 
 
-def find_scope(conn, *, work_item_id, task_id):
+def find_scope(conn, *, work_item_id=None, task_id=None, source_key=None):
     if work_item_id:
         item = tables["work_items"]
         stmt = select(item.c.repo_id).where(item.c.work_item_id == work_item_id)
+    elif source_key:
+        source = tables["github_sources"]
+        stmt = select(source.c.repo_id).where(source.c.source_key == source_key)
     else:
         task, stream = tables["tasks"], tables["workstreams"]
         stmt = (
