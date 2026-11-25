@@ -88,7 +88,7 @@ class TerminalRemediationRetriggerTests(PrRemediationIntegrationFixture):
             "base_sha": "new-base",
             "head_ref": "codex/fix",
             "base_ref": "main",
-            "head_repo_full_name": "example/backend",
+            "head_repo_full_name": "robert-bot/backend",
             "author_login": "robert-bot",
             "html_url": "https://github.com/example/backend/pull/13",
         }
@@ -153,11 +153,18 @@ class TerminalRemediationRetriggerTests(PrRemediationIntegrationFixture):
             {**self.snapshot, "state": "closed"},
             {**self.snapshot, "head_sha": ""},
             {**self.snapshot, "head_repo_full_name": "other/repo"},
+            {**self.snapshot, "head_repo_full_name": "other/backend"},
+            {**self.snapshot, "head_repo_full_name": "robert-bot/other"},
+            {**self.snapshot, "head_repo_full_name": ""},
             {**self.snapshot, "author_login": "other"},
         ):
             self.snapshot = snapshot
             with self.assertRaises(WorkItemConflictError):
                 self.request()
+
+    def test_same_repository_head_remains_supported(self):
+        self.snapshot["head_repo_full_name"] = "example/backend"
+        self.assertEqual(self.request()["status"], "queued")
 
     def test_denied_scope_does_not_fetch_or_queue_recovery(self):
         self.context = CommandContext("operator", "other", frozenset(), frozenset())

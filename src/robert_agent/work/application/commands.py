@@ -511,8 +511,12 @@ def retrigger_failed_github_task(
                     or not all(remote.get(key) for key in ("head_sha", "base_sha", "head_ref", "base_ref"))
                 ):
                     raise WorkItemConflictError("retrigger requires a verified open GitHub pull request")
+                managed_heads = {
+                    snapshot["full_name"].casefold(),
+                    f"{snapshot['github_account']}/{snapshot['full_name'].split('/', 1)[1]}".casefold(),
+                }
                 if (
-                    remote["head_repo_full_name"] != snapshot["full_name"]
+                    remote["head_repo_full_name"].casefold() not in managed_heads
                     or remote["author_login"].casefold() != snapshot["github_account"].casefold()
                 ):
                     raise WorkItemConflictError("retrigger requires the same managed pull request")
