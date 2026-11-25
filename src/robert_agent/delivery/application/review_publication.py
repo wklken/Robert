@@ -169,6 +169,9 @@ class Publication:
         return scope, settings, ticket
 
     def _validate(self, normalized, head, base_sha, *, expected=None):
+        types = [action["type"] for action in normalized["planned_github_actions"]]
+        if types.count("open_pr") != 1 or types.count("push_existing_pr") != 1:
+            raise StageStopped("managed draft publication requires one branch push and one pull request")
         scope, settings, ticket = self._authorize(expected=expected)
         actual = clean_head(scope["worktree_path"], scope["branch_name"])
         if actual != head:

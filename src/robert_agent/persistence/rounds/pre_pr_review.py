@@ -9,7 +9,7 @@ from sqlalchemy import delete, func, insert, select, update as sql_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from robert_agent.foundation.contracts.delivery import ReviewPublicationMode
-from robert_agent.foundation.contracts.execution import ModelRunStatus, ReviewReportMode
+from robert_agent.foundation.contracts.execution import ModelRunStatus, ReviewReportMode, RoundStatus
 from robert_agent.foundation.review_findings import deterministic_finding_id, review_requires_followup
 from robert_agent.persistence import records, statements
 from robert_agent.persistence.catalog import tables
@@ -141,8 +141,11 @@ def attach_equivalent_pr_trigger(conn, canonical, observed_body, event, observed
         request = entry["request"]
         state = request.get("review_publication") or {}
         pr = state.get("pr") or {}
-        if not review.advanceable(conn, entry) and (event.get("event_type") == "comment" or not state.get("report")):
-            continue
+        if event.get("event_type") == "comment" or not state.get("report"):
+            if entry["status"] in {RoundStatus.FAILED, RoundStatus.WAITING_FOR_USER} or not review.advanceable(
+                conn, entry
+            ):
+                continue
         if request["plan"]["workers"] != identity["workers"]:
             continue
         if state["authority"]["github_account"].casefold() != identity["eligibility"]["pr_author"]:

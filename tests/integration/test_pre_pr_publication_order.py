@@ -386,8 +386,12 @@ class EarlyReviewPublicationTests(PrePRReviewFixture):
         self.assertTrue(driver.run()["ok"])
 
         with database.connect(self.db) as conn:
-            [(kind, target)] = conn.execute("SELECT action_type, target_url FROM github_actions").fetchall()
+            [(kind, target, metadata)] = conn.execute(
+                "SELECT action_type, target_url, metadata_json FROM github_actions"
+            ).fetchall()
             self.assertEqual((kind, target), ("comment", "https://github.com/example/backend/issues/42"))
+            self.assertTrue(json.loads(metadata)["body"].startswith("@maintainer"))
+            self.assertIn("Robert 工作台", json.loads(metadata)["body"])
             self.assertEqual(store.session(conn, round_id=driver.round_id)["status"], "waiting_for_user")
         self.assertEqual(remote.events.count("push"), 1)
         self.assertIn("待决定", remote.comments[-1]["body"])
