@@ -86,7 +86,16 @@ Use `--workers 8` when the development machine has spare CPU and memory. Use
 CI explicitly uses four. Both settings discover the complete suite and run each
 module in an isolated process with the current interpreter. Module and class
 fixtures stay together. The runner reports each child's output and elapsed time.
-Import errors, empty discovery and failed children make the run fail.
+Import errors, empty discovery and failed children make the run fail. Module
+processes cache bytecode under `~/.cache/robert-test-pycache` (or an existing
+`PYTHONPYCACHEPREFIX`) instead of writing `__pycache__` into the checkout.
+
+Tests create many temporary Git repositories and SQLite databases. On Linux,
+CI points `TMPDIR` at `/dev/shm` so those files stay in memory. Do the same
+locally with `mkdir -p /dev/shm/robert-tests` and
+`TMPDIR=/dev/shm/robert-tests python3 -B -m tests.run --workers 8`. Durability
+behavior is still asserted through SQLite and the file APIs; tmpfs only skips
+physical disk flushes.
 
 Use `python3 -B -m tests.run --list` to print discovered test IDs without
 executing them. Use serial `python3 -B -m unittest discover -s tests` to

@@ -84,6 +84,11 @@ jobs:
                   executable.chmod(stat.S_IMODE(info.st_mode) & ~0o022)
           from robert_agent.workflows.maintenance.repair import _fingerprint_file
           _fingerprint_file(executable)
+      - name: Keep test temporary files in memory
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p /dev/shm/robert-tests
+          echo "TMPDIR=/dev/shm/robert-tests" >> "$GITHUB_ENV"
       - run: python -B -m tests.run --workers 4
       - name: Record the tested environment for dependency audit
         if: inputs.full-checks

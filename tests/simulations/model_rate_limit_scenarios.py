@@ -30,7 +30,7 @@ PRIMARY = "model-primary"
 FALLBACK = "model-fallback"
 REPO_ID = "repo:example/backend"
 REPO_NAME = "example/backend"
-RETRY_AFTER = "2"
+RETRY_AFTER = "1"
 
 _WORKER = '''
 from contextlib import closing

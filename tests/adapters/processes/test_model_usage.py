@@ -1,6 +1,7 @@
 """Provider receipts aggregate completed turns and bounded partial evidence."""
 
 import json
+from unittest.mock import patch
 
 from robert_agent.adapters.processes import model_usage
 from tests.support.temp_workspace import TemporaryWorkspace
@@ -88,10 +89,12 @@ class ModelUsageTests(TemporaryWorkspace):
 
     def test_bounded_scan_is_partial_and_incomplete_tail_is_ignored(self):
         path = self.root / "stdout.log"
-        prefix = b"x\n" * (model_usage.session_history.PAGE_SCAN_BYTES // 2 + 1)
-        event = json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10}}).encode()
-        path.write_bytes(prefix + event + b"\n" + event)
-        observed = model_usage.read_log(self.root, str(path), agent="tcodex")
+        # Stay above one 64 KiB read chunk so the backward scan crosses chunks.
+        with patch.object(model_usage.session_history, "PAGE_SCAN_BYTES", 2 * 65536):
+            prefix = b"x\n" * (model_usage.session_history.PAGE_SCAN_BYTES // 2 + 1)
+            event = json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10}}).encode()
+            path.write_bytes(prefix + event + b"\n" + event)
+            observed = model_usage.read_log(self.root, str(path), agent="tcodex")
         self.assertEqual(observed["usage"]["input_tokens"], 10)
         self.assertEqual(observed["measurement_status"], "partial")
 
