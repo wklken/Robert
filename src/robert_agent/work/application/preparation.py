@@ -779,6 +779,10 @@ def create_task_attempt_and_prompt(
     existing_pr_head_sha = source_events.event_existing_pr_head_sha(event)
     attempt_metadata = {"existing_pr_head_sha": existing_pr_head_sha} if existing_pr_head_sha else {}
     attempt_metadata["result_contract"] = result_contract.CONTRACT_ID
+    if (worktree_result or {}).get("observed_head_sha") and (worktree_result or {}).get("observed_base_sha"):
+        attempt_metadata["pr_snapshot"] = {
+            key: worktree_result[key] for key in ("observed_head_sha", "observed_base_sha", "base_ref")
+        }
     if continuation:
         attempt_metadata["continuation"] = {
             key: continuation[key] for key in ("previous_task_id", "previous_attempt_id", "strategy")

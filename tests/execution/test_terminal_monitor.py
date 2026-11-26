@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from tests.support import database as fixture_database
 from tests.support.temp_workspace import TemporaryWorkspace
 from robert_agent.adapters.processes import attempt as attempt_process, identity
-from robert_agent.delivery.application import submission
+from robert_agent.delivery.application import result_audit, submission
 from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import capacity, ownership, rounds, spool
 from robert_agent.execution.application import evidence, monitor, readiness
@@ -223,6 +223,146 @@ class TerminalMonitorTests(TemporaryWorkspace):
         self.assertEqual(self.supervise(), 0)
         with fixture_database.connect(self.db) as conn:
             self.assertEqual(conn.execute("SELECT status FROM attempts").fetchone()[0], "running")
+
+    def submit_before_episode_closes(self):
+        with fixture_database.connect(self.db) as conn:
+            conn.execute("UPDATE execution_subjects SET binding_status='active',terminal_at=NULL")
+            conn.execute("UPDATE pr_remediation_episodes SET status='remediating'")
+            conn.execute("UPDATE route_decisions SET route_id='local-result',expected_output='local_result'")
+        response = submission.record_result(
+            self.db,
+            submission.build_result(
+                "task",
+                "attempt",
+                "local_result",
+                ["comment:1"],
+                [],
+                "Saved repair evidence",
+                remediation_evidence={"resolution_summary": "Repair completed"},
+            ),
+        )
+        self.assertEqual(response["status"], "recorded", response)
+        with fixture_database.connect(self.db) as conn:
+            conn.execute("UPDATE pr_remediation_episodes SET status='superseded'")
+            execution_control.close_binding(conn, "remediation_episode", "episode", self.now)
+            conn.execute(
+                "INSERT INTO github_actions(action_id,result_id,task_id,action_type,audit_status,publish_status,created_at,metadata_json) "
+                "VALUES('action',?,'task','push_existing_pr','pending','not_published',?,'{}')",
+                (response["result_id"], self.now),
+            )
+        return response["result_id"]
+
+    def test_received_result_is_retained_and_pending_actions_retired_after_exit(self):
+        self.submit_before_episode_closes()
+        self.assertEqual(self.supervise(), 0)
+        self.stop_worker()
+        self.assertEqual(self.supervise(), 1)
+        with fixture_database.connect(self.db) as conn:
+            result = conn.execute("SELECT handoff,metadata_json FROM worker_results").fetchone()
+            self.assertEqual(result["handoff"], "Saved repair evidence")
+            metadata = json.loads(result["metadata_json"])
+            self.assertIn("submission_fingerprint", metadata)
+            self.assertEqual(metadata["terminal_reconciliation"]["status"], "execution_authority_ended")
+            self.assertEqual(conn.execute("SELECT publish_status FROM github_actions").fetchone()[0], "skipped")
+            self.assertIsNone(conn.execute("SELECT active_task_id FROM workstreams").fetchone()[0])
+            self.assertEqual(capacity.running_attempt_count(conn, "repo"), 0)
+            self.assertFalse(ownership.claim_task(conn, "task", self.now))
+        self.assertEqual(self.supervise(), 0)
+
+    def test_received_result_with_unknown_publication_keeps_capacity_until_reconciled(self):
+        self.submit_before_episode_closes()
+        with fixture_database.connect(self.db) as conn:
+            intent = execution_control.prepare_publication_intent(
+                conn, "action", "publication-key", "request-key", self.now
+            )
+            execution_control.transition_publication_intent(conn, intent["publication_id"], "executing", self.now)
+        self.stop_worker()
+        self.assertEqual(self.supervise(), 0)
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(capacity.running_attempt_count(conn, "repo"), 1)
+            self.assertEqual(conn.execute("SELECT publish_status FROM github_actions").fetchone()[0], "not_published")
+            execution_control.transition_publication_intent(
+                conn,
+                intent["publication_id"],
+                "confirmed_absent",
+                self.now,
+                remote_evidence={"status": "confirmed_absent"},
+            )
+        self.assertEqual(self.supervise(allow_recovery=False), 1)
+
+    def test_already_observed_exit_does_not_hide_unreconciled_result(self):
+        self.submit_before_episode_closes()
+        self.stop_worker()
+        with fixture_database.connect(self.db) as conn:
+            conn.execute(
+                "UPDATE attempts SET status='completed',metadata_json=json_set(metadata_json,'$.process_stopped_at',?)",
+                (self.now,),
+            )
+        with closing(database.connect(self.db)) as conn:
+            audited = result_audit.audit_completed_results(
+                conn,
+                "repo",
+                self.root,
+                self.db,
+                {},
+                "run",
+                self.now,
+                False,
+                [],
+                {"remaining": 1},
+            )
+            conn.commit()
+        self.assertEqual(audited, 1)
+        with fixture_database.connect(self.db) as conn:
+            self.assertIsNone(conn.execute("SELECT active_task_id FROM workstreams").fetchone()[0])
+
+    def test_terminal_reconciliation_preserves_audit_and_published_receipt(self):
+        self.submit_before_episode_closes()
+        self.stop_worker()
+        audit = {
+            "status": "accepted",
+            "audited_at": self.now,
+            "action_scope": {"task_kind": "merge_conflict_remediation"},
+        }
+        receipt = {"confirmation_method": "remote_reconciliation", "confirmed_at": self.now}
+        with fixture_database.connect(self.db) as conn:
+            conn.execute(
+                "UPDATE worker_results SET metadata_json=json_set(metadata_json,'$.audit',json(?))",
+                (json.dumps(audit),),
+            )
+            conn.execute(
+                "UPDATE github_actions SET audit_status='accepted',publish_status='published',metadata_json=?",
+                (json.dumps({"publish": {"receipt": receipt}}),),
+            )
+        self.assertEqual(self.supervise(), 1)
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(
+                json.loads(conn.execute("SELECT metadata_json FROM worker_results").fetchone()[0])["audit"], audit
+            )
+            action = conn.execute("SELECT publish_status,metadata_json FROM github_actions").fetchone()
+            self.assertEqual(action[0], "published")
+            self.assertEqual(json.loads(action[1])["publish"]["receipt"], receipt)
+
+    def test_unattached_published_intent_defers_result_cleanup(self):
+        self.submit_before_episode_closes()
+        self.stop_worker()
+        with fixture_database.connect(self.db) as conn:
+            intent = execution_control.prepare_publication_intent(
+                conn, "action", "publication-key", "request-key", self.now
+            )
+            execution_control.transition_publication_intent(conn, intent["publication_id"], "executing", self.now)
+            execution_control.transition_publication_intent(conn, intent["publication_id"], "published", self.now)
+        self.assertEqual(self.supervise(), 0)
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(capacity.running_attempt_count(conn, "repo"), 1)
+
+    def test_received_result_with_unknown_process_identity_is_not_cleaned_up(self):
+        self.submit_before_episode_closes()
+        with patch.object(attempt_process, "dispatch_status", return_value={"status": "unknown"}):
+            self.assertEqual(self.supervise(), 0)
+        with fixture_database.connect(self.db) as conn:
+            self.assertEqual(capacity.running_attempt_count(conn, "repo"), 1)
+            self.assertEqual(conn.execute("SELECT publish_status FROM github_actions").fetchone()[0], "not_published")
 
     def test_terminal_authority_still_rejects_worker_submission(self):
         response = submission.record_result(

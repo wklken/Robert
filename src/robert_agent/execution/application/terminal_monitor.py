@@ -2,13 +2,14 @@
 
 from robert_agent.adapters.processes import attempt as attempt_process
 from robert_agent.delivery.lock import task_publication_lock
+from robert_agent.delivery.application import outcomes
 from robert_agent.execution import ownership, rounds, spool
 from robert_agent.execution.usage import record_dispatch_usage
 from robert_agent.foundation import values
 from robert_agent.foundation.contracts.execution import AttemptStatus
 from robert_agent.persistence import records, transactions
 from robert_agent.persistence.dialects import sqlite
-from robert_agent.persistence.queries import attempts, worker_results
+from robert_agent.persistence.queries import attempts
 from robert_agent.persistence.stores import attempts as write_attempts
 from robert_agent.persistence.stores import tasks as write_tasks
 from robert_agent.persistence.stores import workstreams as write_workstreams
@@ -46,9 +47,11 @@ def _finish_locked(conn, attempt_id, task_id, workstream_id, snapshot, binding, 
                 not fresh
                 or tuple(fresh) != snapshot
                 or ownership.terminal_subject_for_task(conn, task_id) != binding
-                or records.first(worker_results.find_result_id_by_attempt_id(conn, attempt_id))
                 or not rounds.exit_observation_current(conn, task_id, children)
             ):
+                conn.rollback()
+                return False
+            if not outcomes.reconcile_ended_task_results(conn, task_id, attempt_id, binding, now):
                 conn.rollback()
                 return False
             if not rounds.release_observed_slots(conn, task_id, children):

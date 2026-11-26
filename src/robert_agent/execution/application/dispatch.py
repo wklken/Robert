@@ -293,11 +293,16 @@ def ensure_dispatch_worktree(db_path, repo, task_info, worktree_result):
     if not can_materialize_worktree(repo):
         return worktree_result
     ownership = None
+    snapshot = (worktree_result or {}) if (worktree_result or {}).get("observed_head_sha") else None
     if db_path and task_info.get("attempt_id") and task_info.get("task_id"):
         with closing(db_database.connect(db_path)) as conn:
             ownership = db_records.first(
                 db_read_attempts.find_dispatch_workspace_ownership(conn, task_info["attempt_id"], task_info["task_id"])
             )
+            metadata = db_records.first(
+                db_read_attempts.find_metadata_json_by_attempt_id(conn, task_info["attempt_id"])
+            )
+            snapshot = values.json_object(metadata[0] if metadata else None).get("pr_snapshot")
         if not ownership or ownership["worktree_path"] != worktree_path:
             return {**worktree_result, "ok": False, "status": "blocked_changed_worktree"}
         if ownership["is_continuation"] and not ownership["owns_continuation"]:
@@ -308,6 +313,8 @@ def ensure_dispatch_worktree(db_path, repo, task_info, worktree_result):
         error = git_workspace.check_worktree_reuse(
             repo["repo_root"], repo["worktree_root"], worktree_path, branch_name=branch_name, allow_dirty=allow_dirty
         )
+        if not error and snapshot and not allow_dirty:
+            error = git_workspace.check_pr_snapshot(worktree_path, snapshot)
         return {**worktree_result, "ok": False, "status": error} if error else worktree_result
     if ownership and ownership["is_continuation"]:
         return {**worktree_result, "ok": False, "status": "blocked_unavailable_worktree"}

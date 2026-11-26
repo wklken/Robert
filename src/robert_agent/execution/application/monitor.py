@@ -161,7 +161,7 @@ def supervise_running_attempts(
         received_result = tuple(received_result) if received_result else None
         terminal_binding = execution_ownership.terminal_subject_for_task(conn, task_id)
         if terminal_binding:
-            if not received_result and terminal_monitor.finish(
+            if terminal_monitor.finish(
                 conn,
                 attempt_id,
                 task_id,

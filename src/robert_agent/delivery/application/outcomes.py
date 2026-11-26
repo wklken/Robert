@@ -7,6 +7,9 @@ from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 from robert_agent.persistence.stores import github_actions as db_write_github_actions
 from robert_agent.persistence.stores import notifications as db_write_notifications
+from robert_agent.persistence.queries import worker_results as result_queries
+from robert_agent.persistence.stores import worker_results as result_writes
+from robert_agent.delivery import contract as result_contract
 from robert_agent.workflows.review import publish as review_publish
 from robert_agent.workflows.vote import publish as vote_publish
 from robert_agent.workflows import pr_remediation as remediation
@@ -172,6 +175,42 @@ def retire_unstarted_actions(conn, task_id, now):
         mark_skipped(
             conn, action, {"status": "source_closed", "safe_error": "Source closed before publication began."}, now
         )
+
+
+def reconcile_ended_task_results(conn, task_id, attempt_id, binding, now):
+    """Retain submitted evidence and retire proposals without reopening authority.
+
+    The terminal monitor holds the task and submission locks and proves process
+    exit. Unknown effects remain owned by publication reconciliation.
+    """
+    result = db_records.first(result_queries.find_for_target_2(conn, task_id, attempt_id))
+    if not result:
+        return True
+    metadata = publication_values.decode_json(result[1])
+    if metadata.get("result_contract") != result_contract.CONTRACT_ID:
+        return False
+    actions = db_read_github_actions.find_for_publication_facts(conn, now, result[0], None)
+    for action in actions:
+        if action["task_id"] != task_id or action["intent_status"] in {
+            PublicationStatus.EXECUTING,
+            PublicationStatus.ATTENTION,
+        }:
+            return False
+        if action["intent_status"] == PublicationStatus.PUBLISHED and action["publish_status"] != "published":
+            return False  # The publisher must first attach its receipt to the action.
+        if action["reconcile_required"]:
+            return False
+    retire_unstarted_actions(conn, task_id, now)
+    metadata["terminal_reconciliation"] = {
+        "status": "execution_authority_ended",
+        "subject_type": binding["subject_type"],
+        "subject_id": binding["subject_id"],
+        "terminal_at": binding["terminal_at"],
+        "reconciled_at": now,
+        "action_ids": [action["action_id"] for action in actions],
+    }
+    result_writes.set_metadata_json_by_result_id(conn, publication_values.encode_json(metadata), result[0])
+    return True
 
 
 def record_failure(conn, action, result, now, *, reconcile_required=False):

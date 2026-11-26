@@ -66,7 +66,9 @@ def prepare_worktree(repo, event, route_result, dry_run):
         return None
     if workspace_mode == "analysis" and not route_result.get("enforce_workspace_policy", False):
         return None
-    if event.get("task_kind") in REMEDIATION_TASK_KINDS:
+    if event.get("task_kind") in REMEDIATION_TASK_KINDS or (
+        workspace_mode == "existing_pr" and (event.get("metadata") or {}).get("pin_pr_snapshot") is True
+    ):
         return worktree.prepare_existing_pr_worktree(
             repo_root=repo["repo_root"],
             worktree_root=repo["worktree_root"],

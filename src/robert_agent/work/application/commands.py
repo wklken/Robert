@@ -529,7 +529,12 @@ def retrigger_failed_github_task(
                     "actor_login": context.actor_identity,
                     "body": "Explicitly retry the failed PR repair against its current head and base. Preserve the PR changes, resolve conflicts, verify and deliver to this PR.",
                     "metadata": {
-                        key: value for key, value in (original.get("metadata") or {}).items() if key != "remediation"
+                        **{
+                            key: value
+                            for key, value in (original.get("metadata") or {}).items()
+                            if key != "remediation"
+                        },
+                        "pin_pr_snapshot": True,
                     },
                     "head_sha": remote["head_sha"],
                     "base_sha": remote["base_sha"],
