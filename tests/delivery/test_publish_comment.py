@@ -198,7 +198,8 @@ class PublishCommentTests(PublicationFixture):
             stderr = ""
 
         def fake_run(command, **kwargs):
-            calls.append((command, kwargs))
+            debug = kwargs.pop("env")["GH_DEBUG"]
+            calls.append((command, kwargs, debug))
             return Completed()
 
         result = publish.publish_ready_actions(db_path, dry_run=False, run_command=fake_run)
@@ -218,6 +219,7 @@ class PublishCommentTests(PublicationFixture):
                         "--slurp",
                     ],
                     {"capture_output": True, "text": True, "timeout": 60},
+                    "api",
                 )
             ],
         )

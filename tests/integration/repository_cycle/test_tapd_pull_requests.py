@@ -1,6 +1,6 @@
 """TAPD development requests open or update one derived PR and answer on the ticket."""
 
-from contextlib import closing
+from contextlib import closing, nullcontext
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
@@ -13,6 +13,7 @@ from robert_agent.adapters.github import client as github_client
 from robert_agent.adapters.github import sources as github_sources
 from robert_agent.adapters.tapd import client as tapd_client
 from robert_agent.configuration import validation
+from robert_agent.delivery import values as publication_values
 from robert_agent.delivery.application import scope
 from robert_agent.delivery.application import submission, tapd_comments, tapd_notifications
 from robert_agent.readmodels import board
@@ -91,8 +92,10 @@ class TapdPullRequestCase(TapdCycleCase):
                 (PR_URL,),
             )
 
-    def publish(self, remote_state=None):
+    def publish(self, remote_state=None, *, at=None):
+        clock = mock.patch.object(publication_values, "now", return_value=at) if at is not None else nullcontext()
         with (
+            clock,
             mock.patch.object(tapd_client, "client_for", return_value=self.client),
             mock.patch.object(
                 github_sources,
@@ -103,13 +106,13 @@ class TapdPullRequestCase(TapdCycleCase):
             outcome = run_once.run_once(self.config_path, dry_run=False, skip_external=True, max_dispatches=0)
         return outcome
 
-    def make_retry_due(self):
-        with closing(sqlite3.connect(self.data_dir / "dd.sqlite3")) as conn, conn:
-            conn.execute(
-                "UPDATE github_actions SET metadata_json = "
-                "json_set(metadata_json, '$.publish.next_retry_at', '2000-01-01T00:00:00+00:00') "
-                "WHERE action_type = 'comment'"
-            )
+    def retry_at(self):
+        [(due,)] = self.query(
+            "SELECT json_extract(metadata_json, '$.publish.next_retry_at') "
+            "FROM github_actions WHERE action_type = 'comment'"
+        )
+        self.assertIsNotNone(due)
+        return due
 
     def reconcile(self, remote_state, *, review_runner=None):
         config = validation.validate_config(self.config_path, skip_external=True)
@@ -152,9 +155,8 @@ class TapdNewPullRequestTests(TapdPullRequestCase):
         self.open_pull_request()
         self.client.reject_writes = 1
         self.publish()
-        self.make_retry_due()
 
-        self.publish(remote_state=MERGED)
+        self.publish(remote_state=MERGED, at=self.retry_at())
 
         self.assertEqual(self.client.written, [])
         self.assertEqual(
@@ -218,8 +220,8 @@ class TapdNewPullRequestTests(TapdPullRequestCase):
             [(TICKET_WORKSTREAM,)],
         )
         self.assertNotEqual(self.query("SELECT lifecycle FROM tasks"), [("completed",)])
-        self.make_retry_due()
-        self.assertTrue(self.publish()["ok"])
+        result = self.publish(at=self.retry_at())
+        self.assertTrue(result["ok"], result)
         self.assertEqual(self.client.written, self.client.rejected)
         self.assertEqual(self.query("SELECT lifecycle FROM tasks"), [("completed",)])
 
@@ -234,7 +236,6 @@ class TapdNewPullRequestTests(TapdPullRequestCase):
             self.query("SELECT active_task_id FROM workstreams WHERE workstream_id = ?", (TICKET_WORKSTREAM,)),
             [(None,)],
         )
-        self.make_retry_due()
         self.scan(comment("3", "@robert-wklken please also fix the logout bug", "2026-11-20 12:00:00"))
         self.cycle()
         self.assertEqual(
@@ -246,7 +247,7 @@ class TapdNewPullRequestTests(TapdPullRequestCase):
             [(TICKET_WORKSTREAM, "new-pr", "prepared")],
         )
         self.assertEqual(self.query("SELECT status FROM publication_intents"), [("executing",)])
-        self.publish()
+        self.publish(at=self.retry_at())
         self.assertEqual(self.client.written, [])
 
 
@@ -292,9 +293,12 @@ class TapdDerivedQueueTests(TapdPullRequestCase):
         self.request_fix()
         self.open_pull_request()
         self.client.reject_writes = 10
-        for _ in range(4):
-            self.publish()
-            self.make_retry_due()
+        self.publish()
+        self.publish(at=self.retry_at())
+        last_retry_at = self.retry_at()
+        self.publish(at=last_retry_at)
+        self.publish(at=last_retry_at)
+        self.assertEqual(len(self.client.rejected), 3)
         self.assertEqual(self.query("SELECT status FROM publication_intents"), [("attention",)])
         self.assertEqual(
             self.query("SELECT t.lifecycle FROM tasks t JOIN workstreams w ON w.active_task_id = t.task_id"),
