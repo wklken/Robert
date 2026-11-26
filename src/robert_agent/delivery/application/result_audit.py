@@ -1,6 +1,7 @@
 """Audit saved results with fresh execution and publication evidence."""
 
 from robert_agent.foundation.contracts.delivery import AuditStatus, OutputType
+from robert_agent.foundation.contracts.execution import AttemptStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
 from robert_agent.foundation.contracts.work import REMEDIATION_TASK_KINDS
 from robert_agent.delivery.application import tapd_publication
@@ -21,6 +22,7 @@ from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.delivery import results
 from robert_agent.delivery.application import scope as result_scope
 from robert_agent.execution.application import evidence
+from robert_agent.execution.application import terminal_monitor
 from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import completion
 from robert_agent.work.application import lifecycle as work_application_lifecycle
@@ -101,6 +103,27 @@ def audit_completed_results(
     audited = 0
     for row in rows:
         result_row = row[:8]
+        terminal_binding = execution_ownership.terminal_subject_for_task(conn, row[1])
+        if terminal_binding:
+            snapshot = db_records.first(
+                db_read_attempts.find_for_supervision_observation_current(
+                    conn,
+                    row[2],
+                    AttemptStatus.COMPLETED.value,
+                )
+            )
+            if snapshot and terminal_monitor.finish(
+                conn,
+                row[2],
+                row[1],
+                row[8],
+                tuple(snapshot),
+                terminal_binding,
+                run_now,
+                data_dir,
+            ):
+                audited += 1
+            continue
         if not execution_ownership.claim_task(conn, row[1], run_now):
             continue
         if values.json_object(result_row[7]).get("audit"):

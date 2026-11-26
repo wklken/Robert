@@ -1,6 +1,7 @@
 """Shared queries operations for wakeups."""
 
 from robert_agent.foundation.contracts.work import (
+    REMEDIATION_TASK_KINDS,
     PUBLICATION_RETRY_WAKEUP_KIND,
     TaskKind,
     TaskLifecycle,
@@ -46,6 +47,31 @@ def find_for_parent_allows_child(conn, retrigger_wakeup_id, parent_task_id):
     table2 = tables["tasks"].alias("t")
     table3 = tables["workstreams"].alias("w")
     table4 = tables["github_sources"].alias("gs")
+    recovery_event = tables["work_item_events"].alias("recovery_event")
+    binding = tables["execution_subjects"].alias("ended_binding")
+    ended_recovery = (
+        select(sql_constant(1))
+        .select_from(
+            recovery_event.join(
+                binding,
+                and_(
+                    binding.c.subject_type == "remediation_episode",
+                    binding.c.subject_id == func.json_extract(table2.c.metadata_json, "$.remediation_episode_id"),
+                    binding.c.binding_status == "terminal",
+                ),
+            )
+        )
+        .where(
+            and_(
+                recovery_event.c.event_id == func.json_extract(table1.c.metadata_json, "$.operator_recovery_event_id"),
+                recovery_event.c.event_type == "retry_requested",
+                func.json_extract(recovery_event.c.metadata_json, "$.task_id") == table2.c.task_id,
+                func.json_extract(recovery_event.c.metadata_json, "$.kind") == "ended_remediation",
+            )
+        )
+        .correlate(table1, table2)
+        .exists()
+    )
     query5 = (
         select(sql_constant(1))
         .select_from(
@@ -70,7 +96,10 @@ def find_for_parent_allows_child(conn, retrigger_wakeup_id, parent_task_id):
                 table1.c["reason"] == sql_constant("manual_operator_request"),
                 func.json_extract(table1.c["metadata_json"], sql_constant("$.kind"))
                 == sql_constant("github_retrigger"),
-                table2.c["task_kind"] == sql_constant(TaskKind.HUMAN_REQUEST.value),
+                or_(
+                    table2.c["task_kind"] == sql_constant(TaskKind.HUMAN_REQUEST.value),
+                    and_(table2.c.task_kind.in_(REMEDIATION_TASK_KINDS), ended_recovery),
+                ),
                 table2.c["lifecycle"] == sql_constant(TaskLifecycle.FAILED.value),
                 table3.c["lifecycle"] == sql_constant(WorkstreamLifecycle.FAILED.value),
                 table3.c["active_task_id"].is_(null()),

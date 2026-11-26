@@ -314,6 +314,25 @@ def prepare_existing_pr_worktree(
     return result
 
 
+def check_pr_snapshot(worktree_path, snapshot):
+    """Check prepared local revision pins immediately before a fresh launch."""
+    actual = []
+    try:
+        for ref in ("HEAD", snapshot["base_ref"]):
+            actual.append(
+                run_command(
+                    ["git", "rev-parse", "--verify", ref],
+                    cwd=worktree_path,
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                ).stdout.strip()
+            )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "stale_snapshot"
+    return None if actual == [snapshot["observed_head_sha"], snapshot["observed_base_sha"]] else "stale_snapshot"
+
+
 def _workspace_reuse_error(worktree_path, worktree_root, dry_run):
     try:
         Path(worktree_path).resolve().relative_to(Path(worktree_root).resolve())

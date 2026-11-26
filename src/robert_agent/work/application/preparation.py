@@ -563,9 +563,11 @@ def create_task_attempt_and_prompt(
         related_events = [event]
     related_events = _prompt_events(event, related_events)
     refreshed_context = None
+    operator_recovery_event_id = None
     if retrigger_wakeup_id:
         saved = db_records.first(db_read_wakeups.find_metadata_json_by_wakeup_id(conn, retrigger_wakeup_id))
         refreshed_context = json.loads(saved[0]).get("refreshed_context") if saved else None
+        operator_recovery_event_id = json.loads(saved[0]).get("operator_recovery_event_id") if saved else None
     elif parent_task_id and new_request_event is None:
         saved = db_records.first(db_read_tasks.find_metadata_json_by_task_id(conn, parent_task_id))
         refreshed_context = json.loads(saved[0]).get("refreshed_context") if saved else None
@@ -664,6 +666,7 @@ def create_task_attempt_and_prompt(
     # prompts after preparing and freezing their own round inputs.
     prompt_path.write_text(rendered.text if rendered else "", encoding="utf-8")
     task_metadata = {
+        **({"trigger_work_item_event_id": operator_recovery_event_id} if operator_recovery_event_id else {}),
         **(values.json_object(existing[0]) if existing else {}),
         **({supervision_lineage.LINEAGE_FIELD: lineage_key} if lineage_key else {}),
         "review_input_policy": task["review_input_policy"],
@@ -776,6 +779,10 @@ def create_task_attempt_and_prompt(
     existing_pr_head_sha = source_events.event_existing_pr_head_sha(event)
     attempt_metadata = {"existing_pr_head_sha": existing_pr_head_sha} if existing_pr_head_sha else {}
     attempt_metadata["result_contract"] = result_contract.CONTRACT_ID
+    if (worktree_result or {}).get("observed_head_sha") and (worktree_result or {}).get("observed_base_sha"):
+        attempt_metadata["pr_snapshot"] = {
+            key: worktree_result[key] for key in ("observed_head_sha", "observed_base_sha", "base_ref")
+        }
     if continuation:
         attempt_metadata["continuation"] = {
             key: continuation[key] for key in ("previous_task_id", "previous_attempt_id", "strategy")

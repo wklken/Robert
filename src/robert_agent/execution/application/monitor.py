@@ -24,6 +24,7 @@ from robert_agent.adapters.processes import attempt as attempt_process
 from robert_agent.adapters.processes import model_usage
 from robert_agent.execution.usage import record_dispatch_usage
 from robert_agent.execution.application import evidence
+from robert_agent.execution.application import terminal_monitor
 from robert_agent.work.application import commands as work_items
 from robert_agent.work.application import lifecycle as work_application_lifecycle
 from robert_agent.execution import inspection as supervise
@@ -139,6 +140,7 @@ def supervise_running_attempts(
     resume_attempt,
     allow_recovery=True,
     task_id=None,
+    task_lock_held=False,
 ):
     rows = db_read_attempts.find_for_supervise_running_attempts(conn, repo_id, task_id, task_id)
     supervised = 0
@@ -157,6 +159,21 @@ def supervise_running_attempts(
         metadata = values.json_object(metadata_json)
         received_result = db_records.first(db_read_worker_results.find_result_id_by_attempt_id(conn, attempt_id))
         received_result = tuple(received_result) if received_result else None
+        terminal_binding = execution_ownership.terminal_subject_for_task(conn, task_id)
+        if terminal_binding:
+            if terminal_monitor.finish(
+                conn,
+                attempt_id,
+                task_id,
+                workstream_id,
+                snapshot,
+                terminal_binding,
+                run_now,
+                data_dir,
+                task_lock_held=task_lock_held,
+            ):
+                supervised += 1
+            continue
         rejection = metadata.get("result_validation")
         if (not heartbeat_at or not started_at) and not rejection and not received_result:
             continue

@@ -3,8 +3,10 @@
 from robert_agent.foundation.contracts.execution import BindingStatus
 from robert_agent.foundation.contracts.work import (
     ACTIVE_TASK_LIFECYCLES,
+    REMEDIATION_TASK_KINDS,
     PUBLICATION_RETRY_WAKEUP_KIND,
     TaskLifecycle,
+    TaskKind,
     WorkCommand,
     WorkstreamLifecycle,
 )
@@ -61,6 +63,9 @@ from robert_agent.supervision import lineage as supervision_lineage
 from robert_agent.work import wakeup
 from robert_agent.adapters.notifications import wakeup as wakeup_notifier
 from robert_agent.work.application import control as work_item_control
+from robert_agent.workflows import pr_health
+from robert_agent.work import queries as work_queries
+from robert_agent.persistence import execution_control
 
 
 def utc_now():
@@ -478,11 +483,69 @@ def retrigger_failed_github_task(
     # the original event; the new prompt receives an audited context snapshot.
     refreshed_context = None
     recovery_snapshot = None
+    ended_remediation = False
     with closing(db_database.connect(db_path)) as reader:
         snapshot = db_records.first(db_read_tasks.find_for_retrigger_failed_github_task(reader, task_id))
         if snapshot and snapshot["repo_id"] in context.allowed_repo_ids:
+            parent = db_records.first(db_read_tasks.find_task_kind_and_metadata_json_by_task_id(reader, task_id))
+            episode_id = _decode_json(snapshot["metadata_json"], {}).get("remediation_episode_id")
+            episode_binding = (
+                execution_control.get_binding(reader, "remediation_episode", episode_id) if episode_id else None
+            )
+            ended_remediation = bool(
+                parent
+                and parent[0] in REMEDIATION_TASK_KINDS
+                and episode_binding
+                and episode_binding["binding_status"] == BindingStatus.TERMINAL
+            )
+            if ended_remediation:
+                recovery_snapshot = snapshot["metadata_json"]
+                refreshed_context = work_queries.failed_parent_context_events(reader, task_id)
+                if not refreshed_context:
+                    raise WorkItemConflictError("source context is unavailable; inspect the original task")
+                remote = pr_health.fetch_pr_snapshot(snapshot["full_name"], refreshed_context[0]["number"])
+                if (
+                    not remote
+                    or remote["state"] != "open"
+                    or remote["merged"]
+                    or not all(remote.get(key) for key in ("head_sha", "base_sha", "head_ref", "base_ref"))
+                ):
+                    raise WorkItemConflictError("retrigger requires a verified open GitHub pull request")
+                managed_heads = {
+                    snapshot["full_name"].casefold(),
+                    f"{snapshot['github_account']}/{snapshot['full_name'].split('/', 1)[1]}".casefold(),
+                }
+                if (
+                    remote["head_repo_full_name"].casefold() not in managed_heads
+                    or remote["author_login"].casefold() != snapshot["github_account"].casefold()
+                ):
+                    raise WorkItemConflictError("retrigger requires the same managed pull request")
+                original = refreshed_context[0]
+                refreshed_context[0] = {
+                    **original,
+                    "task_kind": TaskKind.HUMAN_REQUEST.value,
+                    "event_type": "manual_operator_request",
+                    "actor_kind": context.actor_kind,
+                    "actor_login": context.actor_identity,
+                    "body": "Explicitly retry the failed PR repair against its current head and base. Preserve the PR changes, resolve conflicts, verify and deliver to this PR.",
+                    "metadata": {
+                        **{
+                            key: value
+                            for key, value in (original.get("metadata") or {}).items()
+                            if key != "remediation"
+                        },
+                        "pin_pr_snapshot": True,
+                    },
+                    "head_sha": remote["head_sha"],
+                    "base_sha": remote["base_sha"],
+                    "existing_pr_head_sha": remote["head_sha"],
+                    "existing_pr_head_branch": remote["head_ref"],
+                    "base_branch": remote["base_ref"],
+                    "state": "open",
+                    "url": remote["html_url"],
+                }
             attention = _decode_json(snapshot["metadata_json"], {}).get("execution_attention", {})
-            if attention.get("reason_code") == "result_contract_cutover":
+            if not ended_remediation and attention.get("reason_code") == "result_contract_cutover":
                 recovery_snapshot = snapshot["metadata_json"]
                 from robert_agent.adapters.github import discovery as discover
                 from robert_agent.work.queries import task_related_events
@@ -519,6 +582,8 @@ def retrigger_failed_github_task(
             binding = execution_store.get_binding(conn, "task", task_id)
             attention = _decode_json(row["metadata_json"], {}).get("execution_attention", {})
             cutover_recovery = attention.get("reason_code") == "result_contract_cutover"
+            if ended_remediation and recovery_snapshot != row["metadata_json"]:
+                raise WorkItemConflictError("execution state changed; refresh before recovery")
             if cutover_recovery and recovery_snapshot != row["metadata_json"]:
                 raise WorkItemConflictError("execution state changed; refresh before recovery")
             if row["lifecycle"] != TaskLifecycle.FAILED.value and not cutover_recovery:
@@ -600,6 +665,35 @@ def retrigger_failed_github_task(
             if existing and existing[0] != dedupe_key:
                 raise WorkItemConflictError("a retrigger request is already pending")
 
+            operator_recovery_event_id = None
+            if ended_remediation:
+                item = resolve_work_item_for_workstream(conn, row["workstream_id"])
+                if not item:
+                    raise WorkItemConflictError("the repair work item is unavailable")
+                recovery_key = "ended-remediation-retry:" + hashlib.sha256(idempotency_key.encode()).hexdigest()
+                recorded = db_records.first(
+                    db_read_work_item_events.record_system_event(conn, item["work_item_id"], recovery_key)
+                )
+                event = (
+                    _event_from_row(recorded)
+                    if recorded
+                    else _insert_event(
+                        conn,
+                        item["work_item_id"],
+                        event_type="retry_requested",
+                        actor_kind=context.actor_kind,
+                        actor_identity=context.actor_identity,
+                        idempotency_key=recovery_key,
+                        body=refreshed_context[0]["body"],
+                        metadata={
+                            "task_id": task_id,
+                            "kind": "ended_remediation",
+                            "refreshed_context": refreshed_context,
+                        },
+                    )
+                )
+                operator_recovery_event_id = event["event_id"]
+
             requested = wakeup.request_wakeup(
                 conn,
                 repo_id=row["repo_id"],
@@ -612,6 +706,9 @@ def retrigger_failed_github_task(
                     "requested_by": context.actor_identity,
                     "workstream_id": row["workstream_id"],
                     **({"refreshed_context": refreshed_context} if refreshed_context is not None else {}),
+                    **(
+                        {"operator_recovery_event_id": operator_recovery_event_id} if operator_recovery_event_id else {}
+                    ),
                 },
             )
             should_notify = requested.get("status") != "already_pending"
