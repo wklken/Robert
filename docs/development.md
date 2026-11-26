@@ -23,7 +23,7 @@ cd Robert
 python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install -e '.[dev]'
-python3 -B -m tests.run --workers 4
+python3 -B -m unittest tests.interfaces.cli.test_cli
 ```
 
 Use temporary paths while developing:
@@ -43,7 +43,7 @@ illustrates that order. Low-level cycle, loop and daemon commands retain
 
 ## Testing
 
-Run focused tests first, then the complete gate:
+Run focused tests while editing. Run the complete suite on the final code change.
 The Ruff rules and import-linter layer contracts are defined in `pyproject.toml`.
 Install the development extra to run both. Import-linter is a development-only
 dependency; its bounded version keeps the same contract engine across the CI matrix.
@@ -63,7 +63,7 @@ python3 -m mypy src/robert_agent/cli src/robert_agent/paths.py \
   src/robert_agent/configuration src/robert_agent/execution/stages.py \
   src/robert_agent/context/skills.py src/robert_agent/adapters/services/native.py
 lint-imports --config pyproject.toml --no-cache
-python3 -B -m tests.run --workers 4
+python3 -B -m tests.run --workers 8
 python3 -B -m compileall -q src
 python3 -m build
 node --test tests/browser/*.test.cjs
@@ -81,17 +81,18 @@ python3 -m venv /tmp/robert-smoke
 Tests use isolated temporary configuration and data directories instead of
 production paths.
 
-The default full-suite gate uses isolated module processes through
-`python3 -B -m tests.run --workers 4`. The runner uses standard unittest discovery
-and the current interpreter, keeps each module's class/module fixtures together,
-and reports every child's output and elapsed time. Import errors, empty discovery
-and any failed child make the run fail. `python3 -B -m tests.run --list` prints the
-complete discovered test IDs without executing them. Serial
-`python3 -B -m unittest discover -s tests` remains available for investigating
-order dependence and for timing comparisons.
-Module-level and decorator skips retain unittest semantics. Custom `load_tests`
-hooks require the serial command; the parallel runner rejects them because
-reloading test methods by name cannot preserve hook-created instances or suites.
+Use `--workers 8` when the development machine has spare CPU and memory. Use
+`--workers 4` on constrained machines. The runner defaults to four workers, and
+CI explicitly uses four. Both settings discover the complete suite and run each
+module in an isolated process with the current interpreter. Module and class
+fixtures stay together. The runner reports each child's output and elapsed time.
+Import errors, empty discovery and failed children make the run fail.
+
+Use `python3 -B -m tests.run --list` to print discovered test IDs without
+executing them. Use serial `python3 -B -m unittest discover -s tests` to
+investigate order dependence or run custom `load_tests` hooks. The parallel
+runner preserves unittest skips and rejects custom hooks because reloading
+methods by name cannot preserve hook-created instances or suites.
 
 For recorded timing evidence, add `--report-json /tmp/robert-test-report.json`.
 The JSON records module durations and exit codes, source fingerprints before and

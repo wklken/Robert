@@ -1,5 +1,6 @@
 """Git observations and local workspace operations for pre-publication review."""
 
+import re
 import subprocess
 
 
@@ -23,9 +24,33 @@ def remote_branch_sha(path, remote, branch, *, runner=subprocess.run):
     return fields[0]
 
 
+def worktree_state(path, *, read_git=git):
+    """Read the current commit and dirtiness from the same Git observation."""
+    status = read_git(
+        path,
+        "status",
+        "--porcelain=v2",
+        "--branch",
+        "--no-ahead-behind",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+    )
+    heads = []
+    dirty = False
+    for line in status.splitlines():
+        if line.startswith("# branch.oid "):
+            heads.append(line.removeprefix("# branch.oid "))
+        elif line and not line.startswith("# "):
+            dirty = True
+    if len(heads) != 1 or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", heads[0]):
+        raise ValueError("Git status did not report a committed HEAD")
+    return heads[0], dirty
+
+
 def clean_head(path, branch=None):
     if branch is not None and git(path, "symbolic-ref", "--short", "HEAD") != branch:
         raise ValueError("assigned branch changed")
-    if git(path, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"):
+    head, dirty = worktree_state(path)
+    if dirty:
         raise ValueError("review delivery requires a clean worktree")
-    return git(path, "rev-parse", "HEAD")
+    return head
