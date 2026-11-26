@@ -1,5 +1,6 @@
 """Own each SQLite transaction on a fresh connection and reuse compiled statements."""
 
+from contextvars import ContextVar
 import os
 import sqlite3
 from functools import lru_cache
@@ -27,6 +28,8 @@ class DatabaseConnection:
     @property
     def in_transaction(self) -> bool:
         with translate_driver_errors():
+            if self._connection.invalidated:
+                return False
             # SQLAlchemy's logical autobegin does not make a SELECT start a SQLite transaction.
             return self._driver.in_transaction
 
@@ -42,6 +45,9 @@ class DatabaseConnection:
     def rollback(self) -> None:
         with translate_driver_errors():
             self._connection.rollback()
+            # An invalidated physical connection was discarded with its transaction.
+            if self._connection.invalidated:
+                return
             # A failed SQLAlchemy commit can end its logical transaction while
             # SQLite still has pending writes (for example a deferred FK failure).
             if self._driver.in_transaction:
@@ -68,32 +74,36 @@ class DatabaseConnection:
 def _database_target(db_path):
     filename = os.fspath(db_path)
     file_prefix = b"file:" if isinstance(filename, bytes) else "file:"
-    if filename.startswith(file_prefix):
-        # SQLite interprets URI escaping, modes and in-memory names itself.
-        # Scope relative URI cache keys to the working directory.
-        uri_path = filename[len(file_prefix) :]
-        return filename, None if os.path.isabs(uri_path) else os.getcwd()
-    if not filename or filename in (":memory:", b":memory:") or os.path.isabs(filename):
-        return filename, None
+    # SQLite interprets URI escaping, modes and in-memory names itself.
+    if filename.startswith(file_prefix) or not filename or filename in (":memory:", b":memory:"):
+        return filename
+    if os.path.isabs(filename):
+        return filename
     # Prefix cwd without collapsing '..' across a possible symlink component.
     directory = os.getcwdb() if isinstance(filename, bytes) else os.getcwd()
-    return os.path.join(directory, filename), None
+    return os.path.join(directory, filename)
+
+
+# Set only while engine.connect() opens the physical connection for one caller.
+_CONNECT_TARGET: ContextVar = ContextVar("robert_sqlite_connect_target")
 
 
 @lru_cache(maxsize=8)
 def _engine_for(
-    db_path,
     timeout,
     uri,
     isolation_level,
     foreign_keys,
     busy_timeout_ms,
     _process_id,
-    _relative_uri_cwd,
 ) -> Engine:
-    """Keep only engine and compiler state, with separate cache keys after a fork."""
+    """Share compiled statements across database files, with separate engines after a fork."""
 
     def open_driver():
+        db_path = _CONNECT_TARGET.get(None)
+        if db_path is None:
+            # SQLAlchemy reconnects an invalidated connection outside connect(), where the file is unknown.
+            raise sqlite3.ProgrammingError("Cannot reconnect an invalidated database connection.")
         options = {"timeout": timeout, "uri": uri, "isolation_level": isolation_level}
         if hasattr(sqlite3, "LEGACY_TRANSACTION_CONTROL"):
             options["autocommit"] = sqlite3.LEGACY_TRANSACTION_CONTROL
@@ -124,16 +134,17 @@ def connect(
     busy_timeout_ms=None,
 ) -> DatabaseConnection:
     """Open one physical connection with the existing sqlite3 access options."""
-    filename, relative_uri_cwd = _database_target(db_path)
     engine = _engine_for(
-        filename,
         timeout,
         bool(uri),
         isolation_level,
         None if foreign_keys is None else bool(foreign_keys),
         None if busy_timeout_ms is None else int(busy_timeout_ms),
         os.getpid(),
-        relative_uri_cwd,
     )
-    with translate_driver_errors():
-        return DatabaseConnection(engine.connect())
+    token = _CONNECT_TARGET.set(_database_target(db_path))
+    try:
+        with translate_driver_errors():
+            return DatabaseConnection(engine.connect())
+    finally:
+        _CONNECT_TARGET.reset(token)

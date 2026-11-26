@@ -68,6 +68,63 @@ class DatabaseTests(unittest.TestCase):
         self.assertIs(compiled_reads[0], compiled_reads[1])
         self.assertIs(compiled_reads[1], compiled_reads[2])
 
+    def test_different_databases_share_compilation_and_keep_their_own_rows(self):
+        other = self.path.with_name("other records.sqlite3")
+        with closing(sqlite3.connect(other)) as raw:
+            raw.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+        compiled_reads = []
+
+        def capture(_conn, _cursor, _sql, _params, context, _many):
+            if context.compiled is not None and context.compiled.statement is _READ:
+                compiled_reads.append(context.compiled)
+
+        event.listen(Engine, "before_cursor_execute", capture)
+        self.addCleanup(event.remove, Engine, "before_cursor_execute", capture)
+        with closing(database.connect(self.path)) as first, closing(database.connect(other)) as second:
+            with first:
+                statements.write(first, _INSERT, (1, "first"))
+            with second:
+                statements.write(second, _INSERT, (2, "second"))
+            self.assertEqual(statements.read(first, _READ), [(1, "first")])
+            self.assertEqual(statements.read(second, _READ), [(2, "second")])
+        self.assertIs(compiled_reads[0], compiled_reads[1])
+
+    def test_concurrent_connections_open_their_requested_database(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        paths = [self.path.with_name(f"thread-{number}.sqlite3") for number in range(8)]
+        for number, path in enumerate(paths):
+            with closing(sqlite3.connect(path)) as raw, raw:
+                raw.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+                raw.execute("INSERT INTO records VALUES (?, ?)", (number, path.name))
+
+        def read(path):
+            observed = []
+            for _ in range(25):
+                with closing(database.connect(path)) as conn:
+                    observed.extend(statements.read(conn, _READ))
+            return path, observed
+
+        with ThreadPoolExecutor(len(paths)) as pool:
+            for path, observed in pool.map(read, paths * 3):
+                self.assertEqual({row[1] for row in observed}, {path.name})
+
+    def test_invalidated_connection_cannot_reconnect_outside_connect(self):
+        with closing(database.connect(self.path)) as conn:
+            statements.read(conn, _READ)
+            conn._connection.invalidate()
+            conn.rollback()
+            self.assertFalse(conn.in_transaction)
+            with self.assertRaisesRegex(errors.Error, "reconnect"):
+                statements.read(conn, _READ)
+        with closing(database.connect(self.path)) as conn:
+            with self.assertRaisesRegex(RuntimeError, "original failure"), conn:
+                statements.write(conn, _INSERT, (1, "discarded"))
+                conn._connection.invalidate()
+                raise RuntimeError("original failure")
+        with closing(database.connect(self.path)) as conn:
+            self.assertEqual(statements.read(conn, _READ), [])
+
     def test_relative_filename_and_uri_follow_the_current_directory(self):
         nested = self.path.parent / "nested"
         nested.mkdir()
