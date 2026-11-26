@@ -3,13 +3,12 @@
 from contextlib import closing
 from datetime import datetime, timezone
 import json
-import subprocess
-import sys
 from unittest.mock import Mock, patch
 
 from tests.support import database as fixture_database
-from tests.support.temp_workspace import TemporaryWorkspace
-from robert_agent.adapters.processes import attempt as attempt_process, identity
+from tests.support import terminal_worker
+from tests.support.terminal_worker import TerminalWorkerFixture
+from robert_agent.adapters.processes import attempt as attempt_process
 from robert_agent.delivery.application import result_audit, submission
 from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import capacity, ownership, rounds, spool
@@ -19,16 +18,14 @@ from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.persistence.schema import database as schema
 
 
-class TerminalMonitorTests(TemporaryWorkspace):
+class TerminalMonitorTests(TerminalWorkerFixture):
     def setUp(self):
         super().setUp()
         self.db = self.root / "robert.sqlite3"
         schema.init_database(self.db)
         self.now = datetime.now(timezone.utc).isoformat()
         self.config = {"hard_timeout_seconds": 3600, "heartbeat_stale_seconds": 1200}
-        self.worker = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], start_new_session=True)
-        self.addCleanup(self.stop_worker)
-        self.dispatch = identity.capture_process_identity(self.worker.pid)
+        self.start_worker()
         with fixture_database.connect(self.db) as conn:
             conn.execute(
                 "INSERT INTO repos(repo_id,full_name,github_account,default_base_branch,repo_root,worktree_root) "
@@ -64,11 +61,6 @@ class TerminalMonitorTests(TemporaryWorkspace):
             self.assertTrue(ownership.claim_task(conn, "task", self.now))
             conn.execute("UPDATE pr_remediation_episodes SET status='superseded' WHERE episode_id='episode'")
             execution_control.close_binding(conn, "remediation_episode", "episode", self.now)
-
-    def stop_worker(self):
-        if self.worker.poll() is None:
-            self.worker.kill()
-        self.worker.wait(timeout=3)
 
     def supervise(self, *, allow_recovery=True, task_lock_held=False):
         resume = Mock(side_effect=AssertionError("terminal authority cannot resume"))
@@ -381,3 +373,59 @@ class TerminalMonitorTests(TemporaryWorkspace):
             },
         )
         self.assertEqual(response["status"], "rejected_by_workflow_owner")
+
+
+class TerminalWorkerStartupTests(TerminalWorkerFixture):
+    def test_delayed_child_is_ready_before_identity_capture(self):
+        ready = self.root / "worker.ready"
+        popen = terminal_worker.subprocess.Popen
+        capture = terminal_worker.identity.capture_process_identity
+
+        def delayed_child(command, **kwargs):
+            command = [*command[:2], "import time; time.sleep(0.05); " + command[2]]
+            return popen(command, **kwargs)
+
+        def capture_ready_worker(pid):
+            self.assertTrue(ready.exists(), "identity captured before worker was ready")
+            return capture(pid)
+
+        with (
+            patch.object(terminal_worker.subprocess, "Popen", side_effect=delayed_child),
+            patch.object(terminal_worker.identity, "capture_process_identity", side_effect=capture_ready_worker),
+        ):
+            self.start_worker()
+        self.assertEqual(terminal_worker.identity.inspect_recorded_identity(self.dispatch), "alive_same")
+
+    def test_child_exit_before_readiness_fails_without_capturing_identity(self):
+        popen = terminal_worker.subprocess.Popen
+
+        def exiting_child(command, **kwargs):
+            return popen([*command[:2], "raise SystemExit(0)"], **kwargs)
+
+        with (
+            patch.object(terminal_worker.subprocess, "Popen", side_effect=exiting_child),
+            patch.object(terminal_worker.identity, "capture_process_identity") as capture,
+        ):
+            with self.assertRaisesRegex(AssertionError, "worker did not become ready"):
+                self.start_worker()
+        capture.assert_not_called()
+        self.doCleanups()
+        self.assertEqual(self.worker.poll(), 0)
+
+    def test_readiness_timeout_fails_and_cleans_up_live_child(self):
+        popen = terminal_worker.subprocess.Popen
+
+        def unready_child(command, **kwargs):
+            return popen([*command[:2], "import time; time.sleep(120)"], **kwargs)
+
+        with (
+            patch.object(terminal_worker.subprocess, "Popen", side_effect=unready_child),
+            patch.object(terminal_worker.time, "monotonic", side_effect=[0, 0, 5]),
+            patch.object(terminal_worker.time, "sleep"),
+            patch.object(terminal_worker.identity, "capture_process_identity") as capture,
+        ):
+            with self.assertRaisesRegex(AssertionError, "worker did not become ready"):
+                self.start_worker()
+        capture.assert_not_called()
+        self.doCleanups()
+        self.assertIsNotNone(self.worker.poll())
