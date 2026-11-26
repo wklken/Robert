@@ -111,3 +111,116 @@ class ProjectRuntimeTests(unittest.TestCase):
         result = runtime_info(self.tree, ["service/app.py"])["components"]["service"]["python"]
         self.assertEqual(result["status"], "UNRESOLVED")
         self.assertEqual(result["observed"], ["3.11.6"])
+
+    def test_mypy_target_does_not_change_resolved_project_interpreter(self):
+        self.write(".python-version", "3.14\n")
+        project = '[project]\nrequires-python = ">=3.11"\n'
+        self.write("pyproject.toml", project)
+        python = self.tool("python3.14", "Python 3.14.7")
+        before = runtime_info(self.tree)
+        self.assertEqual(before["python"]["status"], "RESOLVED")
+
+        self.write("pyproject.toml", project + '\n[tool.mypy]\npython_version = "3.11"\n')
+        after = runtime_info(self.tree)
+
+        self.assertEqual(after["python"]["status"], "RESOLVED")
+        self.assertEqual(after["python"]["interpreter"], python)
+        self.assertEqual(after["components"]["."]["python"], before["components"]["."]["python"])
+
+    def test_blank_python_pin_leaves_project_range_usable(self):
+        self.write(".python-version", " \n")
+        self.write("pyproject.toml", '[project]\nrequires-python = ">=3.14"\n')
+        python = self.tool("python3", "Python 3.14.7")
+        result = runtime_info(self.tree)["components"]["."]["python"]
+        self.assertEqual(result["status"], "RESOLVED")
+        self.assertEqual(result["executable"], python)
+
+    def test_python_configuration_reads_only_file_specific_runtime_sections(self):
+        configurations = {
+            "pyproject.toml": (
+                '[project]\nrequires-python = """\n>=3.14,<3.15\n"""\n'
+                '[tool.example]\nrequires-python = "<3.14"\npython_requires = "<3.14"\n'
+                'python_version = "3.11"\n'
+            ),
+            "setup.cfg": (
+                "[DEFAULT]\npython_requires = <3.14\n"
+                "[options]\npython_requires =\n    >=3.14,<3.15 # runtime floor\n"
+                "[mypy]\npython_version = 3.11\npython_requires = <3.14\n"
+            ),
+            "Pipfile": (
+                '[requires]\npython_version = "3.14"\n[packages]\npython_version = "3.11"\npython_requires = "<3.14"\n'
+            ),
+        }
+        python = self.tool("python3", "Python 3.14.7")
+        for name, contents in configurations.items():
+            with self.subTest(name=name):
+                self.write("service/" + name, contents)
+                result = runtime_info(self.tree, ["service/app.py"])["components"]["service"]["python"]
+                self.assertEqual(result["status"], "RESOLVED")
+                self.assertEqual(result["executable"], python)
+                (self.tree / "service" / name).unlink()
+
+    def test_tool_configuration_alone_does_not_declare_a_python_runtime(self):
+        configurations = {
+            "pyproject.toml": '[tool.mypy]\npython_version = "3.14"\n',
+            "setup.cfg": "[mypy]\npython_version = 3.14\n",
+            "Pipfile": '[packages]\npython_version = "3.14"\n',
+        }
+        self.tool("python3", "Python 3.14.7")
+        for name, contents in configurations.items():
+            with self.subTest(name=name):
+                self.write(name, contents)
+                result = runtime_info(self.tree)
+                self.assertEqual(result["python"]["status"], "UNRESOLVED")
+                self.assertIsNone(result["python"]["interpreter"])
+                self.assertNotIn("python", result["components"].get(".", {}))
+                (self.tree / name).unlink()
+
+        self.write("setup.cfg", "[DEFAULT]\npython_requires = >=3.14\n[options]\npackages = find:\n")
+        result = runtime_info(self.tree)
+        self.assertEqual(result["python"]["status"], "UNRESOLVED")
+        self.assertIsNone(result["python"]["interpreter"])
+
+    def test_each_python_runtime_declaration_can_refuse_an_incompatible_interpreter(self):
+        configurations = {
+            "pyproject.toml": '[project]\nrequires-python = ">=3.15"\n',
+            "setup.cfg": "[options]\npython_requires = >=3.15\n",
+            "Pipfile": '[requires]\npython_version = "3.15"\n',
+        }
+        self.tool("python3", "Python 3.14.7")
+        for name, contents in configurations.items():
+            with self.subTest(name=name):
+                self.write(name, contents)
+                result = runtime_info(self.tree)["components"]["."]["python"]
+                self.assertEqual(result["status"], "UNRESOLVED")
+                self.assertIsNone(result["executable"])
+                self.assertEqual(result["observed"], ["3.14.7"])
+                (self.tree / name).unlink()
+
+    def test_pipfile_full_version_is_a_runtime_constraint(self):
+        self.tool("python3", "Python 3.14.7")
+        for version, status in (("3.14.7", "RESOLVED"), ("3.14.6", "UNRESOLVED")):
+            with self.subTest(version=version):
+                self.write("Pipfile", f'[requires]\npython_version = "3.14"\npython_full_version = "{version}"\n')
+                result = runtime_info(self.tree)["components"]["."]["python"]
+                self.assertEqual(result["status"], status)
+                if status == "UNRESOLVED":
+                    self.assertIsNone(result["executable"])
+
+    def test_invalid_python_configuration_does_not_offer_an_interpreter(self):
+        self.write(".python-version", "3.14\n")
+        self.tool("python3.14", "Python 3.14.7")
+        configurations = (
+            ("pyproject.toml", '[project]\nrequires-python = ">=3.14\n'),
+            ("pyproject.toml", '[project]\nrequires-python = [">=3.14"]\n'),
+            ("setup.cfg", "[options\npython_requires = >=3.14\n"),
+            ("Pipfile", '[requires]\npython_version = "3.14\n'),
+            ("Pipfile", "[requires]\npython_version = 3.14\n"),
+        )
+        for name, contents in configurations:
+            with self.subTest(name=name, contents=contents):
+                self.write(name, contents)
+                result = runtime_info(self.tree)["components"]["."]["python"]
+                self.assertEqual(result["status"], "UNRESOLVED")
+                self.assertIsNone(result["executable"])
+                (self.tree / name).unlink()

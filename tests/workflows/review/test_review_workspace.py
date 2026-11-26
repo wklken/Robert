@@ -127,7 +127,7 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
             manifest = self.prepare("nested-runtime")
         runtime = json.loads(Path(manifest["context_dir"], "runtime-info.json").read_text())["python"]
         self.assertEqual(runtime["declarations"]["src/dashboard/.python-version"], "3.11.6")
-        self.assertEqual(runtime["declarations"]["src/dashboard/pyproject.toml"], ['">=3.11,<3.12"'])
+        self.assertEqual(runtime["declarations"]["src/dashboard/pyproject.toml"], [">=3.11,<3.12"])
         self.assertEqual(runtime["status"], "UNRESOLVED")
 
     def test_snapshot_records_ready_frontend_tool_paths_and_missing_dependencies(self):

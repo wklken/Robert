@@ -52,7 +52,10 @@ head/base、完整 PR 范围、reviewer 顺序和配置、验收材料及授权�
 准备审查快照时，Robert 为变更目录和祖先目录生成 `runtime-info.json`。清单按 worktree 相对目录记录
 版本要求、已验证的绝对可执行路径，以及受限的检查环境。reviewer 从对应组件目录使用这些路径。
 
-- Python 识别 `.python-version` 和常见的 Python 版本声明，保留环境中已有解释器的路径。
+- Python 读取 `.python-version`、`pyproject.toml` 的 `[project].requires-python`、
+  `setup.cfg` 的 `[options].python_requires`，以及 `Pipfile` 的 `[requires]` 中的
+  `python_version` 和 `python_full_version`。这些运行约束须同时满足；mypy 等工具的目标版本不参与匹配。
+  清单保留环境中已有解释器的路径，配置解析失败或声明类型无效时标为 `UNRESOLVED`。
 - Node 识别 `.nvmrc` 与 `package.json` 的 Node 版本要求。声明 pnpm 时核对
   `packageManager` 中的固定版本，并记录 `node_modules` 是否存在以及锁文件位置。
 - Go 解析 `go.mod` 和可见 `go.work` 的最低版本要求。验证时使用预装的本地工具链，

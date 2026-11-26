@@ -1,5 +1,6 @@
 """Inventory preinstalled tools for changed components without executing project code."""
 
+from configparser import ConfigParser, Error as ConfigError
 from functools import cache
 import json
 import os
@@ -8,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 
 from robert_agent.foundation.commands import ControlDeadlineExceeded, run_command
 from robert_agent.workflows.review.files import safe_path
@@ -140,15 +142,38 @@ def _resolver(tree):
     return resolve
 
 
+def _python_config_declarations(name, text):
+    """Read runtime metadata without treating tool targets as project constraints."""
+    try:
+        if name == "setup.cfg":
+            config = ConfigParser(interpolation=None, inline_comment_prefixes=("#", ";"), default_section="")
+            config.read_string(text)
+            section = dict(config["options"]) if config.has_section("options") else {}
+            keys = ("python_requires",)
+        else:
+            config = tomllib.loads(text)
+            section = config.get("project" if name == "pyproject.toml" else "requires", {})
+            keys = ("requires-python",) if name == "pyproject.toml" else ("python_version", "python_full_version")
+        if not isinstance(section, dict):
+            return ["<invalid Python runtime declaration>"]
+        values = [section[key] for key in keys if key in section]
+        if any(not isinstance(value, str) for value in values):
+            return ["<invalid Python runtime declaration>"]
+        return [value.strip() for value in values]
+    except (ConfigError, tomllib.TOMLDecodeError, RecursionError):
+        return ["<invalid Python runtime declaration>"]
+
+
 def _python_declarations(tree, directory):
     declarations = {}
     for name in _PYTHON_FILES:
         path = directory / name
         text = _read(tree, path)
-        if name == ".python-version" and text.strip():
-            declarations[path.as_posix()] = text.strip()
-        elif matches := re.findall(r"(?m)^\s*(?:requires-python|python_requires|python_version)\s*=\s*(.+)$", text):
-            declarations[path.as_posix()] = matches
+        if name == ".python-version":
+            if text.strip():
+                declarations[path.as_posix()] = text.strip()
+        elif text and (values := _python_config_declarations(name, text)):
+            declarations[path.as_posix()] = values
     return declarations
 
 
@@ -160,7 +185,7 @@ def _python_runtime(resolve, declarations, directory):
         names.insert(0, "python" + ".".join(pin.split(".")[:2]))
     for name, values in declarations.items():
         if name.endswith(("pyproject.toml", "setup.cfg", "Pipfile")):
-            requirements.extend(value.split("#", 1)[0].strip().strip("\"'") for value in values)
+            requirements.extend(values)
     result = resolve(tuple(names), "--version", rf"Python ({_VERSION})", requirements)
     return {**result, "declarations": declarations, "dependencies": "UNVERIFIED"}
 
