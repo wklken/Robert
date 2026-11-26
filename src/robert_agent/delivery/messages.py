@@ -2,6 +2,7 @@
 
 import json
 
+from robert_agent.foundation import tapd_identity
 from robert_agent.persistence import records
 from robert_agent.persistence.queries import notifications, repos, dispatch_requests
 from robert_agent.security.redaction import redact_text
@@ -23,6 +24,20 @@ def _redact_values(value):
     if isinstance(value, dict):
         return {key: _redact_values(item) for key, item in value.items()}
     return value
+
+
+def _configured_tapd_link(link, config):
+    settings = (config or {}).get("tapd", {})
+    if not settings.get("enabled"):
+        return False
+    try:
+        target = tapd_identity.parse_ticket_url(link)
+    except ValueError:
+        return False
+    if not target or link != tapd_identity.ticket_url(*target):
+        return False
+    host, workspace, _, _ = target
+    return any(project["host"] == host and project["workspace_id"] == workspace for project in settings["projects"])
 
 
 def allowed_repo_ids(conn, config):
@@ -49,6 +64,22 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         try:
             authenticate(config, bound_identity)
         except WorkItemValidationError:
+            return None
+    digest_url = None
+    if kind == "proposal_digest":
+        schedule = (config or {}).get("proposer", {}).get("schedule", {})
+        scope = metadata.get("proposal_digest_repo_ids")
+        if (
+            not schedule.get("enabled")
+            or not isinstance(scope, list)
+            or not all(isinstance(repo, str) for repo in scope)
+        ):
+            return None
+        web_url = schedule.get("web_url")
+        if not web_url or not set(scope).issubset(allowed_repo_ids(conn, config)):
+            return None
+        digest_url = web_url + "/proposals"
+        if metadata.get("result_url") != digest_url:
             return None
     repo_id, repository_scoped = messaging.notification_scope(conn, task_id, metadata)
     if config is not None and repository_scoped:
@@ -128,7 +159,7 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
     if kind == "pr_remediation_needs_evidence":
         payload["summary"] = "已发现 CI 失败，但无法取得失败详情，自动修复需要人工检查。"
         payload["required_action"] = "请检查 GitHub Actions 的失败日志；ack 仅记录收悉，不会重试或批准修复。"
-    if metadata.get("request_id"):
+    if metadata.get("request_id") or kind == "proposal_digest":
         payload["actions"] = []
     if metadata.get("attention_event_id"):
         attention = messaging.attention_details(conn, metadata, include_closed=include_closed)
@@ -192,7 +223,15 @@ def envelope(conn, notification_id, *, config=None, include_closed=False):
         elif actions:
             payload["required_action"] = "请查看详情，并按下面列出的命令处理。"
     try:
-        return _redact_values(payload)
+        safe_payload = _redact_values(payload)
+        if repository_scoped and config is not None:
+            for key in ("issue_url", "result_url"):
+                link = payload.get(key)
+                if _configured_tapd_link(link, config):
+                    safe_payload[key] = link
+        if digest_url:
+            safe_payload["result_url"] = digest_url
+        return safe_payload
     except ValueError:
         pass
     # Keep identity, but withhold all free text and mutating actions when the

@@ -1178,7 +1178,8 @@ def _resident_loop(
     context.background_lanes = {
         name: ControlLane(context.db_path, name, context.daemon_run_id) for name in ("scan", "publish")
     }
-    if (context.runtime_config or {}).get("proposer", {}).get("enabled") and not context.dry_run:
+    proposer = (context.runtime_config or {}).get("proposer", {})
+    if proposer.get("enabled") and not proposer.get("schedule", {}).get("enabled") and not context.dry_run:
         context.background_lanes["proposer"] = ControlLane(context.db_path, "proposer", context.daemon_run_id)
     try:
         try:

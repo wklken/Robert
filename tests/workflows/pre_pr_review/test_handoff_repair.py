@@ -2,10 +2,12 @@
 
 from copy import deepcopy
 import json
+import tempfile
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from robert_agent.adapters.git.review_revision import clean_head
+from robert_agent.adapters.git.review_revision import clean_head, git
 from robert_agent.delivery import contract
 from robert_agent.execution.stages import StageCoordinator, StageStopped
 from robert_agent.persistence.rounds import pre_pr_review as store
@@ -13,7 +15,6 @@ from robert_agent.persistence.schema import pre_pr_review as schema
 from robert_agent.workflows.pre_pr_review import handoff_repair
 from robert_agent.workflows.review import files
 from tests.support import database as fixture_database
-from tests.support.review_workspace import ReviewWorkspaceFixture
 
 
 class RepairDriver(StageCoordinator):
@@ -50,11 +51,18 @@ class RepairDriver(StageCoordinator):
         return self.address_path
 
 
-class HandoffRepairTests(ReviewWorkspaceFixture):
+class HandoffRepairTests(unittest.TestCase):
     def setUp(self):
-        super().setUp()
-        self.git(self.repo, "config", "user.email", "test@example.invalid")
-        self.git(self.repo, "config", "user.name", "Test")
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        git(self.repo, "init", "-b", "feature")
+        git(self.repo, "config", "user.email", "test@example.invalid")
+        git(self.repo, "config", "user.name", "Test")
+        (self.repo / "source.py").write_text("value = 2\n")
+        git(self.repo, "add", "source.py")
+        git(self.repo, "commit", "-m", "Fixture source")
+        self.head = git(self.repo, "rev-parse", "HEAD")
         self.db = self.root / "repair.sqlite3"
         fixture = Path(__file__).parents[2] / "fixtures/persistence/pre_orm_5e0e952.sql"
         with fixture_database.connect(self.db) as conn:
@@ -72,7 +80,6 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
         self.driver.assigned_path = str(self.repo)
         self.driver.branch = "feature"
         self.driver.address_path = self.root / "address"
-        self.git(self.repo, "worktree", "add", "--detach", str(self.driver.address_path), "HEAD")
         self.driver.implementer = {
             "name": "writer",
             "agent": "codex",
@@ -114,6 +121,8 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
         self.run = self.make_run("implement", self.value)
 
     def make_run(self, stage, value):
+        if stage == "address_findings" and not self.driver.address_path.exists():
+            git(self.repo, "worktree", "add", "--detach", str(self.driver.address_path), "HEAD")
         with store.connect(self.db) as conn:
             run = store.new_run(
                 conn,
@@ -264,7 +273,7 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
     def test_source_commit_during_repair_is_rejected(self):
         def commit():
             (self.repo / "source.py").write_text("value = 99\n")
-            self.git(self.repo, "commit", "-am", "forbidden source repair")
+            git(self.repo, "commit", "-am", "forbidden source repair")
 
         self.driver.on_validate = lambda path: commit()
         with self.assertRaises(StageStopped):
@@ -315,7 +324,6 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
             "dispositions": [{"id": "F1", "status": "fixed", "reason": "guard"}],
             "verification": deepcopy(self.value["verification"]),
         }
-        self.run = self.make_run("address_findings", value)
         for field in ("body", "id", "purpose", "commit"):
             with self.subTest(field=field):
                 self.run = self.make_run("address_findings", value)
@@ -331,7 +339,7 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
 
                     def commit():
                         (self.driver.address_path / "source.py").write_text("value = 99\n")
-                        self.git(self.driver.address_path, "commit", "-am", "forbidden address repair")
+                        git(self.driver.address_path, "commit", "-am", "forbidden address repair")
 
                     self.driver.on_validate = lambda path: commit()
                 with self.assertRaises(StageStopped):
@@ -370,7 +378,7 @@ class HandoffRepairTests(ReviewWorkspaceFixture):
     def test_changed_head_on_resume_cannot_repin_success(self):
         self.repair()
         (self.repo / "source.py").write_text("value = 99\n")
-        self.git(self.repo, "commit", "-am", "source changed after repair")
+        git(self.repo, "commit", "-am", "source changed after repair")
         with self.assertRaises(StageStopped):
             self.repair()
         self.assertEqual(self.driver.launches, [])

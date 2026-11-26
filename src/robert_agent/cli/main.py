@@ -13,7 +13,7 @@ import sys
 from robert_agent.persistence import errors as db_errors
 
 from robert_agent import __version__
-from robert_agent.runtime import daemon
+from robert_agent.runtime import cron, daemon
 from robert_agent.operations import diagnostics
 from robert_agent.operations import retention
 from robert_agent.runtime import cycle as run_once
@@ -155,6 +155,10 @@ def build_parser() -> argparse.ArgumentParser:
         command_parser = config_subparsers.add_parser(name)
         _add_config_argument(command_parser)
         _add_output_argument(command_parser)
+
+    cron_parser = subparsers.add_parser("cron", help="Run scheduled proposal analysis and daily recommendations.")
+    _add_config_argument(cron_parser)
+    cron_parser.add_argument("--once", action="store_true", help="Run due work once and wait for its analysis child.")
 
     daemon_parser = subparsers.add_parser("daemon", help="Run the daemon.")
     daemon_run_parser = daemon_parser.add_subparsers(
@@ -661,6 +665,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _emit_and_code(validated, args.output)
         if args.command == "run" and args.run_command == "once":
             return run_once.main(_run_once_argv(args))
+        if args.command == "cron":
+            return cron.main(["--config", str(args.config), *(["--once"] if args.once else [])])
         if args.command == "daemon" and args.daemon_command == "run":
             return daemon.main(_daemon_argv(args))
         if args.command == "status":

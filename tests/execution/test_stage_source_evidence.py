@@ -12,6 +12,19 @@ from tests.support.review_workspace import ReviewWorkspaceFixture
 
 
 class SourceEvidenceTests(ReviewWorkspaceFixture):
+    def test_source_observation_preserves_branch_and_status_encodings(self):
+        (self.repo / "local notes.txt").write_text("local input\n")
+        run = {"run_id": "run-1", "prompt_sha256": "prompt-sha"}
+        manifest = {"head_sha": self.head}
+        for branch in ("feature", "HEAD"):
+            with self.subTest(branch=branch):
+                if branch == "HEAD":
+                    git(self.repo, "checkout", "--detach", self.head)
+                checkpoint = stage_evidence.observe_source(run, manifest, self.repo)
+                self.assertEqual(checkpoint["worktree_head"], self.head)
+                self.assertEqual(checkpoint["branch"], branch)
+                self.assertEqual(checkpoint["source_status"], '?? "local notes.txt"')
+
     def test_local_edition_symlink_pins_link_and_target_while_external_links_are_refused(self):
         (self.repo / ".gitignore").write_text("edition.py\n")
         link = self.repo / "edition.py"
