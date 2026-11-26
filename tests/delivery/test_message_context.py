@@ -130,6 +130,30 @@ class MessageContextTests(WorkItemCommandFixture):
         self.assertEqual(result["sent"], 0)
         runner.assert_not_called()
 
+    def test_configured_tapd_ticket_link_survives_delivery_redaction(self):
+        link = "https://tapd.example.internal/23/prong/stories/view/567"
+        config = {
+            **self.config,
+            "tapd": {"enabled": True, "projects": [{"host": "tapd.example.internal", "workspace_id": "23"}]},
+        }
+        self.notice(
+            "tapd-proposal",
+            "2026-11-10T00:00:00Z",
+            kind="proposal_created",
+            metadata={
+                "repo_id": "repo-1",
+                "issue_url": link,
+                "result_url": link.replace("/23/", "/24/"),
+                "summary": "An internal host tapd.example.internal",
+            },
+        )
+        with closing(database.connect(self.db_path)) as conn:
+            payload = messages.envelope(conn, "tapd-proposal", config=config)
+        rendered = render_message({**payload, "delivery_id": "tapd-proposal:receipt"})
+        self.assertIn(link, rendered)
+        self.assertNotIn("tapd.example.internal/24/", rendered)
+        self.assertIn("An internal host <internal-domain>", rendered)
+
     def test_stored_url_userinfo_is_withheld_from_notification_envelope(self):
         cases = json.loads((TEST_ROOT / "fixtures" / "url_userinfo.json").read_text())
         for case in cases:

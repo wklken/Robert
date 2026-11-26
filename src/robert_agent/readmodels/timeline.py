@@ -52,26 +52,48 @@ def _published_actions(output_type, actions):
     return published
 
 
-def _deliveries(result, actions):
-    published = _published_actions(result["output_type"], actions)
-    if published is None:
-        return None
+def _completion_time(result, published):
+    receipt_times = [utc_timestamp(action["published_at"]) for action in published]
+    published_at = max(receipt_times) if receipt_times and all(receipt_times) else None
+    return published_at or utc_timestamp(result["local_result_at"]) or utc_timestamp(result["task_updated_at"])
+
+
+def _entry(result, published, completed_at):
     links = {}
     for action in published:
         url = safe_public_link(action["target_url"])
         if url:
             links.setdefault(url, {"type": action["action_type"], "url": url})
-    receipt_times = [utc_timestamp(action["published_at"]) for action in published]
-    completed_at = max(receipt_times) if receipt_times and all(receipt_times) else None
-    occurred = completed_at or utc_timestamp(result["local_result_at"]) or utc_timestamp(result["task_updated_at"])
-    return occurred, list(links.values())
+    return {
+        "task_id": result["task_id"],
+        "result_id": result["result_id"],
+        "work_item_id": result["work_item_id"],
+        "repository": safe_text(result["repository"], 300),
+        "project": safe_text((result["request_project"] or "").rsplit("/", 1)[-1], 100),
+        "title": safe_text(result["work_item_title"] or result["request_title"], 400),
+        "source_url": safe_public_link(result["request_url"]),
+        "output_type": result["output_type"],
+        "completed_at": completed_at.isoformat(),
+        "deliveries": list(links.values()),
+    }
+
+
+def _result_actions(conn, results):
+    actions = defaultdict(list)
+    for action in task_history.timeline_actions_for_results(conn, [row["result_id"] for row in results]):
+        actions[action["result_id"]].append(action)
+    return actions
+
+
+def _zone(timezone_name):
+    try:
+        return ZoneInfo(timezone_name)
+    except (ValueError, ZoneInfoNotFoundError) as exc:
+        raise TimelineQueryError("invalid time zone") from exc
 
 
 def list_completed(db_path, *, view="week", anchor_date=None, timezone_name="UTC"):
-    try:
-        zone = ZoneInfo(timezone_name)
-    except (ValueError, ZoneInfoNotFoundError) as exc:
-        raise TimelineQueryError("invalid time zone") from exc
+    zone = _zone(timezone_name)
     if anchor_date is None:
         anchor = datetime.now(zone).date()
     else:
@@ -90,35 +112,18 @@ def list_completed(db_path, *, view="week", anchor_date=None, timezone_name="UTC
     with closing(database.connect(db_path, busy_timeout_ms=5000)) as conn:
         transactions.begin(conn)
         results = timeline_queries.completed_results(conn, earliest.isoformat(), latest.isoformat())
-        actions = defaultdict(list)
-        for action in task_history.timeline_actions_for_results(conn, [row["result_id"] for row in results]):
-            actions[action["result_id"]].append(action)
+        actions = _result_actions(conn, results)
 
     completed = []
     for row in results:
-        delivery = _deliveries(row, actions[row["result_id"]])
-        if delivery is None:
+        published = _published_actions(row["output_type"], actions[row["result_id"]])
+        if published is None:
             continue
-        occurred, links = delivery
-        if occurred is None:
-            continue
-        local = occurred.astimezone(zone)
-        if not start <= local.date() < end:
-            continue
-        completed.append(
-            {
-                "task_id": row["task_id"],
-                "result_id": row["result_id"],
-                "work_item_id": row["work_item_id"],
-                "repository": safe_text(row["repository"], 300),
-                "project": safe_text((row["request_project"] or "").rsplit("/", 1)[-1], 100),
-                "title": safe_text(row["work_item_title"] or row["request_title"], 400),
-                "source_url": safe_public_link(row["request_url"]),
-                "output_type": row["output_type"],
-                "completed_at": local.isoformat(),
-                "deliveries": links,
-            }
-        )
+        occurred = _completion_time(row, published)
+        if occurred is not None:
+            local = occurred.astimezone(zone)
+            if start <= local.date() < end:
+                completed.append(_entry(row, published, local))
     return {
         "view": view,
         "timezone": timezone_name,
@@ -132,6 +137,32 @@ def list_completed(db_path, *, view="week", anchor_date=None, timezone_name="UTC
     }
 
 
+def live_display(db_path, *, timezone_name="UTC", now=None):
+    zone = _zone(timezone_name)
+    today = (now or datetime.now(timezone.utc)).astimezone(zone).date()
+    week_start, week_end = _period("week", today)
+    with closing(database.connect(db_path, busy_timeout_ms=5000)) as conn:
+        transactions.begin(conn)
+        results = timeline_queries.completed_results(conn, include_context=False)
+        actions = _result_actions(conn, results)
+        running = timeline_queries.running_task_count(conn)
+
+    counts = {"total": 0, "week": 0, "today": 0, "running": running}
+    receipts = []
+    for row in results:
+        published = _published_actions(row["output_type"], actions[row["result_id"]])
+        if published is None or (occurred := _completion_time(row, published)) is None:
+            continue
+        local_date = occurred.astimezone(zone).date()
+        counts["total"] += 1
+        counts["week"] += week_start <= local_date < week_end
+        counts["today"] += local_date == today
+        receipts.append((occurred, row["task_id"], row["result_id"]))
+    # Comparing identities across snapshots also catches newly confirmed work
+    # with older completion times and multiple results sharing a timestamp.
+    return {"counts": counts, "receipts": [[task_id, result_id] for _, task_id, result_id in sorted(receipts)]}
+
+
 def _receipt_attempts(conn, task_id, row):
     cutoff = utc_timestamp(row["result_created_at"])
     for attempt in timeline_queries.receipt_attempts(conn, task_id, row["attempt_no"], row["result_created_at"]):
@@ -142,15 +173,23 @@ def _receipt_attempts(conn, task_id, row):
         )
 
 
-def get_receipt(db_path, task_id, result_id, *, include_usage=True):
+def get_receipt(db_path, task_id, result_id, *, include_usage=True, include_entry=False):
     with closing(database.connect(db_path, busy_timeout_ms=5000)) as conn:
         transactions.begin(conn)
         row = records.first(timeline_queries.completed_result_receipt(conn, task_id, result_id))
         if row is None:
             return None
         actions = task_history.timeline_actions_for_results(conn, [result_id])
-        if _published_actions(row["output_type"], actions) is None:
+        published = _published_actions(row["output_type"], actions)
+        if published is None:
             return None
+        entry = None
+        if include_entry:
+            result = records.first(timeline_queries.completed_results(conn, receipt=(task_id, result_id)))
+            occurred = _completion_time(result, published) if result is not None else None
+            if occurred is None:
+                return None
+            entry = _entry(result, published, occurred)
         attempts = list(_receipt_attempts(conn, task_id, row)) if include_usage else []
         observations = (
             timeline_queries.receipt_usage(
@@ -167,6 +206,7 @@ def get_receipt(db_path, task_id, result_id, *, include_usage=True):
     safe_summary = redact_text(summary, strict_assignments=True) if isinstance(summary, str) else {}
     checks = [check for check in json_list(row["verification_json"]) if isinstance(check, dict)]
     return {
+        **({"entry": entry} if entry is not None else {}),
         "summary": safe_summary.get("text", ""),
         "summary_redacted": safe_summary.get("ok") is False,
         "summary_truncated": False,

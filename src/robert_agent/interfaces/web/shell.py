@@ -33,6 +33,12 @@ _NAVIGATION = (
         '<path d="M4 2v12M8 4h6M8 8h6M8 12h6"/><circle cx="4" cy="4" r="1"/>'
         '<circle cx="4" cy="8" r="1"/><circle cx="4" cy="12" r="1"/>',
     ),
+    (
+        "/live-display",
+        "navLiveDisplay",
+        "Live display",
+        '<rect x="1.5" y="2" width="13" height="9" rx="1"/><path d="M8 11v3M5 14h6"/>',
+    ),
     ("/proposals", "navProposals", "Proposals", '<path d="M4 2h5l3 3v9H4zM9 2v3h3M6 8h4M6 11h4"/>'),
     ("/operations", "navOperations", "Operations", '<path d="M1 8h3l2-5 4 10 2-5h3"/>'),
     ("/operations#knowledge", "navKnowledge", "Knowledge", '<path d="M8 3v11M2 2l6 1 6-1v10l-6 1-6-1z"/>'),

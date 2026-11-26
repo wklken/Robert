@@ -8,14 +8,14 @@ const RobertShell = (() => {
       theme: "Theme", themeSystem: "System", themeLight: "Light", themeDark: "Dark",
       language: "Language", languageEnglish: "English", languageChinese: "Chinese",
       primaryNavigation: "Primary navigation", navWork: "Work", navBoard: "Board",
-      navHistory: "History", navTimeline: "Timeline", navProposals: "Proposals",
+      navHistory: "History", navTimeline: "Timeline", navLiveDisplay: "Live display", navProposals: "Proposals",
       navOperations: "Operations", navKnowledge: "Knowledge",
     },
     zh: {
       theme: "主题", themeSystem: "跟随系统", themeLight: "浅色", themeDark: "深色",
       language: "语言", languageEnglish: "English", languageChinese: "中文",
       primaryNavigation: "一级导航", navWork: "工作", navBoard: "任务看板",
-      navHistory: "历史", navTimeline: "时间线", navProposals: "提案",
+      navHistory: "历史", navTimeline: "时间线", navLiveDisplay: "大屏", navProposals: "提案",
       navOperations: "运行状态", navKnowledge: "知识",
     },
   };

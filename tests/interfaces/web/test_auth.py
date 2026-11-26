@@ -61,6 +61,9 @@ class BasicAuthTests(unittest.TestCase):
             for method, route in [
                 ("GET", "/"),
                 ("GET", "/api/session"),
+                ("GET", "/live-display"),
+                ("GET", "/api/live-display"),
+                ("GET", "/api/live-display/receipt?task_id=private&result_id=private"),
                 ("GET", "/assets/board.js"),
                 ("GET", "/artifact.txt?task_id=private"),
                 ("POST", "/api/work-items"),

@@ -48,6 +48,10 @@ def record_comment(conn, identifier, kind, proposal_id, revision, source, now, p
                 "repository": source["repository"],
                 "target_url": source["url"],
                 "number": source.get("number"),
+                "status_before": source.get("status"),
+                "owners_before": source.get("owners"),
+                "repository_label": source.get("repository_label"),
+                "routing_unconfirmed": source.get("routing_unconfirmed", False),
                 "project_key": source.get("project_key"),
                 "pr_url": pr_url,
             }

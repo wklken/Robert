@@ -18,3 +18,6 @@ These rules apply to this directory and its descendants. Follow the
 - `decision_owner.py` owns the original human request owner and provenance.
   Follow verified same-repository lineage; keep this identity separate from
   execution ownership, PR authorship and current trigger authorization.
+- `foundation/review_recipient.py` selects the verified human PR author for PR
+  review feedback independently of the stored request owner. Robot-authored PRs
+  retain the original request owner.

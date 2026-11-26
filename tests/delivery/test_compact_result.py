@@ -15,6 +15,23 @@ from tests.support.compact_result import CompactResultFixture
 
 
 class CompactResultTests(CompactResultFixture):
+    def test_single_review_addresses_pr_author_even_when_requester_differs(self):
+        for owner in ({"login": "requester"}, None):
+            with self.subTest(owner=owner):
+                envelope = self.envelope("t", "a")
+                envelope["output_type"] = "pr_review_comment"
+                settings = self.settings()
+                settings["action_scope"].update(
+                    sources=[{"source_type": "pull_request", "number": 1}],
+                    pr_authors={"https://github.com/x/y/pull/1": "RimuruChan"},
+                    github_account="robert-bot",
+                    decision_owner=owner,
+                )
+                normalized = result_contract.normalize(envelope, settings)
+                action = normalized["planned_github_actions"][0]
+                self.assertEqual(action["decision_owner_login"], "RimuruChan")
+                self.assertTrue(action["body"].startswith("@RimuruChan\n\n"))
+
     def test_single_review_mentions_original_owner_separately_from_pr_author(self):
         for owner, mention in (({"login": "Alice"}, "Alice"), (None, "wklken")):
             with self.subTest(owner=owner):
@@ -24,6 +41,7 @@ class CompactResultTests(CompactResultFixture):
                 settings["action_scope"].update(
                     sources=[{"source_type": "pull_request", "number": 1}],
                     pr_authors={"https://github.com/x/y/pull/1": "robert-bot"},
+                    github_account="robert-bot",
                     decision_owner=owner,
                 )
                 result = result_contract.normalize(envelope, settings)

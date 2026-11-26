@@ -1,6 +1,9 @@
 async page => {
   const origin = new URL(page.url()).origin;
-  const nav = ["/work", "/board", "/work?bucket=history", "/timeline", "/proposals", "/operations", "/operations#knowledge"];
+  const nav = [
+    "/work", "/board", "/work?bucket=history", "/timeline", "/live-display",
+    "/proposals", "/operations", "/operations#knowledge",
+  ];
   const proposal = {
     proposal_id: "p-test", title: "原始单据标题", status: "pending", version: 1, revision: 1,
     source_url: "https://github.com/example/repo/issues/1", repo_id: "repo:test",
@@ -37,6 +40,7 @@ async page => {
       })),
       active: document.querySelector('.underline-nav [aria-current="page"]')?.getAttribute("href"),
       title: document.querySelector('.underline-nav a[href="/proposals"] span').textContent,
+      liveDisplay: document.querySelector('.underline-nav a[href="/live-display"] span').textContent,
       language: document.documentElement.lang,
       theme: document.documentElement.dataset.colorMode,
       scheme: getComputedStyle(document.documentElement).colorScheme,
@@ -46,6 +50,7 @@ async page => {
     verify(shell.active === route, `${route}: page marker is ${shell.active}`);
     verify(shell.language === (language === "zh" ? "zh-CN" : "en"), `${route}: wrong language`);
     verify(shell.title === (language === "zh" ? "提案" : "Proposals"), `${route}: proposal navigation is not translated`);
+    verify(shell.liveDisplay === (language === "zh" ? "大屏" : "Live display"), `${route}: live display navigation is not translated`);
     verify(shell.theme === theme && shell.scheme === theme, `${route}: wrong theme`);
     return shell.brand;
   };

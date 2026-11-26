@@ -3,6 +3,8 @@
 from robert_agent.foundation.contracts.delivery import GitHubActionType, OutputType, PublishStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
 
+from robert_agent.persistence.queries import proposals as proposal_queries
+from robert_agent.persistence.stores import proposals as proposal_store
 from robert_agent.persistence.rounds import pre_pr_review
 from robert_agent.persistence.rounds import review as review_store
 from robert_agent.persistence.rounds.records import artifact_available
@@ -904,4 +906,16 @@ def finalize_published_results(
         _record_native_delivery(conn, payload, run_now)
         finalized += 1
     _complete_published_analysis_items(conn, repo_id, run_now)
+    for proposal in proposal_queries.finished_investigations(conn, repo_id):
+        reported = proposal["investigation_outcome"] == "completed"
+        proposal_store.revise(
+            conn,
+            proposal["proposal_id"],
+            proposal["version"],
+            status="pending" if reported else "blocked",
+            blocked_reason="" if reported else "调查未完成，请查看任务详情。",
+            version=proposal["version"] + 1,
+            fingerprint="",
+            updated_at=run_now,
+        )
     return finalized

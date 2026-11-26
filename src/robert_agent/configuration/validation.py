@@ -2,7 +2,9 @@
 
 import json
 from pathlib import Path
+import re
 import sys
+from urllib.parse import urlsplit
 from robert_agent.foundation.timestamps import utc_timestamp
 
 import yaml
@@ -209,9 +211,55 @@ def _normalize(config, path, skip_external):
     return result
 
 
+def _proposal_schedule(setting, config):
+    schedule = setting["schedule"]
+    if not schedule["enabled"]:
+        return
+    if not setting["enabled"]:
+        raise ValueError("proposer.schedule requires proposer.enabled")
+    analysis_time, digest_time = schedule["analysis_time"], schedule["digest_time"]
+    if not all(re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", value) for value in (analysis_time, digest_time)):
+        raise ValueError("proposer schedule times must be HH:MM in Asia/Shanghai")
+    if analysis_time >= digest_time:
+        raise ValueError("proposer digest must be scheduled after analysis")
+    worker = next((worker for worker in config["workers"] if worker["name"] == schedule.get("worker")), None)
+    if not worker or not worker["default_model"]:
+        raise ValueError("proposer.schedule.worker requires a configured worker with a model")
+    setting["model"] = worker["default_model"]
+    url = schedule.get("web_url", "")
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme not in {"https", "http"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+        or any(ord(char) <= 32 or char in "<>\\\"'" for char in url)
+        or not parsed.netloc.isascii()
+    ):
+        raise ValueError("proposer.schedule.web_url must be a credential-free Web origin")
+    _ = parsed.port
+    schedule["web_url"] = url.rstrip("/")
+    if not config["messaging"]["enabled"]:
+        raise ValueError("proposer.schedule requires operator messaging")
+    if setting["tapd_projects"]:
+        if len(setting["tapd_projects"]) != 1:
+            raise ValueError("proposer.schedule expects one TAPD gateway project")
+        for kind in ("story", "bug"):
+            waiting = setting["tapd_todo_states"][kind]
+            started = setting["tapd_started_states"].get(kind)
+            if not waiting or not started or started in waiting:
+                raise ValueError("proposer TAPD requires distinct to-do and started states for story and bug")
+
+
 def _proposer(setting, config):
-    github = set(setting["github_repositories"])
     known = {repo["full_name"] for repo in config["repos"]}
+    if setting["github_all_registered"]:
+        setting["github_repositories"] = sorted(known)
+    github = set(setting["github_repositories"])
+    _proposal_schedule(setting, config)
     tapd = set(setting["tapd_projects"])
     known_tapd = {f"{project['host']}/{project['workspace_id']}" for project in config["tapd"]["projects"]}
     if github - known or tapd - known_tapd:

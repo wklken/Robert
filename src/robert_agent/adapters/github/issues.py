@@ -166,7 +166,7 @@ def get(repo, number, *, runner=None):
     return row
 
 
-def discussion(repo, number, *, max_pages=10, exclude_author=None, runner=None):
+def discussion(repo, number, *, max_pages=10, exclude_author=None, include_author_results=False, runner=None):
     """Read bounded, complete comment bodies in their server order."""
     bodies, seen = [], set()
     endpoint = f"{_endpoint(repo)}/{_number(number)}/comments"
@@ -178,6 +178,51 @@ def discussion(repo, number, *, max_pages=10, exclude_author=None, runner=None):
             actor = row.get("user")
             login = actor.get("login") if isinstance(actor, dict) else None
             if exclude_author and isinstance(login, str) and login.casefold() == exclude_author.casefold():
-                continue
+                if not include_author_results or "<!-- robert-comment task_id=" not in row["body"]:
+                    continue
             bodies.append(row["body"])
     return tuple(bodies)
+
+
+def has_open_pull_request(repo, number, *, runner=None):
+    """Read linked closing PRs; incomplete evidence never establishes availability."""
+    _endpoint(repo)
+    _number(number)
+    owner, name = repo.split("/", 1)
+    query = """query($owner:String!,$name:String!,$number:Int!){
+      repository(owner:$owner,name:$name){issue(number:$number){
+        closedByPullRequestsReferences(first:100,includeClosedPrs:true){
+          nodes{state} pageInfo{hasNextPage}
+        }
+      }}
+    }"""
+    result = _json(
+        [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            "query=" + query,
+            "-f",
+            "owner=" + owner,
+            "-f",
+            "name=" + name,
+            "-F",
+            "number=" + str(number),
+        ],
+        runner,
+    )
+    try:
+        connection = result["data"]["repository"]["issue"]["closedByPullRequestsReferences"]
+        nodes = connection["nodes"]
+        complete = connection["pageInfo"]["hasNextPage"] is False
+    except (TypeError, KeyError):
+        raise ValueError("GitHub returned incomplete linked pull request metadata") from None
+    if (
+        result.get("errors")
+        or not complete
+        or not isinstance(nodes, list)
+        or any(not isinstance(node, dict) or node.get("state") not in {"OPEN", "CLOSED", "MERGED"} for node in nodes)
+    ):
+        raise ValueError("GitHub returned incomplete linked pull request metadata")
+    return any(node["state"] == "OPEN" for node in nodes)

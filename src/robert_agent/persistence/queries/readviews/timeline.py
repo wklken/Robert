@@ -100,24 +100,26 @@ def _request_owners(tasks):
     )
 
 
-def completed_results(conn, earliest_date, latest_date):
-    tasks = (
-        _completed_tasks()
-        .where(tables["tasks"].c.updated_at >= earliest_date, tables["worker_results"].c.created_at < latest_date)
-        .cte("completed_tasks")
-    )
+def completed_results(conn, earliest_date=None, latest_date=None, *, receipt=None, include_context=True):
+    task, result = tables["tasks"], tables["worker_results"]
+    selected = _completed_tasks()
+    if earliest_date is not None:
+        selected = selected.where(task.c.updated_at >= earliest_date)
+    if latest_date is not None:
+        selected = selected.where(result.c.created_at < latest_date)
+    if receipt is not None:
+        task_id, result_id = receipt
+        selected = selected.where(task.c.task_id == task_id, result.c.result_id == result_id)
+    tasks = selected.cte("completed_tasks")
     owners = _request_owners(tasks)
     repo, source, event = (tables[name] for name in ("repos", "github_sources", "work_item_events"))
-    context = (
-        tasks.join(owners, (owners.c.requested_stream_id == tasks.c.workstream_id) & (owners.c.rank == 1))
-        .join(repo, repo.c.repo_id == owners.c.repo_id)
-        .outerjoin(source, source.c.source_id == owners.c.request_source_id)
-        .outerjoin(
-            event,
-            (event.c.work_item_id == owners.c.work_item_id)
-            & (event.c.idempotency_key == ("result:" + tasks.c.result_id))
-            & (event.c.event_type == "result_recorded"),
-        )
+    context = tasks.join(
+        owners, (owners.c.requested_stream_id == tasks.c.workstream_id) & (owners.c.rank == 1)
+    ).outerjoin(
+        event,
+        (event.c.work_item_id == owners.c.work_item_id)
+        & (event.c.idempotency_key == ("result:" + tasks.c.result_id))
+        & (event.c.event_type == "result_recorded"),
     )
     query = select(
         tasks.c.task_id,
@@ -125,14 +127,26 @@ def completed_results(conn, earliest_date, latest_date):
         event.c.created_at.label("local_result_at"),
         tasks.c.result_id,
         tasks.c.output_type,
-        repo.c.full_name.label("repository"),
-        owners.c.work_item_id,
-        owners.c.work_item_title,
-        source.c.title.label("request_title"),
-        source.c.html_url.label("request_url"),
-        source.c.project_key.label("request_project"),
-    ).select_from(context)
-    return statements.read(conn, query)
+    )
+    if include_context:
+        context = context.join(repo, repo.c.repo_id == owners.c.repo_id).outerjoin(
+            source, source.c.source_id == owners.c.request_source_id
+        )
+        query = query.add_columns(
+            repo.c.full_name.label("repository"),
+            owners.c.work_item_id,
+            owners.c.work_item_title,
+            source.c.title.label("request_title"),
+            source.c.html_url.label("request_url"),
+            source.c.project_key.label("request_project"),
+        )
+    return statements.read(conn, query.select_from(context))
+
+
+def running_task_count(conn):
+    task = tables["tasks"]
+    query = select(func.count()).select_from(task).where(task.c.lifecycle == TaskLifecycle.RUNNING.value)
+    return statements.read(conn, query)[0][0]
 
 
 def completed_result_receipt(conn, task_id, result_id):

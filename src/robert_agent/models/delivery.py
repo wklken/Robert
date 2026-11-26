@@ -52,6 +52,7 @@ class GitHubAction(Base):
 
     __table_args__ = (
         Index("idx_github_actions_recent", text("created_at DESC"), text("action_id DESC")),
+        Index("idx_github_actions_result", "result_id"),
         CheckConstraint("audit_status IN ('pending', 'accepted', 'policy_violation', 'failed')"),
         CheckConstraint("publish_status IN ('not_published', 'published', 'skipped')"),
     )
