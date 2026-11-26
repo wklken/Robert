@@ -35,6 +35,7 @@ from robert_agent.execution.stages import (
 from robert_agent.execution.rounds import SLOT_STORES
 from robert_agent.delivery.application import submission as worker_result
 from robert_agent.work import decision_owner
+from robert_agent.foundation import review_recipient
 from robert_agent.work import review_identity
 
 
@@ -303,8 +304,12 @@ class Coordinator(ReviewStages):
                     if not self.manifest.get("frozen"):
                         self.manifest["github_account"] = repo["github_account"]
                         with store.connect(self.db_path) as conn:
-                            self.manifest["decision_owner"] = decision_owner.for_workstream(
-                                conn, self.session["workstream_id"], repo["github_account"]
+                            self.manifest["decision_owner"] = review_recipient.decision_owner(
+                                decision_owner.for_workstream(
+                                    conn, self.session["workstream_id"], repo["github_account"]
+                                ),
+                                pr.get("user", {}).get("login"),
+                                repo["github_account"],
                             )
                         self.manifest["worker_config_sha256"] = hashlib.sha256(
                             json.dumps(self.request["workers"], sort_keys=True).encode()
