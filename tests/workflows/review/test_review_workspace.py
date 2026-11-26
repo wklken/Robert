@@ -239,7 +239,9 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
             review_workspace.verify_snapshot(manifest)
 
     def test_ignored_test_artifacts_allow_freeze_and_resume(self):
-        (self.upstream / ".gitignore").write_text("*.sqlite3\n__pycache__/\n.pytest_cache/\n")
+        (self.upstream / ".gitignore").write_text(
+            "*.sqlite3\n__pycache__/\n.pytest_cache/\n.mypy_cache/\n.ruff_cache/\n.import_linter_cache/\n"
+        )
         self.git(self.upstream, "add", ".gitignore")
         self.git(self.upstream, "commit", "-m", "Ignore generated test artifacts")
         self.head = self.git(self.upstream, "rev-parse", "HEAD")
@@ -259,6 +261,11 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
             ".pytest_cache/v/cache/nodeids",
             ".pytest_cache/v/cache/lastfailed",
             ".pytest_cache/v/cache/stepwise",
+            "component/.pytest_cache/v/cache/nodeids",
+            "component/.mypy_cache/3.14/cache.0.db",
+            "component/.ruff_cache/0.16.7/123456",
+            "component/.import_linter_cache/apigateway.meta.json",
+            "component/.import_linter_cache/0123456789abcdef0123456789abcdef.data.json",
         )
         for name in artifacts:
             path = tree / name
@@ -302,6 +309,9 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
             "component/bkcore.sqlite3",
             "__pycache__/AGENTS.override.md",
             ".pytest_cache/pyproject.toml",
+            "component/.mypy_cache/3.14/AGENTS.md",
+            "component/.ruff_cache/0.16.7/source.py",
+            "component/.import_linter_cache/settings.py",
         )
         (self.upstream / ".gitignore").write_text("\n".join(names) + "\n")
         self.git(self.upstream, "add", ".gitignore")
