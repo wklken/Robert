@@ -4,7 +4,6 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import shutil
 import subprocess
 
 from robert_agent.adapters.git.review_revision import worktree_state
@@ -14,6 +13,7 @@ from robert_agent.context.native_prompts import review_evaluate_input
 from robert_agent.context.prompts import render_prompt
 
 from robert_agent.workflows.review import files as review_files
+from robert_agent.workflows.review.project_runtime import runtime_info
 
 
 CONTEXT_FILES = (
@@ -82,56 +82,6 @@ def _is_test_artifact(tree, name):
             ".pytest_cache/v/cache/stepwise",
         }
     )
-
-
-def _runtime_info(tree, changed_paths=()):
-    declarations = {}
-    directories = {Path(".")}
-    for name in changed_paths:
-        directories.update(Path(name).parents)
-    names = (
-        (directory / name).as_posix()
-        for directory in sorted(directories)
-        for name in (".python-version", "pyproject.toml", "setup.cfg", "Pipfile")
-    )
-    for name in names:
-        try:
-            path = review_files.safe_path(tree / name, tree)
-        except ValueError:
-            continue
-        if path.is_file() and not path.is_symlink():
-            text = path.read_text(encoding="utf-8", errors="replace")
-            if path.name == ".python-version":
-                declarations[name] = text.strip()
-            else:
-                matches = re.findall(
-                    r"(?m)^\s*(?:requires-python|python_requires|python_version)\s*=\s*(.+)$",
-                    text,
-                )
-                if matches:
-                    declarations[name] = matches
-    python = {
-        "status": "UNRESOLVED",
-        "interpreter": None,
-        "declarations": declarations,
-        "reason": "No exact project interpreter has been verified; do not use system Python for syntax claims.",
-    }
-    version = declarations.get(".python-version", "")
-    if re.fullmatch(r"3\.\d+(?:\.\d+)?", version):
-        major_minor = ".".join(version.split(".")[:2])
-        interpreter = shutil.which("python" + major_minor)
-        if interpreter:
-            reported = run_command(
-                [interpreter, "--version"], capture_output=True, text=True, check=True
-            ).stdout.strip()
-            if reported.removeprefix("Python ").startswith(version):
-                python.update(
-                    status="RESOLVED",
-                    interpreter=str(Path(interpreter).resolve()),
-                    version=reported,
-                    reason="Verified executable matches .python-version.",
-                )
-    return {"python": python}
 
 
 def _trigger(github_context):
@@ -283,7 +233,7 @@ def _build_snapshot(
         "diff.patch": diff,
         "diff-stat.txt": _git(tree, "diff", "--no-ext-diff", "--stat", merge_base, head_sha, "--"),
         "diff-linecount.txt": str(len(diff.splitlines())) + "\n",
-        "runtime-info.json": json.dumps(_runtime_info(tree, changed_paths.splitlines()), ensure_ascii=False, indent=2)
+        "runtime-info.json": json.dumps(runtime_info(tree, changed_paths.splitlines()), ensure_ascii=False, indent=2)
         + "\n",
     }
     for name, text in content.items():

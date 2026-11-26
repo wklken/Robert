@@ -184,10 +184,11 @@ def write_context(manifest):
         "Read github-context.json for the complete request and confirmed constraints; pr-info.json "
         "contains author claims. Read diff.patch for the complete merge-base-to-head changes. "
         "diff-stat.txt and diff-linecount.txt contain the captured display statistics.\n\n"
-        "runtime-info.json contains captured Python declaration and interpreter resolution evidence. "
-        "The indexed runtime/check files cover other languages and components as discovery candidates. "
-        "Verify supported interpreters, dependencies and test commands independently. Preparation does "
-        "not install dependencies, run project commands or infer architecture or behavior.\n"
+        "Use runtime-info.json as the controller's executable inventory. Its components are keyed by "
+        "worktree-relative directory. Run checks from the relevant component using the resolved executable "
+        "paths and listed environment. If a tool is unresolved or dependencies are missing, record the "
+        "unexecuted check. A resolved tool establishes version compatibility; dependency and test results "
+        "require separate evidence. Preparation does not install dependencies or run project commands.\n"
     )
     files.atomic_text(summary_path, summary)
     files.atomic_json(index_path, index)
