@@ -1,6 +1,7 @@
 """Explicit recovery replaces ended repair authority with a fresh operator task."""
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -128,6 +129,16 @@ class TerminalRemediationRetriggerTests(PrRemediationIntegrationFixture):
         self.repo.update(repo_root=str(checkout), worktree_root=str(trees))
         with fixture_database.connect(self.db_path) as conn:
             conn.execute("UPDATE repos SET repo_root=?,worktree_root=?", (str(checkout), str(trees)))
+            historical = json.loads(
+                conn.execute("SELECT payload_json FROM github_events WHERE event_fingerprint='old-repair'").fetchone()[
+                    0
+                ]
+            )
+            historical.update(head_sha=self.old_head, base_sha=self.old_head)
+            conn.execute(
+                "UPDATE github_events SET payload_json=? WHERE event_fingerprint='old-repair'",
+                (json.dumps(historical),),
+            )
         self.request()
         if stale_remote:
             ref = "refs/pull/13/head" if stale_remote == "head" else "refs/heads/main"
@@ -198,6 +209,46 @@ class TerminalRemediationRetriggerTests(PrRemediationIntegrationFixture):
         self.assertTrue(ensure_dispatch_worktree(self.db_path, self.repo, item["task_info"], planned).get("ok", True))
         self.git(self.tree, "reset", "--hard", self.old_head)
         self.assertFalse(ensure_dispatch_worktree(self.db_path, self.repo, item["task_info"], planned)["ok"])
+
+    def test_dispatch_refuses_missing_pinned_checkout_when_remote_matches_historical_event(self):
+        item = self.prepare_real_retry()[0]
+        shutil.rmtree(self.tree)
+        self.git(Path(self.repo["repo_root"]), "worktree", "prune")
+        upstream = Path(self.tmp.name) / "upstream"
+        self.git(upstream, "update-ref", "refs/pull/13/head", self.old_head)
+        self.git(upstream, "update-ref", "refs/heads/main", self.old_head)
+
+        result = ensure_dispatch_worktree(self.db_path, self.repo, item["task_info"], item["worktree_result"])
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "blocked_unavailable_worktree")
+        self.assertFalse(self.tree.exists())
+        with fixture_database.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT worktree_path,branch_name,metadata_json FROM attempts WHERE attempt_id=?",
+                (item["task_info"]["attempt_id"],),
+            ).fetchone()
+            self.assertEqual((row[0], row[1]), (str(self.tree), "codex/fix"))
+            self.assertEqual(
+                json.loads(row[2])["pr_snapshot"],
+                {
+                    "observed_head_sha": self.snapshot["head_sha"],
+                    "observed_base_sha": self.snapshot["base_sha"],
+                    "base_ref": "refs/robert/prs/pr-13-base",
+                },
+            )
+            self.assertEqual(execution_control.get_binding(conn, "remediation_episode", "old-episode"), self.original)
+
+    def test_dispatch_refuses_missing_pinned_checkout_with_only_workspace_identity(self):
+        item = self.prepare_real_retry()[0]
+        planned = {key: item["worktree_result"][key] for key in ("worktree_path", "branch_name")}
+        self.git(Path(self.repo["repo_root"]), "worktree", "remove", str(self.tree))
+
+        result = ensure_dispatch_worktree(self.db_path, self.repo, item["task_info"], planned)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "blocked_unavailable_worktree")
+        self.assertFalse(self.tree.exists())
 
     def test_retrigger_pins_current_snapshot_and_preserves_closed_episode(self):
         result = self.request()

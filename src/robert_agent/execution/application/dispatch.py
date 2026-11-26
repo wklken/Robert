@@ -316,7 +316,7 @@ def ensure_dispatch_worktree(db_path, repo, task_info, worktree_result):
         if not error and snapshot and not allow_dirty:
             error = git_workspace.check_pr_snapshot(worktree_path, snapshot)
         return {**worktree_result, "ok": False, "status": error} if error else worktree_result
-    if ownership and ownership["is_continuation"]:
+    if snapshot or (ownership and ownership["is_continuation"]):
         return {**worktree_result, "ok": False, "status": "blocked_unavailable_worktree"}
 
     with closing(db_database.connect(db_path)) as conn:
