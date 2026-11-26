@@ -1,6 +1,6 @@
 """Controlled worker used by terminal monitor and fixture startup tests."""
 
-import subprocess
+from subprocess import Popen
 import sys
 import time
 
@@ -12,7 +12,7 @@ class TerminalWorkerFixture(TemporaryWorkspace):
     def start_worker(self):
         ready = self.root / "worker.ready"
         code = f"import time; from pathlib import Path; Path({str(ready)!r}).touch(); time.sleep(120)"
-        self.worker = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
+        self.worker = Popen([sys.executable, "-c", code], start_new_session=True)
         self.addCleanup(self.stop_worker)
         deadline = time.monotonic() + 5
         while not ready.exists() and self.worker.poll() is None and time.monotonic() < deadline:

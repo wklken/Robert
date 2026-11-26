@@ -378,7 +378,7 @@ class TerminalMonitorTests(TerminalWorkerFixture):
 class TerminalWorkerStartupTests(TerminalWorkerFixture):
     def test_delayed_child_is_ready_before_identity_capture(self):
         ready = self.root / "worker.ready"
-        popen = terminal_worker.subprocess.Popen
+        popen = terminal_worker.Popen
         capture = terminal_worker.identity.capture_process_identity
 
         def delayed_child(command, **kwargs):
@@ -387,23 +387,24 @@ class TerminalWorkerStartupTests(TerminalWorkerFixture):
 
         def capture_ready_worker(pid):
             self.assertTrue(ready.exists(), "identity captured before worker was ready")
-            return capture(pid)
+            return capture(pid, proc_root=self.root / "missing-proc")
 
         with (
-            patch.object(terminal_worker.subprocess, "Popen", side_effect=delayed_child),
+            patch.object(terminal_worker, "Popen", side_effect=delayed_child),
             patch.object(terminal_worker.identity, "capture_process_identity", side_effect=capture_ready_worker),
         ):
             self.start_worker()
+        self.assertEqual(self.dispatch["identity_source"], terminal_worker.identity.IDENTITY_SOURCE_PS)
         self.assertEqual(terminal_worker.identity.inspect_recorded_identity(self.dispatch), "alive_same")
 
     def test_child_exit_before_readiness_fails_without_capturing_identity(self):
-        popen = terminal_worker.subprocess.Popen
+        popen = terminal_worker.Popen
 
         def exiting_child(command, **kwargs):
             return popen([*command[:2], "raise SystemExit(0)"], **kwargs)
 
         with (
-            patch.object(terminal_worker.subprocess, "Popen", side_effect=exiting_child),
+            patch.object(terminal_worker, "Popen", side_effect=exiting_child),
             patch.object(terminal_worker.identity, "capture_process_identity") as capture,
         ):
             with self.assertRaisesRegex(AssertionError, "worker did not become ready"):
@@ -413,13 +414,13 @@ class TerminalWorkerStartupTests(TerminalWorkerFixture):
         self.assertEqual(self.worker.poll(), 0)
 
     def test_readiness_timeout_fails_and_cleans_up_live_child(self):
-        popen = terminal_worker.subprocess.Popen
+        popen = terminal_worker.Popen
 
         def unready_child(command, **kwargs):
             return popen([*command[:2], "import time; time.sleep(120)"], **kwargs)
 
         with (
-            patch.object(terminal_worker.subprocess, "Popen", side_effect=unready_child),
+            patch.object(terminal_worker, "Popen", side_effect=unready_child),
             patch.object(terminal_worker.time, "monotonic", side_effect=[0, 0, 5]),
             patch.object(terminal_worker.time, "sleep"),
             patch.object(terminal_worker.identity, "capture_process_identity") as capture,
