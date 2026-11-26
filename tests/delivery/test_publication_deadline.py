@@ -20,6 +20,7 @@ class PublicationDeadlineTests(unittest.TestCase):
                 effects.trusted_head_owner_for_intent(None, {"metadata_json": "{}"}, {"repo": "x/y"}, runner)
 
     def test_reconciliation_deadline_preserves_executing_intent_and_budget(self):
+        import json
         import sqlite3
         from contextlib import closing
         from tests.support.publication_reconcile import PublicationReconcileFixture, Completed
@@ -37,14 +38,18 @@ class PublicationDeadlineTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             publish.publish_ready_actions(fixture.db_path, run_command=crash_after_write)
         with closing(sqlite3.connect(fixture.db_path)) as conn:
-            before = conn.execute("SELECT metadata_json FROM github_actions").fetchone()[0]
+            before = json.loads(conn.execute("SELECT metadata_json FROM github_actions").fetchone()[0])
         with self.assertRaises(ControlDeadlineExceeded):
             publish.publish_ready_actions(
                 fixture.db_path, run_command=mock.Mock(side_effect=ControlDeadlineExceeded(["gh", "api"], 0))
             )
         with closing(sqlite3.connect(fixture.db_path)) as conn:
             self.assertEqual(conn.execute("SELECT status FROM publication_intents").fetchone()[0], "executing")
-            self.assertEqual(conn.execute("SELECT metadata_json FROM github_actions").fetchone()[0], before)
+            after = json.loads(conn.execute("SELECT metadata_json FROM github_actions").fetchone()[0])
+        diagnostics = after.pop("publication_diagnostics")
+        self.assertEqual(diagnostics[:-1], before.pop("publication_diagnostics"))
+        self.assertEqual(diagnostics[-1]["exception_type"], "TimeoutExpired")
+        self.assertEqual(after, before)
 
     def test_reconcile_queries_propagate_deadline(self):
         import json

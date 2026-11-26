@@ -4,6 +4,9 @@ from robert_agent.persistence import database as db_database
 
 from robert_agent.persistence import records as db_records
 from robert_agent.persistence.queries import repos as db_read_repos
+from robert_agent.persistence.queries import github_actions as action_queries
+from robert_agent.foundation.timestamps import utc_timestamp
+from robert_agent.delivery import values as publication_values
 from contextlib import closing
 import os
 import subprocess
@@ -28,33 +31,54 @@ def publish(config_path, *, dry_run=False):
     cutover = result_cutover.check(config["db_path"]) if dry_run else result_cutover.prepare(config["db_path"])
     if not cutover["ok"]:
         return cutover
-    results, repo_ids = [], []
+    results, repo_ids, repo_accounts = [], [], {}
     for repo in config["repos"]:
         with closing(db_database.connect(config["db_path"])) as conn:
             row = db_records.first(db_read_repos.find_repo_id_by_full_name(conn, repo["full_name"]))
         if row:
             repo_ids.append(row[0])
+            repo_accounts[row[0]] = repo["github_account"]
+    cooldowns = {}
     if not dry_run:
         notify.deliver_pending(config["db_path"], repo_ids=repo_ids, config=config)
         receipt_notifications.deliver_pending(config, repo_ids=repo_ids)
         tapd_notifications.deliver_pending(config)
-        session = github_read.GitHubReadSession(
-            config["db_path"],
-            account=config["repos"][0]["github_account"],
-            host=os.environ.get("GH_HOST", "github.com"),
-        )
-        try:
-            if not github_budget.budget(session, config):
-                return {
-                    "ok": False,
-                    "status": "core_rate_limit_floor",
-                    "retry_after_seconds": session.poll_interval_seconds or 60,
-                }
-        except ControlDeadlineExceeded:
-            raise
-        except (subprocess.SubprocessError, OSError, ValueError):
-            return {"ok": False, "status": "rate_limit_check_failed"}
-    if not dry_run:
+        checked_at = publication_values.now()
+        with closing(db_database.connect(config["db_path"])) as conn:
+            for account in dict.fromkeys(repo["github_account"] for repo in config["repos"]):
+                cooldown = action_queries.publication_cooldown_until(conn, account, checked_at)
+                if cooldown:
+                    cooldowns[account] = cooldown
+        repo_ids = [repo_id for repo_id in repo_ids if repo_accounts[repo_id] not in cooldowns]
+        accounts = [
+            account
+            for account in dict.fromkeys(repo["github_account"] for repo in config["repos"])
+            if account not in cooldowns
+        ]
+        if not accounts:
+            cooldown = min(cooldowns.values(), key=utc_timestamp)
+            return {
+                "ok": True,
+                "status": "rate_limited",
+                "next_retry_at": cooldown,
+                "retry_after_seconds": max(0, (utc_timestamp(cooldown) - utc_timestamp(checked_at)).total_seconds()),
+            }
+        for account in accounts:
+            session = github_read.GitHubReadSession(
+                config["db_path"], account=account, host=os.environ.get("GH_HOST", "github.com")
+            )
+            try:
+                if not github_budget.budget(session, config):
+                    return {
+                        "ok": False,
+                        "status": "core_rate_limit_floor",
+                        "retry_after_seconds": session.poll_interval_seconds or 60,
+                    }
+            except ControlDeadlineExceeded:
+                raise
+            except (subprocess.SubprocessError, OSError, ValueError):
+                return {"ok": False, "status": "rate_limit_check_failed"}
+    if not dry_run and not cooldowns:
         proposal_feedback.deliver_pending(config)
     for repo_id in repo_ids:
         results.append(
@@ -71,5 +95,6 @@ def publish(config_path, *, dry_run=False):
         "ok": all(result.get("ok") for result in results),
         "status": "published",
         "repo_count": len(results),
+        "rate_limited_accounts": list(cooldowns),
         "failure_scope": "task" if any(not result.get("ok") for result in results) else None,
     }

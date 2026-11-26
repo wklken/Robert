@@ -13,5 +13,8 @@ These rules apply to this directory and its descendants. Follow the
 - Preserve per-task publication locks, durable intent keys and receipts. If an
   external effect may have started, reconcile against the remote before retrying.
   Keep dry-run free of publication writes and expose only redacted diagnostics.
+  Publication transport evidence stays bounded and survives receipt recovery.
+  Known network/rate-limit retries retain native budgets and provider deadlines;
+  they do not create new business or recovery authority.
 - Test contract rejection, spool replay and stale scope. Exercise duplicate
   publication, ambiguous effects and receipt recovery with controlled responses.

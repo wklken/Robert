@@ -1,5 +1,6 @@
 """application delivery publish responsibilities."""
 
+from robert_agent.adapters.github.publication_transport import PublicationTransport
 from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.foundation.contracts.delivery import GitHubActionType, PublicationStatus, PublishStatus
 from robert_agent.foundation.contracts.supervision import RecoveryActionKind
@@ -135,6 +136,7 @@ def publish_ready_actions(
                 db_write_wakeups.update_for_publish_ready_actions(
                     retry_conn, publication_values.now(), action["task_id"]
                 )
+            transport = PublicationTransport(bounded_command)
             remote_effect_started = False
             supervision = {}
             try:
@@ -211,7 +213,7 @@ def publish_ready_actions(
                             }
                         )
                     continue
-                current = publication_intents.prepare_publication_intent(db_path, action["action_id"], bounded_command)
+                current = publication_intents.prepare_publication_intent(db_path, action["action_id"], transport)
                 if current["state"] == "missing":
                     if supervision.get("claim"):
                         with closing(db_database.connect(db_path)) as conn, conn:
@@ -347,9 +349,10 @@ def publish_ready_actions(
                     reconciliation = publication_reconcile.classify_remote_state(
                         action,
                         reconcile_scope if scope is not None else None,
-                        bounded_command,
+                        transport,
                         tapd=tapd,
                     )
+                    now = publication_values.now()
                     if reconciliation["status"] == "confirmed_effect":
                         result = {
                             "ok": True,
@@ -372,7 +375,9 @@ def publish_ready_actions(
                     if publication_reconcile.read_failed(reconciliation):
                         # Only reads are retried; exhausting their budget falls through to attention.
                         with closing(db_database.connect(db_path)) as conn, conn:
-                            retry = publication_outcomes.schedule_reconcile_retry(conn, action, reconciliation, now)
+                            retry = publication_outcomes.schedule_reconcile_retry(
+                                conn, action, {**reconciliation, **transport.failure_facts()}, now
+                            )
                             if retry:
                                 supervision_publication.finish(
                                     conn,
@@ -597,13 +602,14 @@ def publish_ready_actions(
                         )
                     result = publication_effects.publish_action(
                         action,
-                        bounded_command,
+                        transport,
                         conn=conn,
                         source_sha=current.get("source_sha"),
                         trusted_head_owner=current.get("head_owner"),
                         tapd=tapd,
                         **guard_kwargs,
                     )
+                result = {**result, **transport.failure_facts()} if result.get("status") != "published" else result
                 now = publication_values.now()
                 if result["status"] == "supervision_fence_rejected":
                     with closing(db_database.connect(db_path)) as conn, conn:
@@ -727,7 +733,11 @@ def publish_ready_actions(
                 with closing(db_database.connect(db_path)) as conn, conn:
                     now = publication_values.now()
                     publication_outcomes.record_failure(
-                        conn, action, result, now, reconcile_required=remote_effect_started
+                        conn,
+                        action,
+                        {**result, **transport.failure_facts()},
+                        now,
+                        reconcile_required=remote_effect_started,
                     )
                     supervision_publication.finish(
                         conn,
@@ -749,7 +759,11 @@ def publish_ready_actions(
                 with closing(db_database.connect(db_path)) as conn, conn:
                     now = publication_values.now()
                     publication_outcomes.record_failure(
-                        conn, action, result, now, reconcile_required=remote_effect_started
+                        conn,
+                        action,
+                        {**result, **transport.failure_facts()},
+                        now,
+                        reconcile_required=remote_effect_started,
                     )
                     supervision_publication.finish(
                         conn,
@@ -762,6 +776,10 @@ def publish_ready_actions(
                 failures.append({"action_id": action["action_id"], "safe_error": result["safe_error"], "command": []})
                 if action["result_id"]:
                     failed_result_ids.add(action["result_id"])
+            finally:
+                if transport.diagnostics:
+                    with closing(db_database.connect(db_path)) as conn, conn:
+                        publication_outcomes.record_diagnostics(conn, action, transport.diagnostics)
     return {
         "ok": failed_count == 0,
         "status": "published" if failed_count == 0 else "publish_failed",

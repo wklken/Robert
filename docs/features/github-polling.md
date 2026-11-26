@@ -158,3 +158,30 @@ Each `scan_completed` daemon event contains `github_reads`, grouped by account a
 Split event-to-publish latency into discovery wait, local queue wait, worker
 execution, and publication when diagnosing a slow task. Notification probes,
 quota probes, reconciliation and optional CI reads add work beyond discovery.
+
+## Publication failures and transport logs
+
+Audited publication actions retain a bounded diagnostic journal in their
+`publication_diagnostics` metadata. Inspect it with
+`robert task show TASK_ID --output json` under
+`data.inspection.publication[].diagnostics`. Each record contains the timestamp,
+duration, safe command/request and response excerpts, exit code or exception,
+HTTP status and useful response headers such as `X-GitHub-Request-Id`.
+Credentials, cookies and sensitive fields are removed before excerpts are
+truncated or saved. The latest 12 command records survive both failed attempts
+and successful recovery; they do not replace the final delivery receipt.
+
+Network failures use bounded backoff through later publisher cycles. A response
+that might follow a successful write is reconciled with GitHub before another
+write, so losing the response cannot create a duplicate comment or PR. GitHub
+rate limits honor `Retry-After` seconds or HTTP dates and, when
+`X-RateLimit-Remaining` is zero, the UTC epoch in `X-RateLimit-Reset`. The latest
+applicable deadline wins. Secondary limits without a usable hint wait at least
+one minute and increase exponentially. Provider waits may exceed ten minutes
+without exhausting the retry solely due to waiting. Attempts remain bounded,
+and account cooldowns also defer other publication requests and the budget probe.
+
+The publisher requests GitHub CLI HTTP diagnostics only for its own commands,
+without changing the process environment globally. Git failures and partial
+stdout/stderr from timeouts are also recorded. An HTTP response, command exit or
+live worker alone does not establish that the intended remote effect exists.

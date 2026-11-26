@@ -7,7 +7,7 @@ from robert_agent.persistence.expressions import sql_constant
 
 from robert_agent.persistence.catalog import tables
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 
 from robert_agent.models.execution import ExecutionSubject
 
@@ -117,6 +117,53 @@ def earlier_action(earlier, action):
     )
 
 
+def publication_rate_limit_deadline(action):
+    """The latest provider floor survives write exhaustion and reconciliation failures."""
+    candidates = []
+    for prefix in ("$.publish", "$.publish.reconcile_retry"):
+        floor = func.json_extract(action.c.metadata_json, sql_constant(prefix + ".retry_not_before"))
+        due = case(
+            (
+                func.json_extract(action.c.metadata_json, sql_constant(prefix + ".error_class"))
+                == sql_constant("rate_limited"),
+                func.json_extract(action.c.metadata_json, sql_constant(prefix + ".next_retry_at")),
+            ),
+        )
+        candidates.extend((floor, due))
+    latest = func.max(*(func.coalesce(func.julianday(value), sql_constant(-1)) for value in candidates))
+    return case(*((func.julianday(value) == latest, value) for value in candidates))
+
+
+def publication_rate_limit_clear(action, now):
+    """One account's provider cooldown applies across its pending publications."""
+    limited = tables["github_actions"].alias("limited_publication")
+    limited_task = tables["tasks"].alias("limited_task")
+    limited_stream = tables["workstreams"].alias("limited_stream")
+    limited_repo = tables["repos"].alias("limited_repo")
+    owner_task = tables["tasks"].alias("publication_account_task")
+    owner_stream = tables["workstreams"].alias("publication_account_stream")
+    owner_repo = tables["repos"].alias("publication_account_repo")
+    cooldown = publication_rate_limit_deadline(limited)
+    blocked = (
+        select(1)
+        .select_from(
+            limited.join(limited_task, limited_task.c.task_id == limited.c.task_id)
+            .join(limited_stream, limited_stream.c.workstream_id == limited_task.c.workstream_id)
+            .join(limited_repo, limited_repo.c.repo_id == limited_stream.c.repo_id)
+            .join(owner_repo, owner_repo.c.github_account == limited_repo.c.github_account)
+            .join(owner_stream, owner_stream.c.repo_id == owner_repo.c.repo_id)
+            .join(owner_task, owner_task.c.workstream_id == owner_stream.c.workstream_id)
+        )
+        .where(
+            owner_task.c.task_id == action.c.task_id,
+            func.julianday(cooldown) > func.julianday(now),
+        )
+        .correlate_except(limited, limited_task, limited_stream, limited_repo, owner_task, owner_stream, owner_repo)
+        .exists()
+    )
+    return ~blocked
+
+
 def publication_ready(action, now):
     """Same eligibility before paging, recovery checks, and scheduler probes."""
     process = tables["attempts"].alias("publication_process")
@@ -183,6 +230,7 @@ def publication_ready(action, now):
     return and_(
         action.c.audit_status == sql_constant(AuditStatus.ACCEPTED.value),
         action.c.publish_status == sql_constant(PublishStatus.NOT_PUBLISHED.value),
+        publication_rate_limit_clear(action, now),
         ~running,
         or_(
             func.coalesce(

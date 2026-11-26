@@ -18,6 +18,7 @@ from robert_agent.persistence.expressions import sql_constant
 
 from robert_agent.persistence.predicates import (
     publication_ready,
+    publication_rate_limit_deadline,
     execution_attention_free,
     runnable_task,
     earlier_action,
@@ -917,3 +918,22 @@ def find_tapd_comment_ids(conn, url_prefix):
         .set_label_style(LABEL_STYLE_NONE)
     )
     return statements.read(conn, query, {"p0": url_prefix})
+
+
+def publication_cooldown_until(conn, account, now):
+    """Return the latest pending provider cooldown for this GitHub account."""
+    action, task, stream, repo = (tables[name] for name in ("github_actions", "tasks", "workstreams", "repos"))
+    deadline = publication_rate_limit_deadline(action)
+    query = (
+        select(deadline)
+        .select_from(
+            action.join(task, task.c.task_id == action.c.task_id)
+            .join(stream, stream.c.workstream_id == task.c.workstream_id)
+            .join(repo, repo.c.repo_id == stream.c.repo_id)
+        )
+        .where(repo.c.github_account == account, func.julianday(deadline) > func.julianday(now))
+        .order_by(func.julianday(deadline).desc())
+        .limit(1)
+    )
+    row = next(iter(statements.read(conn, query)), None)
+    return row[0] if row else None

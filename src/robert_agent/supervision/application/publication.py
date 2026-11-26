@@ -1,5 +1,6 @@
 """Supervision fences around the existing publisher's exact action and task lock."""
 
+from robert_agent.delivery import retry as publication_retry
 from robert_agent.foundation.contracts.supervision import SupervisionMode
 
 from robert_agent.foundation.contracts.delivery import PublicationStatus
@@ -80,6 +81,14 @@ def begin(db, action, config, now):
         kind = (
             RecoveryActionKind.PUBLICATION_RECONCILE.value if executing else RecoveryActionKind.PUBLICATION_RETRY.value
         )
+        prior = json.loads(action["metadata_json"] or "{}").get("publish") or {}
+        managed = supervision_store.has_schema(conn) and db_records.first(
+            db_read_supervision_recovery_actions.find_for_begin_4(conn, action["task_id"])
+        )
+        if not repair and not needs_claim and not managed and publication_retry.automatic_retry(prior, now):
+            # Continuing the audited publication within its native transport budget
+            # grants no new business work. Unknown effects still reconcile first.
+            return {"status": "legacy", "guard_required": bool(config), "reconcile_only": False}
         native_retry = bool(
             executing
             or needs_claim

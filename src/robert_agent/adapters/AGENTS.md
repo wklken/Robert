@@ -15,3 +15,6 @@ These rules apply to this directory and its descendants. Follow the
 - Test protocol shape and failure translation at the adapter. Use controlled
   fixtures for network responses and real local processes or repositories
   when testing OS or Git behavior.
+- `github/publication_transport.py` captures bounded, redacted command and HTTP
+  evidence and proven failure facts. It owns no retries or persistence;
+  publication policy and durable journals belong to delivery.

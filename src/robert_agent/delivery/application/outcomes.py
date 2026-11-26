@@ -13,6 +13,7 @@ from robert_agent.delivery import contract as result_contract
 from robert_agent.workflows.review import publish as review_publish
 from robert_agent.workflows.vote import publish as vote_publish
 from robert_agent.workflows import pr_remediation as remediation
+from robert_agent.delivery import retry as publication_retry
 from robert_agent.execution import retry as retry_policy
 from robert_agent.execution import operations as execution_operations
 from robert_agent.persistence import execution_control as execution_store
@@ -22,6 +23,7 @@ from robert_agent.delivery.application import tapd_comments
 from robert_agent.delivery import intents as intent_facts
 from robert_agent.delivery import notifications as publication_notifications
 from robert_agent.delivery import values as publication_values
+from robert_agent.adapters.github.publication_transport import safe_diagnostics
 
 
 def insert_workflow_attention_notification(conn, action, reason_code, now):
@@ -85,9 +87,14 @@ def schedule_reconcile_retry(conn, action, reconciliation, now):
     if not isinstance(previous, dict):
         return None
     reason_code = str(reconciliation.get("reason_code", ""))[:96]
-    state = retry_policy.failure_state(previous, reason_code, now)
-    if not state["retryable"]:
-        return None
+    state = publication_retry.failure_state(
+        previous,
+        reason_code,
+        now,
+        error_class=reconciliation.get("error_class"),
+        response_headers=reconciliation.get("response_headers"),
+        http_status=reconciliation.get("http_status"),
+    )
     # A publish_failed status keeps later actions of the result behind this unresolved effect.
     metadata["publish"] = {
         **prior,
@@ -95,17 +102,12 @@ def schedule_reconcile_retry(conn, action, reconciliation, now):
         "reconcile_required": True,
         "next_retry_at": state["next_retry_at"],
         "safe_error": f"Publication reconciliation read failed: {reason_code}",
-        "reconcile_retry": {
-            "attempt_count": state["attempt_count"],
-            "first_failed_at": state["first_failed_at"],
-            "failed_at": now,
-            "reason_code": reason_code,
-        },
+        "reconcile_retry": {**state, "query_reason_code": reason_code},
     }
     db_write_github_actions.set_metadata_json_by_action_id(
         conn, publication_values.encode_json(metadata), action["action_id"]
     )
-    return state
+    return state if state["retryable"] else None
 
 
 def mark_skipped(conn, action, result, now):
@@ -222,10 +224,22 @@ def record_failure(conn, action, result, now, *, reconcile_required=False):
             prior["attempt_count"] = max(0, int(prior.get("attempt_count", 0)) - 1)
         except (ValueError, TypeError, OverflowError):
             prior["attempt_count"] = retry_policy.MAX_ATTEMPTS
-    state = retry_policy.failure_state(prior, result.get("safe_error"), now, retryable=result.get("retryable", True))
+    state = publication_retry.failure_state(
+        prior,
+        result.get("safe_error"),
+        now,
+        retryable=result.get("retryable", True),
+        error_class=result.get("error_class"),
+        response_headers=result.get("response_headers"),
+        http_status=result.get("http_status"),
+    )
     # Authentication, permission, and branch rejections establish failure.
     # Only an ambiguous transport outcome needs a final reconciliation pass.
-    reconcile_required = reconcile_required and state["error_class"] == "transient_failure"
+    reconcile_required = reconcile_required and state["error_class"] in {
+        "transient_failure",
+        "network_failure",
+        "rate_limited",
+    }
     from robert_agent.security import redaction
 
     safe = redaction.redact_and_truncate(str(result.get("safe_error", "")), 2000)
@@ -236,11 +250,14 @@ def record_failure(conn, action, result, now, *, reconcile_required=False):
     }
     metadata["publish"] = {
         **state,
+        **({"reconcile_retry": prior["reconcile_retry"]} if isinstance(prior.get("reconcile_retry"), dict) else {}),
         "reconcile_required": bool(reconcile_required),
         "status": "publish_failed",
         "failed_at": now,
         "safe_error": result.get("safe_error", ""),
         "command": result.get("command", []),
+        "http_status": result.get("http_status"),
+        "response_headers": result.get("response_headers", {}),
     }
     db_write_github_actions.set_metadata_json_by_action_id(
         conn, publication_values.encode_json(metadata), action["action_id"]
@@ -280,4 +297,17 @@ def record_remediation_publish_outcome(conn, action, result, now):
         publish_status=result["status"],
         result_head_sha=result.get("result_head_sha"),
         now=now,
+    )
+
+
+def record_diagnostics(conn, action, diagnostics):
+    """Retain bounded sanitized command journals independently of the final receipt."""
+    row = db_records.first(db_read_github_actions.find_metadata_json_by_action_id(conn, action["action_id"]))
+    if not row:
+        return
+    metadata = publication_values.decode_json(row[0])
+    previous = safe_diagnostics(metadata.get("publication_diagnostics", []))
+    metadata["publication_diagnostics"] = [*previous, *safe_diagnostics(diagnostics)][-12:]
+    db_write_github_actions.set_metadata_json_by_action_id(
+        conn, publication_values.encode_json(metadata), action["action_id"]
     )
