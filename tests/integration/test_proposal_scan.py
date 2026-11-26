@@ -190,6 +190,31 @@ class ProposalScanTests(unittest.TestCase):
         self.assertEqual(pending["repository"], "test/repo")
         self.assertEqual(pending["report"]["feasibility"], "ready")
 
+    def test_scheduled_proposal_stays_blocked_after_existing_formal_task_finishes(self):
+        self.config["proposer"].update(schedule={"enabled": True, "analysis_limit": 10}, tapd_projects=[])
+        with patch.object(proposal_sources.issues, "has_open_pull_request", return_value=False):
+            proposal_scan.scan_daily(self.config, now="2026-11-22T01:00:00Z")
+            with closing(sqlite3.connect(self.db)) as conn, conn:
+                (source_key,) = conn.execute("SELECT source_key FROM proposals").fetchone()
+                conn.execute(
+                    "INSERT INTO workstreams(workstream_id,repo_id,lifecycle,active_task_id,created_at,updated_at) "
+                    "VALUES (?,'repo:test/repo','active','formal','2026-11-22','2026-11-22')",
+                    (source_key,),
+                )
+                conn.execute(
+                    "INSERT INTO tasks(task_id,workstream_id,lifecycle,created_at,updated_at) "
+                    "VALUES ('formal',?,'running','2026-11-22','2026-11-22')",
+                    (source_key,),
+                )
+            proposal_scan.scan_daily(self.config, now="2026-11-23T01:00:00Z")
+            self.assertEqual([item["status"] for item in read(self.db)], ["blocked"])
+            with closing(sqlite3.connect(self.db)) as conn, conn:
+                conn.execute("UPDATE tasks SET lifecycle='completed' WHERE task_id='formal'")
+                conn.execute("UPDATE workstreams SET lifecycle='completed',active_task_id=NULL")
+            proposal_scan.scan_daily(self.config, now="2026-11-24T01:00:00Z")
+        self.assertEqual([item["status"] for item in read(self.db)], ["blocked"])
+        self.assertEqual(read(self.db, status="today"), [])
+
     def test_scan_records_gateway_usage_when_assessment_fails_validation(self):
         def response(**kwargs):
             kwargs["on_usage"](

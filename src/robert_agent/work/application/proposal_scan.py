@@ -45,12 +45,14 @@ def _eligible(previous, fingerprint=None):
     )
 
 
-def _source_occupied(conn, source, previous):
+def _source_occupied(conn, source, previous, *, scheduled=False):
     if previous and previous.get("investigation_task_id"):
         return queries.formal_work_exists(conn, previous["source_key"])
     if previous and previous["status"] == "blocked":
         binding = queries.work_binding(conn, source["source_key"])
-        return bool(binding and binding["active_task_id"])
+        return bool(binding and binding["active_task_id"]) or (
+            scheduled and queries.formal_work_exists(conn, source["source_key"])
+        )
     if source["provider"] == "tapd" and not source.get("repository"):
         return queries.known_tapd_source(conn, source["identity"])
     return queries.known_source(conn, [source["source_key"]])
@@ -479,7 +481,7 @@ def scan_daily(config, *, now):
             latest = queries.observation(conn, row["source_identity"])
             if not latest or latest["version"] != row["version"]:
                 continue
-            if current is None or _source_occupied(conn, current, latest):
+            if current is None or _source_occupied(conn, current, latest, scheduled=True):
                 if latest["status"] != "blocked":
                     store.revise(
                         conn,
