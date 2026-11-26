@@ -34,6 +34,21 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
         self.assertIn(b"discovery inventories", Path(frozen["prompt_path"]).read_bytes())
         self.assertEqual(review_workspace.freeze_context(prepared), frozen)
 
+    def test_new_reviews_freeze_bounded_runtime_guidance(self):
+        prepared = self.prepare("bounded-runtime")
+        frozen = self.freeze(prepared)
+        self.assertEqual(frozen["prompt_version"], 3)
+        self.assertIn(b"Do not search unrelated checkouts", Path(frozen["prompt_path"]).read_bytes())
+        self.assertEqual(review_workspace.freeze_context(prepared), frozen)
+
+    def test_version_two_review_keeps_its_original_guidance_on_recovery(self):
+        prepared = self.prepare("version-two")
+        prepared["prompt_version"] = 2
+        frozen = self.freeze(prepared)
+        self.assertIn(b"executable verification is still required", Path(frozen["prompt_path"]).read_bytes())
+        self.assertEqual(review_workspace.freeze_context(prepared), frozen)
+        self.assertEqual(self.prepare("version-two"), frozen)
+
     def test_legacy_adoption_refuses_changed_source_context_and_prompt_hash(self):
         for changed in ("source", "context", "prompt"):
             with self.subTest(changed=changed):

@@ -75,7 +75,7 @@ class ReviewWorkspaceFixture(unittest.TestCase):
         legacy = Path(__file__).parents[1] / "fixtures/prompts/review-evaluate-model-preparation-v1.md"
 
         def resource(*parts):
-            if parts == ("prompts", "stages", "review-evaluate.md"):
+            if parts == ("prompts", "stages", "review-evaluate-controller-inventory-v2.md"):
                 return legacy
             return current_resource(*parts)
 
