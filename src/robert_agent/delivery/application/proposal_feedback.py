@@ -11,16 +11,17 @@ from robert_agent.delivery.application import effects, tapd_comments
 from robert_agent.delivery.comment_receipts import comment_records, match_comment
 from robert_agent.delivery.lock import task_publication_lock
 from robert_agent.execution import retry
-from robert_agent.foundation import commands, values
+from robert_agent.foundation import commands, tapd_identity, values
 from robert_agent.persistence import database, transactions
-from robert_agent.persistence.queries import proposal_feedback as queries
+from robert_agent.persistence.queries import proposal_feedback as queries, proposals as proposal_queries
 from robert_agent.persistence.stores import proposal_feedback as store
-from robert_agent.work import proposal_feedback as feedback, tapd_policy
+from robert_agent.work import proposal_feedback as feedback, proposal_requests, tapd_policy
 
 
 _TEMPLATES = {
     "created": "已生成。请在 Robert Web 查看审批和进展。",
-    "admitted": "已在 Robert Web 批准，工作已受理。",
+    "admitted": "已在 Robert Web 批准，工作已受理，等待执行。",
+    "started": "已开始处理。",
     "operator_question": "等待进一步澄清，请查看单据讨论。",
     "execution_failed": "当前需要操作员检查，请查看 Robert Web。",
     "completed": "已完成，结论可在本单据中查看。",
@@ -43,12 +44,21 @@ def due(conn, config, now):
     setting = config.get("proposer", {})
     if not setting.get("enabled") or not setting.get("publish_comments"):
         return False
-    return bool(queries.pending(conn, now, 1) or queries.unreported(conn, *_scope(config), limit=1))
+    return bool(
+        queries.pending(conn, now, 1)
+        or queries.unreported(
+            conn, *_scope(config), limit=1, scheduled=setting.get("schedule", {}).get("enabled", False)
+        )
+    )
 
 
 def _collect(conn, config):
-    for row in queries.unreported(conn, *_scope(config)):
-        source = values.json_object(row["source_json"])
+    scheduled = config["proposer"].get("schedule", {}).get("enabled", False)
+    for row in queries.unreported(conn, *_scope(config), scheduled=scheduled):
+        decision = proposal_queries.get_decision(conn, row["proposal_id"])
+        source = (
+            proposal_requests.approved_source(row, decision) if decision else values.json_object(row["source_json"])
+        )
         event = values.json_object(row["event_json"])
         feedback.record_comment(
             conn,
@@ -60,6 +70,16 @@ def _collect(conn, config):
             row["occurred_at"],
             pr_url=event.get("pr_url") or event.get("url"),
         )
+        if row["event_type"] == "started" and source["provider"] == "tapd":
+            feedback.record_comment(
+                conn,
+                f"proposal-comment:{row['proposal_id']}:status",
+                "status_sync",
+                row["proposal_id"],
+                row["revision"],
+                source,
+                row["occurred_at"],
+            )
 
 
 def _safe_pr(metadata):
@@ -140,6 +160,66 @@ def _tapd_comment(config, metadata, marker, text, runner):
     return "failed", {"reason_code": "tapd_comment_unconfirmed"}
 
 
+def _tapd_update(config, metadata, event, runner):
+    publisher = tapd_comments.publisher_for(config, runner)
+    target = tapd_comments.ticket_target(metadata["target_url"], publisher.settings) if publisher else None
+    project = tapd_policy.project_for(config["tapd"], metadata["project_key"])
+    if (
+        not target
+        or not project
+        or target[0] != project["workspace_id"]
+        or metadata["target_url"] != tapd_identity.ticket_url(project["host"], *target)
+        or not any(repo["full_name"] == metadata["repository"] for repo in config["repos"])
+    ):
+        return "skipped", {"reason_code": "source_out_of_scope"}
+    setting = config["proposer"]
+    client = publisher.client()
+    item = client.get_item(*target)
+    if item.archived:
+        return "skipped", {"reason_code": "source_ended"}
+    kind = target[1]
+    started = setting.get("tapd_started_states", {}).get(kind)
+    stored_labels = tapd_policy.split_labels(item.labels)
+    selected, repository, label = tapd_policy.select_repository(item.labels, project["label_rules"])
+    expected_label = metadata.get("repository_label")
+    if selected == "conflict" or (
+        selected == "selected" and (repository, label) != (metadata["repository"], expected_label)
+    ):
+        return "skipped", {"reason_code": "source_repository_changed"}
+    if not any(
+        rule["repository"] == metadata["repository"] and rule["label"] == expected_label
+        for rule in project["label_rules"]
+    ):
+        return "skipped", {"reason_code": "source_out_of_scope"}
+
+    if event == "tag_sync" and expected_label in stored_labels:
+        return "sent", {"label": expected_label}
+    if event == "status_sync" and started and item.status == started:
+        return "sent", {"status": started}
+    expected_owners = metadata.get("owners_before")
+    if item.owners is None or expected_owners is None or sorted(item.owners) != expected_owners:
+        return "skipped", {"reason_code": "source_owner_changed"}
+    if event == "tag_sync":
+        if item.status not in {metadata.get("status_before"), started}:
+            return "skipped", {"reason_code": "source_status_changed"}
+        labels = list(dict.fromkeys([*stored_labels, expected_label]))
+        client.update_proposal_ticket(*target, labels=labels)
+        actual = tapd_policy.split_labels(client.get_item(*target).labels)
+        if not set(labels).issubset(actual):
+            raise ValueError("TAPD label write not confirmed")
+        return "sent", {"label": expected_label}
+    if (
+        not started
+        or item.status != metadata.get("status_before")
+        or item.status not in setting.get("tapd_todo_states", {}).get(kind, ())
+    ):
+        return "skipped", {"reason_code": "source_status_changed"}
+    client.update_proposal_ticket(*target, status=started)
+    if client.get_item(*target).status != started:
+        raise ValueError("TAPD status write not confirmed")
+    return "sent", {"status": started}
+
+
 def deliver_pending(config, *, now=None, runner=None):
     setting = config.get("proposer", {})
     if not setting.get("enabled") or not setting.get("publish_comments"):
@@ -165,8 +245,12 @@ def _deliver_locked(config, now, runner):
             status, result = "skipped", {"reason_code": "source_out_of_scope"}
         else:
             try:
-                send = _github_comment if metadata["provider"] == "github" else _tapd_comment
-                status, result = send(config, metadata, marker, _comment(row, metadata), runner)
+                event = row["notification_type"]
+                if event in {"tag_sync", "status_sync"}:
+                    status, result = _tapd_update(config, metadata, event, runner)
+                else:
+                    send = _github_comment if metadata["provider"] == "github" else _tapd_comment
+                    status, result = send(config, metadata, marker, _comment(row, metadata), runner)
             except commands.ControlDeadlineExceeded:
                 raise
             except _ERRORS:

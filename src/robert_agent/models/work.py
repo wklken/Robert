@@ -433,7 +433,7 @@ class Proposal(Base):
 
     proposal_id: Mapped[str] = mapped_column(Text, primary_key=True)
     source_identity: Mapped[str] = mapped_column(Text, unique=True)
-    repo_id: Mapped[str] = mapped_column(Text, ForeignKey("repos.repo_id"))
+    repo_id: Mapped[str | None] = mapped_column(Text, ForeignKey("repos.repo_id"))
     status: Mapped[str] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer)
     revision: Mapped[int] = mapped_column(Integer)
@@ -448,8 +448,13 @@ class Proposal(Base):
     created_at: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[str] = mapped_column(Text)
 
+    defer_until: Mapped[str | None] = mapped_column(Text)
+    investigation_task_id: Mapped[str | None] = mapped_column(Text, ForeignKey("tasks.task_id", ondelete="SET NULL"))
+
     __table_args__ = (
-        CheckConstraint("status IN ('evaluated', 'pending', 'held', 'discarded', 'approved', 'admitted', 'blocked')"),
+        CheckConstraint(
+            "status IN ('evaluated', 'pending', 'held', 'discarded', 'approved', 'investigating', 'admitted', 'blocked')"
+        ),
         CheckConstraint("version >= revision AND revision >= 0"),
         Index("idx_proposals_status_updated", "status", "updated_at", "proposal_id"),
     )
@@ -481,8 +486,10 @@ class ProposalDecision(Base):
     reason: Mapped[str] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(Text)
 
+    options_json: Mapped[str] = mapped_column(Text, server_default="{}")
+
     __table_args__ = (
-        CheckConstraint("action IN ('approve', 'hold', 'discard')"),
+        CheckConstraint("action IN ('approve', 'investigate', 'hold', 'discard', 'restore', 'assign')"),
         UniqueConstraint("proposal_id", "idempotency_key"),
     )
 
@@ -492,3 +499,4 @@ class ProposalScan(Base):
 
     slot: Mapped[str] = mapped_column(Text, primary_key=True)
     completed_at: Mapped[str] = mapped_column(Text)
+    result_json: Mapped[str] = mapped_column(Text, server_default="{}")

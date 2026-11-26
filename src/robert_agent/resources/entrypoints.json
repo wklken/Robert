@@ -24,6 +24,7 @@
   "robert_agent.readmodels.status",
   "robert_agent.readmodels.summarize",
   "robert_agent.runtime.control",
+  "robert_agent.runtime.cron",
   "robert_agent.runtime.cycle",
   "robert_agent.runtime.daemon",
   "robert_agent.runtime.loop",

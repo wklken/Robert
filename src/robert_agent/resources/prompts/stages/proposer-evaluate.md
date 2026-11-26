@@ -12,4 +12,4 @@ Propose work only when the code excerpts substantiate a clear scope with a concr
 
 ## Delivery
 
-For a proposal, set decision to propose and include kind (implementation or investigation), summary, scope, exclusions, verification, risks and evidence. Each evidence entry has id, line and reason. Cite an ID and a line from the supplied excerpt. For an unsuitable ticket return only decision set to skip.
+For a proposal, set decision to propose and include kind (implementation or investigation), summary, scope, exclusions, verification, risks and evidence. Include priority and recommendation as high, medium or low, and a short recommendation_reason. Priority describes urgency and impact. Recommendation describes whether the operator should start now based on concrete benefit, evidence, and verification. Each evidence entry has id, line and reason. Cite an ID and a line from the supplied excerpt. For an unsuitable ticket return only decision set to skip.

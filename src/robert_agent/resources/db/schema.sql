@@ -752,8 +752,8 @@ CREATE INDEX IF NOT EXISTS idx_github_events_recent ON github_events(event_at DE
 CREATE TABLE IF NOT EXISTS proposals (
   proposal_id TEXT PRIMARY KEY NOT NULL,
   source_identity TEXT NOT NULL UNIQUE,
-  repo_id TEXT NOT NULL REFERENCES repos(repo_id),
-  status TEXT NOT NULL CHECK (status IN ('evaluated', 'pending', 'held', 'discarded', 'approved', 'admitted', 'blocked')),
+  repo_id TEXT REFERENCES repos(repo_id),
+  status TEXT NOT NULL CHECK (status IN ('evaluated', 'pending', 'held', 'discarded', 'approved', 'investigating', 'admitted', 'blocked')),
   version INTEGER NOT NULL,
   revision INTEGER NOT NULL,
   source_key TEXT NOT NULL,
@@ -764,6 +764,8 @@ CREATE TABLE IF NOT EXISTS proposals (
   task_id TEXT REFERENCES tasks(task_id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  defer_until TEXT,
+  investigation_task_id TEXT REFERENCES tasks(task_id) ON DELETE SET NULL,
   CHECK (version >= revision AND revision >= 0)
 );
 CREATE INDEX IF NOT EXISTS idx_proposals_status_updated ON proposals(status, updated_at, proposal_id);
@@ -781,18 +783,20 @@ CREATE TABLE IF NOT EXISTS proposal_decisions (
   proposal_id TEXT NOT NULL REFERENCES proposals(proposal_id) ON DELETE CASCADE,
   version INTEGER NOT NULL,
   revision INTEGER NOT NULL,
-  action TEXT NOT NULL CHECK (action IN ('approve', 'hold', 'discard')),
+  action TEXT NOT NULL CHECK (action IN ('approve', 'investigate', 'hold', 'discard', 'restore', 'assign')),
   actor TEXT NOT NULL,
   idempotency_key TEXT NOT NULL,
   reason TEXT NOT NULL,
   created_at TEXT NOT NULL,
+  options_json TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (proposal_id, version),
   UNIQUE (proposal_id, idempotency_key)
 );
 
 CREATE TABLE IF NOT EXISTS proposal_scans (
   slot TEXT PRIMARY KEY NOT NULL,
-  completed_at TEXT NOT NULL
+  completed_at TEXT NOT NULL,
+  result_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS model_usage (

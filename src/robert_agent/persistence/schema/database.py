@@ -461,6 +461,25 @@ def schema_sql() -> str:
     return SCHEMA_RESOURCE.read_text(encoding="utf-8") + "\n" + execution_schema.SCHEMA
 
 
+def _migrate_proposal_inbox(conn, schema):
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(proposals)")]
+    if "defer_until" not in columns:
+        # Keep all rows and their foreign keys under the caller's transaction.
+        tables = ("proposals", "proposal_revisions", "proposal_decisions")
+        for table in tables:
+            conn.execute(f"ALTER TABLE {table} RENAME TO {table}_legacy")
+        conn.execute("DROP INDEX IF EXISTS idx_proposals_status_updated")
+        start = schema.index("CREATE TABLE IF NOT EXISTS proposals (")
+        end = schema.index("CREATE TABLE IF NOT EXISTS proposal_scans (")
+        _execute_script(conn, schema[start:end])
+        for table in tables:
+            names = ", ".join(row[1] for row in conn.execute(f"PRAGMA table_info({table}_legacy)"))
+            conn.execute(f"INSERT INTO {table} ({names}) SELECT {names} FROM {table}_legacy")
+        for table in reversed(tables):
+            conn.execute(f"DROP TABLE {table}_legacy")
+    _ensure_column(conn, "proposal_scans", "result_json", "result_json TEXT NOT NULL DEFAULT '{}'")
+
+
 def init_database(db_path, schema_path=None):
     db_path = Path(db_path).expanduser()
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -480,6 +499,8 @@ def init_database(db_path, schema_path=None):
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("BEGIN IMMEDIATE")
         _execute_script(conn, schema)
+        if built_in_schema:
+            _migrate_proposal_inbox(conn, schema)
         _ensure_column(
             conn,
             "github_scan_batches",

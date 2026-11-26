@@ -147,6 +147,29 @@ class CandidateIssueTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             issues.discussion("example/repo", 12, runner=self.runner)
 
+    def test_bot_investigation_result_is_retained_but_status_receipts_are_filtered(self):
+        self.responses = [
+            [
+                {
+                    "id": 1,
+                    "body": "Root cause found.\n<!-- robert-comment task_id=t attempt_id=a action_index=0 -->",
+                    "user": {"login": "robot"},
+                },
+                {"id": 2, "body": "Accepted.\n<!-- robert-proposal p1 -->", "user": {"login": "robot"}},
+                {"id": 3, "body": "More information", "user": {"login": "alice"}},
+            ]
+        ]
+        found = issues.discussion(
+            "example/repo",
+            12,
+            exclude_author="robot",
+            include_author_results=True,
+            runner=self.runner,
+        )
+        self.assertEqual(len(found), 2)
+        self.assertIn("Root cause found", found[0])
+        self.assertEqual(found[1], "More information")
+
     def test_get_rejects_another_issue_and_malformed_user(self):
         for row in (self.issue(13), self.issue(user=[])):
             with self.subTest(row=row), self.assertRaises(ValueError):
@@ -161,3 +184,57 @@ class CandidateIssueTests(unittest.TestCase):
         self.responses = [[self.issue(created_at="2026-11-19T00:00:00Z"), self.issue(13)]]
         with self.assertRaisesRegex(ValueError, "ordering"):
             issues.list_recent("example/repo", since=self.since, until=self.until, runner=self.runner)
+
+
+class LinkedPullRequestTests(unittest.TestCase):
+    def response(self, nodes, **extra):
+        return {
+            "data": {
+                "repository": {
+                    "issue": {
+                        "closedByPullRequestsReferences": {
+                            "nodes": nodes,
+                            "pageInfo": {"hasNextPage": False},
+                            **extra,
+                        }
+                    }
+                }
+            }
+        }
+
+    def test_open_linked_pull_request_is_read_from_validated_graphql_connection(self):
+        calls = []
+
+        def runner(argv, **kwargs):
+            calls.append(argv)
+            return SimpleNamespace(stdout=json.dumps(self.response([{"state": "OPEN"}])), returncode=0)
+
+        self.assertTrue(issues.has_open_pull_request("example/repo", 12, runner=runner))
+        self.assertIn("graphql", calls[0])
+        self.assertIn("number=12", calls[0])
+
+    def test_complete_empty_or_closed_connection_has_no_active_pull_request(self):
+        for nodes in ([], [{"state": "CLOSED"}], [{"state": "MERGED"}]):
+            with self.subTest(nodes=nodes):
+                result = self.response(nodes)
+                self.assertFalse(
+                    issues.has_open_pull_request(
+                        "example/repo",
+                        12,
+                        runner=lambda *a, **k: SimpleNamespace(stdout=json.dumps(result), returncode=0),
+                    )
+                )
+
+    def test_partial_malformed_and_graphql_errors_never_prove_absence(self):
+        for result in (
+            self.response([], pageInfo={"hasNextPage": True}),
+            self.response([{"state": "UNKNOWN"}]),
+            {"errors": [{"message": "not authorized"}], **self.response([])},
+            {"data": {"repository": {"issue": None}}},
+        ):
+            with self.subTest(result=result), self.assertRaises(ValueError):
+                issues.has_open_pull_request(
+                    "example/repo",
+                    12,
+                    runner=lambda *a, **k: SimpleNamespace(stdout=json.dumps(result), returncode=0),
+                )
