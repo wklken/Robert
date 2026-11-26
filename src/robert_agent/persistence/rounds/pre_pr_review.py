@@ -456,6 +456,9 @@ def can_abandon(run):
 
 
 def seal_result(conn, round_id, proof):
+    entry = session(conn, round_id=round_id)
+    if entry and not _matches_deployment_validation(entry, proof):
+        raise ValueError("deployment validation did not match the registered final revision")
     return update(conn, round_id, proof_json=json.dumps(proof, sort_keys=True), status="ready", error=None)
 
 
@@ -465,10 +468,17 @@ def bind_result(conn, round_id, result_id):
 
 def _matches_final_verification(entry, result_id=None):
     proof = entry["proof"]
-    policy = entry.get("request", {}).get("plan", {}).get("review_policy")
+    plan = entry.get("request", {}).get("plan", {})
+    policy = plan.get("review_policy")
     if policy == "single_review_single_repair":
         return _matches_single_round(entry)
-    if policy is not None or "review_policy" in proof or "single_round_completion" in proof:
+    if (
+        policy is not None
+        or "review_policy" in proof
+        or "single_round_completion" in proof
+        or "deployment_validation" in proof
+        or "deployment_validation" in plan
+    ):
         return False
     if proof.get("candidate_sha") == proof.get("head_sha") and not proof.get("finding_ids"):
         return not entry.get("legacy_result_binding")
@@ -576,6 +586,8 @@ def _matches_single_round(entry):
                 return False
             phase_runs.append(("synthesis", synthesis))
         if not _matches_targeted_verification(plan, marker, history, expected, workers[0]):
+            return False
+        if not _matches_deployment_validation(entry, proof):
             return False
         if any(
             run["stage"] in {"review", "synthesis", "address_findings"}
@@ -720,6 +732,62 @@ def _matches_targeted_verification(plan, marker, history, expected, worker):
         and verdict.get("blocking_findings") == []
         and all(item["status"] in {"resolved", "dismissed", "deferred"} for item in verdict["checked_findings"])
     )
+
+
+def _matches_deployment_validation(entry, proof):
+    plan = entry.get("request", {}).get("plan", {})
+    if "deployment_validation" not in plan:
+        return "deployment_validation" not in proof
+    marker = proof.get("deployment_validation")
+    if not isinstance(marker, dict) or marker.get("status") not in ("passed", "skipped"):
+        return False
+    try:
+        worker = plan["deployment_validation"]["worker"]["name"]
+        run = next((run for run in entry["completion_runs"] if run["run_id"] == marker["run_id"]), None)
+        if (
+            not run
+            or run["stage"] != "validate_deployment"
+            or run["round_id"] != entry["round_id"]
+            or run["worker_id"] != worker
+            or marker.get("worker_id", worker) != worker
+            or run["slot_reserved"]
+            or not round_records.completed_stage_artifact(run)
+            or run["artifact"] != {key: value for key, value in marker.items() if key not in {"run_id", "worker_id"}}
+        ):
+            return False
+        identity = {
+            "round_id": entry["round_id"],
+            "snapshot_id": entry["snapshot_id"],
+            "head_sha": proof["head_sha"],
+            "status": marker["status"],
+        }
+        checkpoint = run["dispatch"]["result_checkpoint"]
+        if any(not value or marker.get(key) != value for key, value in identity.items()) or any(
+            checkpoint.get(key) != value
+            for key, value in {
+                "run_id": run["run_id"],
+                "prompt_sha256": run["prompt_sha256"],
+                "snapshot_id": entry["snapshot_id"],
+                "worktree_head": identity["head_sha"],
+            }.items()
+        ):
+            return False
+        root = Path(entry["manifest"]["artifact_root"]) / "validate_deployment"
+        path = root / "sealed" / run["run_id"] / "deployment-validation.json"
+        if (
+            Path(run["output_dir"]) != root / run["run_id"]
+            or marker["deployment_validation_path"] != str(path)
+            or path.resolve(strict=True) != path
+            or not path.is_file()
+        ):
+            return False
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != marker["deployment_validation_sha256"]:
+            return False
+        value = json.loads(raw)
+        return all(value.get(key) == expected for key, expected in identity.items())
+    except (KeyError, TypeError, AttributeError, OSError, ValueError, RuntimeError):
+        return False
 
 
 def candidate_validation(run, manifest):

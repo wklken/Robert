@@ -97,6 +97,7 @@ class PrePRReportCheckpointTests(unittest.TestCase):
             task_id=self.task_id,
             attempt_id=self.attempt_id,
             manifest=self.manifest,
+            plan={},
             stage=None,
             check_active=Mock(),
             evaluate=Mock(return_value=deepcopy(self.evaluation)),

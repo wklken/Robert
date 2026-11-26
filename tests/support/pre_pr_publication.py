@@ -81,8 +81,15 @@ class ReviewRemote:
 
 
 class PrePRPublicationFixture(PrePRReviewFixture):
-    def setup_publication(self, workers=("claude",), *, local=False):
-        driver = self.start(list(workers), legacy=False, legacy_report=False, pr_first=True, local=local)
+    def setup_publication(self, workers=("claude",), *, local=False, deployment_validation=None):
+        driver = self.start(
+            list(workers),
+            legacy=False,
+            legacy_report=False,
+            pr_first=True,
+            local=local,
+            deployment_validation=deployment_validation,
+        )
         remote = ReviewRemote(driver, self.git_fixture.base)
         driver.publication_runner = remote
         driver.publication_config = self.config_path

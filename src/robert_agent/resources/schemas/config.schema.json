@@ -51,6 +51,15 @@
               "minItems": 1,
               "uniqueItems": true,
               "items": {"type": "string", "minLength": 1}
+            },
+            "deployment_validation": {
+              "type": "object",
+              "required": ["worker", "skill_path"],
+              "properties": {
+                "worker": {"type": "string", "minLength": 1},
+                "skill_path": {"type": "string", "minLength": 1}
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false

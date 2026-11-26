@@ -563,6 +563,10 @@ flowchart TD
 [评审发布用例](../src/robert_agent/delivery/application/review_publication.py) 在首次发布前校验实施证据，登记草稿、报告和同一 PR 的最终更新。
 回执按轮次和 SHA 绑定，受任务发布锁和当前授权约束。结构化处置与验证绑定最终提交，最终审计核对持久证明。
 
+仓库启用 Minikube 验证后，[部署验证阶段](../src/robert_agent/workflows/pre_pr_review/deployment_validation.py)
+在首轮评审及处置结束后启动。Worker 使用最终 SHA 对应的工作树，阶段封存部署、行为断言和恢复报告。
+最终发布从登记的 run 复核源码检查点与报告摘要，并把验证状态写入 PR。
+
 两种内建协调器共用 `StageCoordinator` 和 SQLite 模型进程池。一轮占一个任务并发槽，
 各阶段模型再申请共享额度。图用两个模型说明阶段顺序，实际数量来自配置。
 
