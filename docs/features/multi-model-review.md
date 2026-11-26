@@ -40,6 +40,10 @@ routes:
 触发者、commit author 和 committer 不参与白名单判断；`trusted_actors` 的触发授权继续生效。
 每轮 review 共占用原有一个任务并发槽。Robert 直接生成共享准备资料，汇总使用第一个 worker，各 reviewer 在独立的全局子进程额度内并行执行。
 
+独立审查的运行时检查以固定 worktree、项目声明和 `runtime-info.json` 中登记的路径为范围。
+缺少运行时或依赖时，reviewer 在覆盖说明中记录未执行的检查，并可引用与该修订及检查项匹配的 CI 结果。
+完成变更及其直接契约的审查后，只有可达且有具体影响的疑点可能改变发现或合并建议时，才继续调查。
+
 同一 PR 的通用 `@Robert账号 review this PR` 评论与 GitHub review request，在当前
 head/base、完整 PR 范围、reviewer 顺序和配置、验收材料及授权资格一致时，关联同一个审查执行。
 扫描先在数据库写事务外读取当前 PR，再分别记录每个触发的授权和执行关联。
