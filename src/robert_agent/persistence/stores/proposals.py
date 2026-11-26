@@ -32,3 +32,13 @@ def record_decision(conn, values):
 def complete_scan(conn, slot, now):
     scan = tables["proposal_scans"]
     return statements.write(conn, insert(scan).values(slot=slot, completed_at=now).on_conflict_do_nothing())
+
+
+def record_scan(conn, slot, now, result_json):
+    scan = tables["proposal_scans"]
+    return statements.write(
+        conn,
+        insert(scan)
+        .values(slot=slot, completed_at=now, result_json=result_json)
+        .on_conflict_do_update(index_elements=[scan.c.slot], set_={"completed_at": now, "result_json": result_json}),
+    )

@@ -6,23 +6,24 @@ import subprocess
 from zoneinfo import ZoneInfo
 
 from robert_agent.adapters.git import proposal_evidence
-from robert_agent.adapters.github import issues
 from robert_agent.adapters.services import supervision_model as model_gateway
 from robert_agent.adapters.tapd import client as tapd_client
 from robert_agent.context import proposal_prompts
-from robert_agent.foundation import commands, tapd_identity, values
+from robert_agent.foundation import commands, values
 from robert_agent.foundation.timestamps import utc_timestamp
 from robert_agent.persistence import database, transactions
 from robert_agent.persistence.queries import proposals as queries
 from robert_agent.persistence.stores import proposals as store
 from robert_agent.persistence.stores import model_usage
-from robert_agent.work import proposal_feedback, proposals, tapd_policy
+from robert_agent.security.text import safe_text
+from robert_agent.work import proposal_feedback, proposals
 from robert_agent.work.application import proposal_sources, web_setup
 
 
 TIMEZONE = ZoneInfo("Asia/Shanghai")
 BATCH_LIMIT = 6
 MUTABLE_STATES = frozenset({"evaluated", "pending", "held", "blocked"})
+_ROUTING_CONFLICT = "原单据的仓库标签冲突，请在 TAPD 修正后复核。"
 _NETWORK_ERRORS = (ValueError, OSError, subprocess.SubprocessError, tapd_client.TapdError)
 
 
@@ -44,10 +45,16 @@ def _eligible(previous, fingerprint=None):
     )
 
 
-def _source_occupied(conn, source, previous):
+def _source_occupied(conn, source, previous, *, scheduled=False):
+    if previous and previous.get("investigation_task_id"):
+        return queries.formal_work_exists(conn, previous["source_key"])
     if previous and previous["status"] == "blocked":
         binding = queries.work_binding(conn, source["source_key"])
-        return bool(binding and binding["active_task_id"])
+        return bool(binding and binding["active_task_id"]) or (
+            scheduled and queries.formal_work_exists(conn, source["source_key"])
+        )
+    if source["provider"] == "tapd" and not source.get("repository"):
+        return queries.known_tapd_source(conn, source["identity"])
     return queries.known_source(conn, [source["source_key"]])
 
 
@@ -123,63 +130,6 @@ def _write(conn, setting, source, fingerprint, report, now):
     return bool(report)
 
 
-def _github_candidates(setting, repos, since, until, stats):
-    for name in sorted(setting["github_repositories"]):
-        try:
-            items = issues.list_recent(name, since=since, until=until)
-        except commands.ControlDeadlineExceeded:
-            raise
-        except _NETWORK_ERRORS:
-            stats["failed_scopes"].append("github:" + name)
-            continue
-        for issue in items:
-            source = proposals.github_source(repos[name], issue, setting["github_assignees"])
-            if source:
-                yield source
-
-
-def _tapd_candidates(setting, config, since, until, stats, clients):
-    if not setting["tapd_projects"]:
-        return
-    for project in config["tapd"]["projects"]:
-        workspace = project["workspace_id"]
-        key = tapd_identity.project_key(project["host"], workspace)
-        if key not in setting["tapd_projects"]:
-            continue
-        try:
-            client = tapd_client.client_for(config["tapd"], config["data_dir"])
-            clients[key] = client
-        except _NETWORK_ERRORS:
-            stats["failed_scopes"].append("tapd:" + key)
-            continue
-        terminal_cache = {}
-        for kind in ("story", "bug"):
-            try:
-                items = client.recent_items(workspace, kind, since=since, until=until)
-                for item in items:
-                    _, route, _ = tapd_policy.select_repository(item.labels, project["label_rules"])
-                    if (
-                        not route
-                        or item.owners is None
-                        or any(owner not in setting["tapd_assignees"] for owner in item.owners)
-                    ):
-                        continue
-                    terminal_key = (kind, item.workitem_type_id)
-                    if terminal_key not in terminal_cache:
-                        terminal_cache[terminal_key] = client.terminal_states(
-                            workspace, kind, item.workitem_type_id if kind == "story" else None
-                        )
-                    source = proposals.tapd_source(
-                        project, item, terminal_cache[terminal_key], setting["tapd_assignees"]
-                    )
-                    if source:
-                        yield source
-            except commands.ControlDeadlineExceeded:
-                raise
-            except _NETWORK_ERRORS:
-                stats["failed_scopes"].append(f"tapd:{key}:{kind}")
-
-
 def evaluate(setting, endpoint, source, commit, excerpts, comments, *, on_usage=None):
     prompt = proposal_prompts.assessment(source, commit)
     evidence = {
@@ -220,8 +170,7 @@ def scan(config, *, now=None):
     clients, commits = {}, {}
     sources = (
         *_blocked_candidates(db_path, config, repos, clients, stats),
-        *_github_candidates(setting, repos, since, until, stats),
-        *_tapd_candidates(setting, config, since, until, stats, clients),
+        *proposal_sources.discover(config, since, until, stats, clients),
     )
     unique = {source["identity"]: source for source in sources}
     stats["eligible"] = len(unique)
@@ -272,3 +221,281 @@ def scan(config, *, now=None):
         "status": "partial" if stats["failed_scopes"] or stats["failed_evaluations"] else "completed",
         **stats,
     }
+
+
+def _daily_stats():
+    return {
+        "ok": True,
+        "status": "completed",
+        "discovered": 0,
+        "evaluated": 0,
+        "updated": 0,
+        "expired": 0,
+        "failed_scopes": [],
+        "failed_evaluations": 0,
+    }
+
+
+def _daily_revision(conn, source, now, *, previous=None, report=None, fingerprint=""):
+    revision = previous["revision"] + 1 if previous else 1
+    proposal_id = previous["proposal_id"] if previous else values.new_id("p")
+    repository = source.get("repository")
+    blocked_reason = _ROUTING_CONFLICT if source.get("routing_conflict") else ""
+    status = "held" if previous and previous["status"] == "held" else "pending"
+    row = {
+        "repo_id": values.repository_id(repository) if repository else None,
+        "status": "blocked" if blocked_reason else status,
+        "version": previous["version"] + 1 if previous else 1,
+        "revision": revision,
+        "source_key": source["source_key"],
+        "fingerprint": fingerprint,
+        "updated_at": now,
+        "blocked_reason": blocked_reason,
+    }
+    if previous:
+        store.revise(conn, proposal_id, previous["version"], **row)
+    else:
+        store.create(
+            conn, {**row, "proposal_id": proposal_id, "source_identity": source["identity"], "created_at": now}
+        )
+    store.record_revision(
+        conn,
+        {
+            "proposal_id": proposal_id,
+            "revision": revision,
+            "source_json": proposals.encoded(source),
+            "report_json": proposals.encoded(report or {"feasibility": "unassessed", "recommendation": "low"}),
+            "created_at": now,
+        },
+    )
+
+
+def _remember_daily(conn, sources, now, stats):
+    transactions.begin_immediate(conn)
+    for source in sources:
+        previous = queries.observation(conn, source["identity"])
+        if previous or _source_occupied(conn, source, None):
+            continue
+        _daily_revision(conn, source, now)
+        stats["discovered"] += 1
+    for row in queries.expired_holds(conn, now):
+        store.revise(
+            conn,
+            row["proposal_id"],
+            row["version"],
+            status="pending",
+            version=row["version"] + 1,
+            defer_until=None,
+            updated_at=now,
+        )
+        stats["expired"] += 1
+
+
+def _daily_queue(conn, limit, today):
+    rows = queries.daily_candidates(conn)
+
+    def analyzed(row):
+        report = values.json_object(row["report_json"])
+        return report.get("analyzed_at") or ""
+
+    rows = [
+        row
+        for row in rows
+        if not row["fingerprint"]
+        or not analyzed(row)
+        or utc_timestamp(analyzed(row)).astimezone(TIMEZONE).date() != today
+    ]
+    stale = sorted(rows, key=lambda row: (analyzed(row), row["created_at"], row["proposal_id"]))
+    priority = sorted(
+        rows,
+        key=lambda row: (
+            {"high": 0, "medium": 1}.get(values.json_object(row["report_json"]).get("recommendation"), 2),
+            analyzed(row),
+            row["proposal_id"],
+        ),
+    )
+    first = iter([row for row in stale if not analyzed(row)])
+    stale = iter(stale)
+    top = iter(priority)
+    selected = {}
+    for lane in (first, top, stale) * limit:
+        for row in lane:
+            if row["proposal_id"] not in selected:
+                selected[row["proposal_id"]] = row
+                break
+        if len(selected) == limit:
+            break
+    return selected.values()
+
+
+def _routing_suggestion(setting, endpoint, source, comments):
+    prompt = proposal_prompts.routing(source)
+    evidence = {"ticket": {key: source[key] for key in ("title", "description")}, "discussion": comments["items"]}
+    output = model_gateway.request_json(
+        instructions=prompt.text,
+        evidence=evidence,
+        endpoint=endpoint,
+        model=setting["model"],
+        timeout=30,
+        session_id="robert-proposal-route-" + proposals.digest(source["identity"])[:24],
+    )
+    if (
+        not isinstance(output, dict)
+        or set(output) != {"label", "reason"}
+        or not isinstance(output["reason"], str)
+        or not output["reason"].strip()
+        or len(output["reason"]) > 500
+    ):
+        raise ValueError("invalid proposal routing recommendation")
+    rule = next((item for item in source["repository_candidates"] if item["label"] == output["label"]), None)
+    if output["label"] is not None and not rule:
+        raise ValueError("proposal recommended an unavailable repository")
+    return rule, safe_text(output["reason"], 500)
+
+
+def _daily_assessment(config, setting, endpoint, row, source, repos, clients, commits, now, *, observed):
+    name = source.get("repository")
+    if source["provider"] == "tapd" and source["project_key"] not in setting["tapd_projects"]:
+        return None, None
+    if source["provider"] == "github" and name not in setting["github_repositories"]:
+        return None, None
+    repo = repos.get(name)
+    if source["provider"] == "tapd" and source["project_key"] not in clients:
+        clients[source["project_key"]] = tapd_client.client_for(config["tapd"], config["data_dir"])
+    if not observed:
+        source, _ = proposal_sources.refresh(config, repo, source, clients=clients)
+        if not source:
+            return None, None
+    if source.get("routing_conflict"):
+        report = {"analyzed_at": now, "feasibility": "needs_clarification", "recommendation": "low"}
+        return source, (report, proposals.digest(source))
+    name = source.get("repository")
+    comments = proposal_sources.discussion(
+        source,
+        clients,
+        config["tapd"],
+        github_account=repos.get(name, {}).get("github_account"),
+        include_automatic=True,
+    )
+    source = {**source, "discussion_digest": comments["digest"], "discussion": comments["items"]}
+    suggestion, routing_reason = None, ""
+    if not name and source.get("repository_candidates"):
+        selected_repo = next((key for key in repos if values.repository_id(key) == row["repo_id"]), None)
+        if selected_repo:
+            suggestion = next(
+                (rule for rule in source["repository_candidates"] if rule["repository"] == selected_repo), None
+            )
+        if not suggestion:
+            suggestion, routing_reason = _routing_suggestion(setting, endpoint, source, comments)
+        name = suggestion["repository"] if suggestion else None
+    report = None
+    commit = None
+    if name in repos:
+        if name not in commits:
+            commits[name] = proposal_evidence.pinned_commit(repos[name])
+        commit = commits[name]
+        excerpts = proposal_evidence.excerpts(repos[name], commit, source["title"] + "\n" + source["description"])
+        if excerpts:
+            measured = {}
+            call_id = values.new_id("proposer-model")
+            try:
+                report = evaluate(
+                    setting,
+                    endpoint,
+                    {**source, "repository": name},
+                    commit,
+                    excerpts,
+                    comments,
+                    on_usage=measured.update,
+                )
+            finally:
+                scope = values.repository_id(name) + "/" + source["identity"]
+                with closing(database.connect(config["db_path"])) as conn, conn:
+                    model_usage.record(conn, "proposer", call_id, scope, now, measured)
+    if report:
+        report.setdefault("recommendation", "medium")
+        report.setdefault("recommendation_reason", report["summary"])
+        report["feasibility"] = "ready" if report["kind"] == "implementation" else "investigate"
+    else:
+        clarification = "需要确认目标仓库。" if not name else "现有证据不足以确定可验证的处理范围。"
+        report = {
+            "summary": clarification,
+            "feasibility": "needs_clarification",
+            "recommendation": "low",
+            "recommendation_reason": clarification,
+        }
+    report.update(
+        analyzed_at=now,
+        repository=name,
+        source_priority=source.get("priority"),
+        suggested_label=suggestion["label"] if suggestion else None,
+        routing_reason=routing_reason,
+    )
+    fingerprint = proposals.digest([source, commit])
+    return source, (report, fingerprint)
+
+
+def scan_daily(config, *, now):
+    """Discover durable candidates and refresh the daily analysis budget."""
+    stats = _daily_stats()
+    setting = config["proposer"]
+    db_path = config["db_path"]
+    web_setup.prepare_repositories(config)
+    until = utc_timestamp(now)
+    repos = {repo["full_name"]: repo for repo in config["repos"]}
+    clients, commits = {}, {}
+    recent = {
+        source["identity"]: source
+        for source in proposal_sources.discover(config, until - timedelta(days=7), until, stats, clients)
+    }
+    with closing(database.connect(db_path)) as conn, conn:
+        _remember_daily(conn, recent.values(), now, stats)
+        queue = _daily_queue(conn, setting["schedule"]["analysis_limit"], until.astimezone(TIMEZONE).date())
+    try:
+        endpoint = model_gateway.gateway_endpoint(setting["gateway_metadata"])
+    except _NETWORK_ERRORS:
+        return {**stats, "ok": False, "status": "model_unavailable"}
+    for row in queue:
+        stats["evaluated"] += 1
+        source = recent.get(row["source_identity"]) or values.json_object(row["source_json"])
+        try:
+            current, result = _daily_assessment(
+                config,
+                setting,
+                endpoint,
+                row,
+                source,
+                repos,
+                clients,
+                commits,
+                now,
+                observed=row["source_identity"] in recent,
+            )
+        except commands.ControlDeadlineExceeded:
+            raise
+        except _NETWORK_ERRORS:
+            stats["failed_evaluations"] += 1
+            continue
+        with closing(database.connect(db_path)) as conn, conn:
+            transactions.begin_immediate(conn)
+            latest = queries.observation(conn, row["source_identity"])
+            if not latest or latest["version"] != row["version"]:
+                continue
+            if current is None or _source_occupied(conn, current, latest, scheduled=True):
+                if latest["status"] != "blocked":
+                    store.revise(
+                        conn,
+                        latest["proposal_id"],
+                        latest["version"],
+                        status="blocked",
+                        version=latest["version"] + 1,
+                        updated_at=now,
+                        blocked_reason="原单已开始、关闭或移出当前来源范围。",
+                    )
+                continue
+            report, fingerprint = result
+            _daily_revision(conn, current, now, previous=latest, report=report, fingerprint=fingerprint)
+            stats["updated"] += 1
+    if stats["failed_scopes"] or stats["failed_evaluations"]:
+        stats["status"] = "partial"
+    return stats
