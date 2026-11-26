@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Call a local Messages gateway without exposing model tools."""
+"""Call a local model gateway without exposing tools."""
 
 from robert_agent.adapters.processes import model_usage
+from robert_agent.adapters.services import tcodex_gateway
 
 import argparse
 from email.utils import parsedate_to_datetime
@@ -11,9 +12,11 @@ import json
 import os
 import stat
 import sys
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from uuid import uuid4
 
 from robert_agent.foundation import question_choices
 from robert_agent.foundation.contracts.supervision import AUTOMATIC_DECISION_ACTIONS, NONEXECUTING_DECISION_ACTIONS
@@ -64,7 +67,7 @@ def checked_endpoint(value):
     return f"http://127.0.0.1:{parsed.port}"
 
 
-def gateway_endpoint(metadata):
+def load_gateway(metadata):
     try:
         fd = os.open(metadata, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
@@ -77,6 +80,11 @@ def gateway_endpoint(metadata):
     if len(raw) > MAX_METADATA_BYTES:
         raise ModelError("untrusted gateway metadata")
     value = load_json(raw)
+    if isinstance(value, dict) and value.get("type") == "tcodex":
+        paths = (value.get("executable"), value.get("home"))
+        if not all(isinstance(path, str) and os.path.isabs(path) and "\0" not in path for path in paths):
+            raise ModelError("tcodex gateway requires absolute executable and home paths")
+        return tcodex_gateway.TcodexGateway(*paths)
     return checked_endpoint(value.get("url") if isinstance(value, dict) else None)
 
 
@@ -192,30 +200,7 @@ class RateLimited(ModelError):
         self.provider_error = provider_error
 
 
-def request_json(*, instructions, evidence, endpoint, model, timeout, session_id, on_usage=None):
-    """Return JSON from the local Messages gateway with no model tools."""
-    endpoint = checked_endpoint(endpoint)
-    if len(json.dumps(evidence, ensure_ascii=False).encode()) > MAX_REQUEST_BYTES:
-        raise ModelError("model input exceeds the transport limit")
-    payload = {
-        "model": model,
-        "max_tokens": 4096,
-        "thinking": {"type": "disabled"},
-        "tools": [],
-        "tool_choice": {"type": "none"},
-        "system": instructions,
-        "messages": [{"role": "user", "content": json.dumps(evidence, ensure_ascii=False)}],
-    }
-    request = Request(
-        endpoint + "/v1/messages",
-        data=json.dumps(payload).encode(),
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01",
-            "X-Claude-Code-Session-Id": session_id,
-        },
-    )
+def _read_gateway_response(request, timeout):
     try:
         with send_request(request, timeout) as response:
             raw = response.read(MAX_RESPONSE_BYTES + 1)
@@ -234,7 +219,29 @@ def request_json(*, instructions, evidence, endpoint, model, timeout, session_id
         raise ModelError("local model gateway returned an invalid HTTP response") from None
     if len(raw) > MAX_RESPONSE_BYTES:
         raise ModelError("model response exceeds the transport limit")
-    response = load_json(raw)
+    return raw
+
+
+def _messages_request(endpoint, model, instructions, evidence, timeout, session_id, on_usage):
+    payload = {
+        "model": model,
+        "max_tokens": 4096,
+        "thinking": {"type": "disabled"},
+        "tools": [],
+        "tool_choice": {"type": "none"},
+        "system": instructions,
+        "messages": [{"role": "user", "content": evidence}],
+    }
+    request = Request(
+        checked_endpoint(endpoint) + "/v1/messages",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "anthropic-version": "2023-06-01",
+            "X-Claude-Code-Session-Id": session_id,
+        },
+    )
+    response = load_json(_read_gateway_response(request, timeout))
     if on_usage and isinstance(response, dict):
         on_usage(model_usage.gateway_usage(response))
     if not isinstance(response, dict) or response.get("stop_reason") != "end_turn":
@@ -258,13 +265,104 @@ def request_json(*, instructions, evidence, endpoint, model, timeout, session_id
             continue
         else:
             raise ModelError("model response contains an unsupported or malformed content block")
-    if not text or not "".join(text).strip():
+    return text
+
+
+def _completed_response(raw):
+    completed = None
+    for event in raw.replace(b"\r\n", b"\n").split(b"\n\n"):
+        payload = b"\n".join(line[5:].removeprefix(b" ") for line in event.split(b"\n") if line.startswith(b"data:"))
+        if not payload or payload == b"[DONE]":
+            continue
+        item = load_json(payload)
+        if not isinstance(item, dict) or item.get("type") in ("response.failed", "response.incomplete", "error"):
+            raise ModelError("model response did not complete without tools")
+        if item.get("type") == "response.completed":
+            if completed is not None:
+                raise ModelError("model response contains multiple completions")
+            completed = item.get("response")
+            if not isinstance(completed, dict) or completed.get("status") != "completed":
+                raise ModelError("model response did not complete without tools")
+    if completed is None:
+        raise ModelError("model response did not complete without tools")
+    return completed
+
+
+def _responses_text(response):
+    text = []
+    output = response.get("output")
+    if not isinstance(output, list):
+        raise ModelError("model response contains invalid content")
+    for item in output:
+        if isinstance(item, dict) and item.get("type") == "reasoning":
+            continue
+        if (
+            not isinstance(item, dict)
+            or item.get("type") != "message"
+            or item.get("role") != "assistant"
+            or not isinstance(item.get("content"), list)
+        ):
+            raise ModelError("model response contains an unsupported or malformed output item")
+        for block in item["content"]:
+            if (
+                not isinstance(block, dict)
+                or block.get("type") != "output_text"
+                or not isinstance(block.get("text"), str)
+            ):
+                raise ModelError("model response contains an unsupported or malformed content block")
+            text.append(block["text"])
+    return text
+
+
+def _responses_request(gateway, model, instructions, evidence, timeout, session_id, on_usage):
+    payload = {
+        "model": model,
+        "instructions": instructions,
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": evidence}]}],
+        "max_output_tokens": 4096,
+        "reasoning": {"effort": "low"},
+        "tools": [],
+        "tool_choice": "none",
+        "store": False,
+        "stream": True,
+    }
+    deadline = time.monotonic() + timeout
+    try:
+        with tcodex_gateway.open_gateway(gateway, deadline) as endpoint:
+            request = Request(
+                checked_endpoint(endpoint) + "/responses",
+                data=json.dumps(payload).encode(),
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "text/event-stream",
+                    "Session_ID": session_id,
+                    "X-Conversation-Request-ID": str(uuid4()),
+                },
+            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ModelError("tcodex gateway startup timed out")
+            response = _completed_response(_read_gateway_response(request, remaining))
+    except tcodex_gateway.GatewayStartupError as error:
+        raise ModelError(str(error)) from None
+    if on_usage:
+        on_usage(model_usage.gateway_usage(response))
+    return _responses_text(response)
+
+
+def request_json(*, instructions, evidence, endpoint, model, timeout, session_id, on_usage=None):
+    """Return a JSON result through a trusted local gateway."""
+    serialized = json.dumps(evidence, ensure_ascii=False)
+    if len(serialized.encode()) > MAX_REQUEST_BYTES:
+        raise ModelError("model input exceeds the transport limit")
+    request = _responses_request if isinstance(endpoint, tcodex_gateway.TcodexGateway) else _messages_request
+    text = "".join(request(endpoint, model, instructions, serialized, timeout, session_id, on_usage))
+    if not text.strip():
         raise ModelError("model response contains no decision text")
-    return load_json("".join(text))
+    return load_json(text)
 
 
 def call(bundle, kind, endpoint, model, timeout, *, on_usage=None):
-    endpoint = checked_endpoint(endpoint)
     if (
         not isinstance(bundle, dict)
         or not all(name in bundle for name in ["bundle_id", "bundle_sha256", "instructions", "evidence"])
@@ -308,7 +406,7 @@ def main():
         result = call(
             bundle,
             args.kind,
-            gateway_endpoint(args.gateway_metadata),
+            load_gateway(args.gateway_metadata),
             args.model,
             args.timeout,
             on_usage=model_usage.report_sidecar,

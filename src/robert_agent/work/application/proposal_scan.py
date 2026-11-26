@@ -160,7 +160,7 @@ def scan(config, *, now=None):
         if not due(conn, config, now):
             return {"ok": True, "status": "already_scanned"}
     try:
-        endpoint = model_gateway.gateway_endpoint(setting["gateway_metadata"])
+        endpoint = model_gateway.load_gateway(setting["gateway_metadata"])
     except _NETWORK_ERRORS:
         return {"ok": False, "status": "model_unavailable", "safe_error": "Proposer model gateway is unavailable"}
     until = utc_timestamp(now)
@@ -452,7 +452,7 @@ def scan_daily(config, *, now):
         _remember_daily(conn, recent.values(), now, stats)
         queue = _daily_queue(conn, setting["schedule"]["analysis_limit"], until.astimezone(TIMEZONE).date())
     try:
-        endpoint = model_gateway.gateway_endpoint(setting["gateway_metadata"])
+        endpoint = model_gateway.load_gateway(setting["gateway_metadata"])
     except _NETWORK_ERRORS:
         return {**stats, "ok": False, "status": "model_unavailable"}
     for row in queue:
