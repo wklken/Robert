@@ -9,7 +9,7 @@ from unittest.mock import patch
 from robert_agent.execution import stages
 from robert_agent.persistence.rounds import review as store
 from tests.support import database
-from tests.support.review_coordinator import ReviewCoordinatorFixture
+from tests.support.review_coordinator import ReviewCoordinatorFixture, writable_snapshot_path
 
 
 class StageStoppedTests(ReviewCoordinatorFixture):
@@ -39,16 +39,17 @@ class StageStoppedTests(ReviewCoordinatorFixture):
             )
         launch = driver.source_checkpoint(run)
         source = Path(driver.manifest["worktree_path"]) / "source.py"
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('value = 7\\n')",
-                str(source),
-            ],
-            start_new_session=True,
-        )
-        self.assertEqual(proc.wait(timeout=5), 0)
+        with writable_snapshot_path(source):
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('value = 7\\n')",
+                    str(source),
+                ],
+                start_new_session=True,
+            )
+            self.assertEqual(proc.wait(timeout=5), 0)
         recorded = {"ok": True, "pid": proc.pid, "process_group_id": proc.pid, "worktree_path": launch["worktree_path"]}
         if checkpoint:
             recorded["launch_checkpoint"] = launch
@@ -257,7 +258,9 @@ class StageStoppedTests(ReviewCoordinatorFixture):
         with database.connect(self.db) as conn:
             recorded = {**original["dispatch"], "result_checkpoint": checkpoint}
             store.update_run(conn, original["run_id"], dispatch_json=json.dumps(recorded))
-        (Path(driver.manifest["worktree_path"]) / "source.py").write_text("value = 8\n")
+        source = Path(driver.manifest["worktree_path"]) / "source.py"
+        with writable_snapshot_path(source):
+            source.write_text("value = 8\n")
         with store.connect(self.db) as conn:
             self.assertEqual(stages.terminate_children(conn, driver.task_id, store=store), "terminated")
         saved = self.saved_run(driver)

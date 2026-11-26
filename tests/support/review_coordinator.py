@@ -1,11 +1,13 @@
 """Shared fixtures for review coordinator tests."""
 
+from contextlib import contextmanager
 from tests.support import database as fixture_database
 from robert_agent.adapters.processes import identity as worker_identity
 import json
 import os
 from pathlib import Path
 import signal
+import stat
 import sys
 import unittest
 import yaml
@@ -17,6 +19,17 @@ from robert_agent.persistence.rounds import review as review_store
 from robert_agent.runtime import cycle as run_once
 from robert_agent.operations.initialize import init_config
 from robert_agent.resource_files import resource
+
+
+@contextmanager
+def writable_snapshot_path(path):
+    """Simulate an out-of-band write without leaving the fixture writable."""
+    mode = stat.S_IMODE(path.stat().st_mode)
+    path.chmod(mode | stat.S_IWUSR)
+    try:
+        yield
+    finally:
+        path.chmod(mode)
 
 
 class ReviewCoordinatorFixture(unittest.TestCase):

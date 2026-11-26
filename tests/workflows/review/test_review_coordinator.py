@@ -4,6 +4,7 @@ from collections import Counter
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -13,15 +14,81 @@ from unittest.mock import patch
 from robert_agent.delivery.application import publish
 from robert_agent.workflows.review import coordinator as review_coordinator
 from robert_agent.workflows.review import files as review_files
+from robert_agent.workflows.review import workspace as review_workspace
 from robert_agent.persistence.rounds import review as review_store
 from robert_agent.work.application import commands as work_items
 from robert_agent.execution.application import evidence
 from robert_agent.execution.application import monitor
 from robert_agent.work.application import preparation
-from tests.support.review_coordinator import ReviewCoordinatorFixture
+from tests.support.review_coordinator import ReviewCoordinatorFixture, writable_snapshot_path
 
 
 class ReviewCoordinatorTests(ReviewCoordinatorFixture):
+    def test_reviewers_run_checks_in_separate_checkouts_without_dirtying_the_snapshot(self):
+        self.cycle([self.event()])
+        driver = self.coordinator()
+        driver.prepare()
+        manifest = driver.manifest
+        snapshot = Path(manifest["worktree_path"])
+        checkouts = {}
+        for path in (snapshot, snapshot / "source.py"):
+            self.assertEqual(path.stat().st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH), 0)
+        if os.geteuid() != 0:
+            with self.assertRaises(PermissionError):
+                (snapshot / "source.py").open("r+").close()
+            with self.assertRaises(PermissionError):
+                (snapshot / "generated").touch()
+
+        def launcher(**kwargs):
+            self.assertEqual(Path(kwargs["worktree_path"]), snapshot)
+            prompt = Path(kwargs["prompt_path"]).read_text()
+            self.assertIn("ROBERT_REVIEW_TEST_WORKTREE", prompt)
+            name = kwargs["worker_agent_config"]["name"]
+            checkout = Path(kwargs["trusted_environment"]["ROBERT_REVIEW_TEST_WORKTREE"])
+            self.assertEqual(self.git_fixture.git(checkout, "rev-parse", "HEAD"), manifest["head_sha"])
+            self.assertEqual(self.git_fixture.git(checkout, "status", "--porcelain"), "")
+            self.assertEqual(self.git_fixture.git(checkout, "remote"), "")
+            self.assertTrue((checkout / ".git").is_dir())
+            subprocess.run(
+                [sys.executable, "-c", "from pathlib import Path; Path('arbitrary-cache.data').touch()"],
+                cwd=checkout,
+                check=True,
+            )
+            checkouts[name] = checkout
+            return self.launcher(**kwargs)
+
+        driver.launcher = launcher
+        self.assertEqual(len(driver.review()), 2)
+        self.assertEqual(len(set(checkouts.values())), 2)
+        self.assertTrue(all(not checkout.exists() for checkout in checkouts.values()))
+        self.assertFalse((snapshot / "arbitrary-cache.data").exists())
+        self.assertTrue(review_workspace.verify_snapshot(manifest, require_current_prompt=True))
+        recovered = self.coordinator()
+        recovered.prepare()
+        self.assertEqual(len(recovered.review()), 2)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_isolated_review_still_rejects_ignored_inputs_in_its_source_snapshot(self):
+        upstream = self.git_fixture.upstream
+        (upstream / ".gitignore").write_text("settings.py\n.pytest_cache/\n")
+        self.git_fixture.git(upstream, "add", ".gitignore")
+        self.git_fixture.commit("value = 3\n")
+        self.cycle([self.event()])
+        driver = self.coordinator()
+        driver.prepare()
+        snapshot = Path(driver.manifest["worktree_path"])
+        for name in ("settings.py", ".pytest_cache/v/cache/nodeids"):
+            with self.subTest(name=name):
+                path = snapshot / name
+                with writable_snapshot_path(snapshot):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("unregistered input\n")
+                self.assertEqual(self.git_fixture.git(snapshot, "check-ignore", name), name)
+                with self.assertRaisesRegex(ValueError, "unregistered files"):
+                    review_workspace.verify_snapshot(driver.manifest)
+                with writable_snapshot_path(path.parent):
+                    path.unlink()
+
     def test_tab_git_path_does_not_block_either_reviewer(self):
         (self.git_fixture.upstream / "tab\tfile.py").write_text("value = 1\n")
         self.git_fixture.git(self.git_fixture.upstream, "add", ".")
