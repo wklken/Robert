@@ -328,7 +328,7 @@ class PromptScopeTests(unittest.TestCase):
         self.assertIn('Configured Robert GitHub account: "robert-bot"', prompt)
         self.assertIn('"decision_mention": "@wklken"', prompt)
         self.assertIn("planned comment body", prompt)
-        self.assertIn("Robert adds the confirmed request owner's mention", prompt)
+        self.assertIn("Robert adds the confirmed review recipient's mention", prompt)
 
     def test_review_policy_preserves_recovery_evidence_and_feedback_scope(self):
         prompt = self.render("review-comment")
@@ -343,11 +343,24 @@ class PromptScopeTests(unittest.TestCase):
 
     def test_questions_and_pr_followups_keep_the_original_request_owner(self):
         owner = {"login": "Alice", "source_key": "github:x/y#1", "event_fingerprint": "comment:1"}
-        for route_id in ("new-pr", "waiting-for-user", "review-pr", "update-existing-pr"):
+        for route_id in ("new-pr", "waiting-for-user", "update-existing-pr"):
             with self.subTest(route_id=route_id):
                 prompt = self.render(route_id, runtime_context={"decision_owner": owner})
                 self.assertIn('"login": "Alice"', prompt)
                 self.assertIn("confirmed decision owner", prompt)
+
+    def test_single_review_prompt_addresses_author_and_preserves_robot_request_owner(self):
+        for author, expected in (("RimuruChan", "RimuruChan"), ("Robert-Bot", "Alice")):
+            with self.subTest(author=author):
+                prompt = render_prompt.render_prompt(
+                    worker_prompt_input(
+                        {"task_id": "t", "attempt_id": "a", "workstream_id": "github:x/y!1"},
+                        route.ROUTES["review-pr"],
+                        [{"source_type": "pull_request", "pr_author_login": author, "requester_login": "Bob"}],
+                        runtime_context={"github_account": "robert-bot", "decision_owner": {"login": "Alice"}},
+                    )
+                ).text
+                self.assertIn(f'"decision_mention": "@{expected}"', prompt)
 
     def test_issue_dispatch_guidance_follows_current_request_not_older_context(self):
         task = {"task_id": "task-1", "attempt_id": "attempt-1", "workstream_id": "github:x/y#1"}
