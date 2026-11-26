@@ -28,8 +28,7 @@ class ReviewWorkspaceFixture(unittest.TestCase):
         self.base = self.git(self.upstream, "rev-parse", "HEAD")
         self.git(self.upstream, "checkout", "-b", "feature")
         self.commit("value = 2\n")
-        self.git(self.root, "clone", str(self.upstream), str(self.repo))
-        self.git(self.repo, "remote", "rename", "origin", "upstream")
+        self.git(self.root, "clone", "--origin", "upstream", str(self.upstream), str(self.repo))
 
     def git(self, cwd, *args):
         return subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=True).stdout.strip()
