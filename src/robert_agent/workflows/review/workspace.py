@@ -64,7 +64,9 @@ CACHE_ARTIFACTS = {
     ),
     ".mypy_cache": re.compile(r"\.gitignore|CACHEDIR\.TAG|\d+\.\d+/(?:cache\.\d+\.db|[\w./-]+\.(?:data|meta)\.json)"),
     ".ruff_cache": re.compile(r"\.gitignore|CACHEDIR\.TAG|\d+\.\d+\.\d+/\d+"),
-    ".import_linter_cache": re.compile(r"\.gitignore|CACHEDIR\.TAG|[\w.]+\.meta\.json|[0-9a-f]{32}\.data\.json"),
+    ".import_linter_cache": re.compile(
+        r"\.gitignore|CACHEDIR\.TAG|[\w.]+\.meta\.json|(?:[0-9a-f]{32}|[0-9a-f]{40})\.data\.json"
+    ),
 }
 
 

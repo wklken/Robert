@@ -266,6 +266,7 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
             "component/.ruff_cache/0.16.7/123456",
             "component/.import_linter_cache/apigateway.meta.json",
             "component/.import_linter_cache/0123456789abcdef0123456789abcdef.data.json",
+            "component/.import_linter_cache/fcf3e29e24a5bbc5a216f8f45318b63dc99dd9cd.data.json",
         )
         for name in artifacts:
             path = tree / name
@@ -284,6 +285,24 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
         (tree / "unexpected.py").write_text("unregistered source\n")
         with self.assertRaisesRegex(ValueError, "source is dirty"):
             review_workspace.verify_snapshot(frozen)
+
+    def test_import_linter_cache_created_after_freeze_allows_resume(self):
+        (self.upstream / ".gitignore").write_text(".import_linter_cache/\n")
+        self.git(self.upstream, "add", ".gitignore")
+        self.commit("value = 3\n")
+        frozen = self.freeze(self.prepare("import-linter-cache-resume"))
+        tree = Path(frozen["worktree_path"])
+        # Import Linter 2.16 / Grimp 3.20 generates this 40-character name.
+        name = "component/.import_linter_cache/fcf3e29e24a5bbc5a216f8f45318b63dc99dd9cd.data.json"
+        cache = tree / name
+        cache.parent.mkdir(parents=True)
+        cache.write_text("{}\n")
+
+        self.assertEqual(self.git(tree, "check-ignore", name), name)
+        self.assertNotIn(name, frozen["source_hashes"])
+        self.assertTrue(review_workspace.verify_snapshot(frozen))
+        self.assertEqual(self.prepare("import-linter-cache-resume"), frozen)
+        self.assertEqual(cache.read_text(), "{}\n")
 
     def test_ignore_rule_does_not_hide_tracked_file_changes(self):
         (self.upstream / ".gitignore").write_text("*.sqlite3\n")
@@ -312,6 +331,13 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
             "component/.mypy_cache/3.14/AGENTS.md",
             "component/.ruff_cache/0.16.7/source.py",
             "component/.import_linter_cache/settings.py",
+            "component/.import_linter_cache/" + "a" * 31 + ".data.json",
+            "component/.import_linter_cache/" + "a" * 33 + ".data.json",
+            "component/.import_linter_cache/" + "a" * 39 + ".data.json",
+            "component/.import_linter_cache/" + "a" * 41 + ".data.json",
+            "component/.import_linter_cache/" + "a" * 64 + ".data.json",
+            "component/.import_linter_cache/" + "g" * 40 + ".data.json",
+            "component/.import_linter_cache/fcf3e29e24a5bbc5a216f8f45318b63dc99dd9cd.data.json.bak",
         )
         (self.upstream / ".gitignore").write_text("\n".join(names) + "\n")
         self.git(self.upstream, "add", ".gitignore")
@@ -339,10 +365,18 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
 
     def test_unignored_test_artifact_names_are_rejected(self):
         manifest = self.freeze(self.prepare("unignored-test-artifact"))
-        Path(manifest["worktree_path"], "bkcore_unittest.sqlite3").touch()
-
-        with self.assertRaisesRegex(ValueError, "source is dirty"):
-            review_workspace.verify_snapshot(manifest)
+        tree = Path(manifest["worktree_path"])
+        for name in (
+            "bkcore_unittest.sqlite3",
+            "component/.import_linter_cache/fcf3e29e24a5bbc5a216f8f45318b63dc99dd9cd.data.json",
+        ):
+            with self.subTest(name=name):
+                path = tree / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+                with self.assertRaisesRegex(ValueError, "source is dirty"):
+                    review_workspace.verify_snapshot(manifest)
+                path.unlink()
 
     def test_ignored_test_artifact_symlinks_are_rejected(self):
         names = (
@@ -351,6 +385,8 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
             ".pytest_cache",
             "component/__pycache__/source.pyc",
             ".pytest_cache/v/cache/nodeids",
+            "component/.import_linter_cache",
+            "component/.import_linter_cache/fcf3e29e24a5bbc5a216f8f45318b63dc99dd9cd.data.json",
         )
         (self.upstream / ".gitignore").write_text("\n".join(names) + "\n")
         self.git(self.upstream, "add", ".gitignore")
@@ -359,9 +395,11 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
             with self.subTest(name=name):
                 manifest = self.freeze(self.prepare(f"ignored-artifact-symlink-{number}"))
                 external = self.root / f"external-{number}"
-                if name in ("__pycache__", ".pytest_cache"):
+                if name in ("__pycache__", ".pytest_cache", "component/.import_linter_cache"):
                     external.mkdir()
                     (external / "AGENTS.override.md").write_text("external rules\n")
+                    if name == "component/.import_linter_cache":
+                        (external / "fcf3e29e24a5bbc5a216f8f45318b63dc99dd9cd.data.json").write_text("{}\n")
                 else:
                     external.write_text("external input\n")
                 tree = Path(manifest["worktree_path"])
