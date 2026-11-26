@@ -32,9 +32,10 @@ def observe_source(run, manifest, worktree):
     if not manifest.get("head_sha") and not manifest.get("implementing"):
         checkpoint["context_files"] = dict(manifest.get("files") or {})
         return checkpoint
+    worktree_head, branch = git(path, "rev-parse", "HEAD", "--abbrev-ref", "HEAD").splitlines()
     checkpoint.update(
-        worktree_head=git(path, "rev-parse", "HEAD"),
-        branch=git(path, "rev-parse", "--abbrev-ref", "HEAD"),
+        worktree_head=worktree_head,
+        branch=branch,
         source_status=git(path, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"),
         tracked_diff_sha256=hashlib.sha256(
             git(path, "diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv").encode()

@@ -13,9 +13,11 @@ These rules apply to the entire Robert repository.
 - Do not add runtime dependencies without documenting why the standard library
   and current dependencies are insufficient.
 - Do not store GitHub or OpenClaw credentials in configuration or fixtures.
-- Run `python3 -B -m tests.run --workers 4` for code changes. This discovers the
-  complete suite; keep serial `python3 -B -m unittest discover -s tests` for
-  diagnosing order dependence or custom `load_tests` hooks.
+- Run focused tests while editing, then run the complete suite for code changes
+  with `python3 -B -m tests.run --workers 8` when the machine has spare CPU and
+  memory. Use `--workers 4` on constrained machines and in CI. Use serial
+  `python3 -B -m unittest discover -s tests` to diagnose order dependence or
+  run custom `load_tests` hooks.
 - Assign one full-suite runner to each worktree. Other agents in that checkout
   use focused tests and the owner's final full-suite evidence. Freeze source
   edits during that run; reuse evidence only for unchanged tested contents and

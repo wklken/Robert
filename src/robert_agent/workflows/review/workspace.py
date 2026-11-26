@@ -7,6 +7,8 @@ import re
 import shutil
 import subprocess
 
+from robert_agent.adapters.git.review_revision import worktree_state
+from robert_agent.adapters.git.source_files import worktree_files
 from robert_agent.foundation.commands import run_command
 from robert_agent.context.native_prompts import review_evaluate_input
 from robert_agent.context.prompts import render_prompt
@@ -40,8 +42,9 @@ def _file_digest(path):
     return review_files.sha256_file(path)
 
 
-def _source_hashes(tree):
-    names = _git(tree, "ls-files", "-z").split("\0")
+def _source_hashes(tree, names=None):
+    if names is None:
+        names = _git(tree, "ls-files", "-z").split("\0")
     result = {}
     for name in names:
         if not name:
@@ -324,20 +327,15 @@ def verify_snapshot(manifest, *, require_current_prompt=False):
     """Verify frozen bytes against the manifest, or check an unregistered snapshot before adoption."""
     tree = Path(manifest["worktree_path"])
     try:
-        if _git(tree, "rev-parse", "HEAD").strip() != manifest["head_sha"]:
+        head, dirty = worktree_state(tree, read_git=_git)
+        if head != manifest["head_sha"]:
             raise ValueError("review worktree HEAD changed")
-        if _git(
-            tree,
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            "--ignore-submodules=none",
-        ).strip():
+        if dirty:
             raise ValueError("review worktree source is dirty")
-        untracked = _git(tree, "ls-files", "--others", "-z").split("\0")
-        if any(name and not _is_test_artifact(tree, name) for name in untracked):
+        tracked, untracked = worktree_files(tree, read_git=_git)
+        if any(not _is_test_artifact(tree, name) for name in untracked):
             raise ValueError("review worktree contains unregistered files")
-        if _source_hashes(tree) != manifest["source_hashes"]:
+        if _source_hashes(tree, tracked) != manifest["source_hashes"]:
             raise ValueError("review worktree source hash changed")
         for name, expected in manifest["files"].items():
             path = review_files.safe_path(name, manifest["artifact_root"])

@@ -8,6 +8,15 @@ from tests.support.review_workspace import ReviewWorkspaceFixture
 
 
 class ReviewWorkspaceTests(ReviewWorkspaceFixture):
+    def test_snapshot_preserves_paths_that_resemble_git_listing_tags(self):
+        name = "? tracked\tpath.py"
+        (self.upstream / name).write_text("value = 1\n")
+        self.git(self.upstream, "add", "--", name)
+        self.commit("value = 3\n")
+        frozen = self.freeze(self.prepare("listing-tags"))
+        self.assertIn(name, frozen["source_hashes"])
+        self.assertTrue(review_workspace.verify_snapshot(frozen))
+
     def test_legacy_frozen_context_can_be_adopted_after_template_update(self):
         prepared = self.prepare("legacy-freeze")
         frozen = self.freeze_legacy(prepared)
