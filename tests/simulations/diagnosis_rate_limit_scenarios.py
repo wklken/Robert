@@ -52,7 +52,8 @@ def configure(root, db, url, *, budget=3):
             "diagnosis": {
                 "command": [sys.executable, str(wrapper), url],
                 "timeout_seconds": 5,
-                "cooldown_seconds": 2,
+                # Retry-After headers must exceed this to prove they extend the cooldown.
+                "cooldown_seconds": 1,
                 "max_calls_per_hour": budget,
             },
         },
@@ -120,12 +121,12 @@ def assert_no_effect(db):
         assert conn.execute("SELECT count(*) FROM supervision_incidents WHERE status='resolved'").fetchone()[0] == 0
 
 
-def recovered(root, header="3", *, kind="seconds"):
+def recovered(root, header="2", *, kind="seconds"):
     root.mkdir()
     db = root / "state.db"
     storage.init_database(db)
     if kind == "http_date":
-        header = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=5), usegmt=True)
+        header = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=3), usegmt=True)
     with model_http({"/diagnosis": [(429, header), (200, None)]}) as endpoint:
         config = configure(root, db, endpoint.url + "/diagnosis")
         incident(db, "first")
@@ -147,7 +148,7 @@ def recovered(root, header="3", *, kind="seconds"):
             elif kind == "http_date":
                 assert calls[1]["wall_at"] >= parsedate_to_datetime(header).timestamp(), calls
             else:
-                assert calls[1]["at"] - calls[0]["at"] >= 2, calls
+                assert calls[1]["at"] - calls[0]["at"] >= config["supervision"]["diagnosis"]["cooldown_seconds"], calls
             assert len(runner(db)["hourly_calls"]) == 2 and runner(db)["claim"] is None
             assert_no_effect(db)
             return {
@@ -197,7 +198,7 @@ def simultaneous(root):
     from tests.simulations.model_rate_limit_scenarios import worker_runtime
 
     root.mkdir()
-    routes = {"/diagnosis": [(429, "2")], "/worker/123/model-primary": [(429, "2"), (200, None)]}
+    routes = {"/diagnosis": [(429, "1")], "/worker/123/model-primary": [(429, "1"), (200, None)]}
     with model_http(routes) as endpoint, worker_runtime(root / "worker", endpoint, tries=2) as runtime:
         config = configure(root / "diagnosis", runtime.db, endpoint.url + "/diagnosis", budget=1)
         incident(runtime.db, "while_worker_waits")

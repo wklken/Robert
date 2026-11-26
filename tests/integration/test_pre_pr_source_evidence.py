@@ -22,20 +22,16 @@ class PrePRSourceEvidenceTests(PrePRReviewFixture):
         self.assertTrue(run["artifact"])
         self.assertNotIn("source_pin_error", run["dispatch"]["result_checkpoint"])
 
-    def test_1001_ignored_node_modules_files_allow_normal_launch_and_completion(self):
+    def test_1001_ignored_node_modules_and_virtualenv_files_allow_normal_launch_and_completion(self):
         driver = self.start_with_ignored_environment()
-        root = Path(driver.assigned_path) / "node_modules"
-        root.mkdir()
-        for number in range(1001):
-            (root / f"dependency-{number}.js").write_text("export const value = 1;\n")
-        self.assert_implementation_registered(driver, driver.run())
-
-    def test_1001_ignored_virtualenv_files_allow_normal_launch_and_completion(self):
-        driver = self.start_with_ignored_environment()
-        root = Path(driver.assigned_path) / ".venv" / "lib"
-        root.mkdir(parents=True)
-        for number in range(1001):
-            (root / f"dependency-{number}.py").write_text("value = 1\n")
+        for relative, suffix, content in (
+            ("node_modules", ".js", "export const value = 1;\n"),
+            (".venv/lib", ".py", "value = 1\n"),
+        ):
+            root = Path(driver.assigned_path) / relative
+            root.mkdir(parents=True)
+            for number in range(1001):
+                (root / f"dependency-{number}{suffix}").write_text(content)
         self.assert_implementation_registered(driver, driver.run())
 
     def test_virtualenv_python_symlink_created_by_successful_writer_allows_completion(self):

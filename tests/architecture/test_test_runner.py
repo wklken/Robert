@@ -22,13 +22,14 @@ class TestRunnerTests(unittest.TestCase):
     def module(self, name, source):
         (self.root / f"test_{name}.py").write_text(textwrap.dedent(source))
 
-    def run_tests(self, *arguments):
+    def run_tests(self, *arguments, env=None):
         return subprocess.run(
             [sys.executable, "-B", "-m", "tests.run", "--start-directory", str(self.root), *arguments],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
             timeout=30,
+            env=env,
         )
 
     def test_parallel_modules_execute_every_case_once_and_preserve_fixtures(self):
@@ -109,6 +110,26 @@ class TestRunnerTests(unittest.TestCase):
         result = self.run_tests("--workers", "1")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("ROBERT_RUNNER_FIXTURE", os.environ)
+
+    def test_module_processes_cache_bytecode_outside_the_tested_tree(self):
+        (self.root / "fixture_helper.py").write_text("VALUE = 1\n")
+        self.module(
+            "imports_helper",
+            "import unittest, fixture_helper\nclass Cases(unittest.TestCase):\n def test_import(self): self.assertEqual(fixture_helper.VALUE, 1)",
+        )
+        temporary_home = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_home.cleanup)
+        home = Path(temporary_home.name)
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"PYTHONPYCACHEPREFIX", "PYTHONDONTWRITEBYTECODE"}
+        }
+        result = self.run_tests("--workers", "1", env={**environment, "HOME": str(home)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(list(self.root.rglob("__pycache__")), [])
+        cached = [path.name for path in (home / ".cache" / "robert-test-pycache").rglob("*.pyc")]
+        self.assertTrue(any(name.startswith("fixture_helper.") for name in cached), cached)
 
     def test_list_matches_standard_discovery_without_running_tests(self):
         self.module(

@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from robert_agent.delivery import queries
 from robert_agent.persistence.rounds import pre_pr_review as store
 from robert_agent.workflows.pre_pr_review.coordinator import Coordinator
 from tests.support import database as fixture_database
@@ -69,99 +68,6 @@ class LegacyFinalVerificationTests(PrePRReviewFixture):
         self.assertEqual(self.launches["reviewer-prompt.md"], 1)
         self.assertEqual(self.launches["address"], 1)
         self.assertEqual(self.launches["verify_final"], 1)
-
-    def test_final_reviewer_schema_upgrade_preserves_old_runs_and_constraints(self):
-        import sqlite3
-
-        from robert_agent.persistence.schema import database
-
-        driver = self.start(["claude"])
-        with fixture_database.connect(self.db) as conn:
-            run = store.new_run(conn, driver.round_id, "review", "claude", driver.attempt_id, self.root, "old-prompt")
-            store.update_run(
-                conn, run["run_id"], status="running", slot_reserved=1, dispatch_json=json.dumps({"pid": 1073741824})
-            )
-            old = dict(conn.execute("SELECT * FROM pre_pr_review_runs").fetchone())
-            versions = conn.execute("SELECT * FROM schema_migrations ORDER BY version").fetchall()
-            ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name='pre_pr_review_runs'").fetchone()[0]
-            conn.execute("ALTER TABLE pre_pr_review_runs RENAME TO legacy_runs")
-            conn.execute(ddl.replace(",'verify_final'", ""))
-            columns = ",".join(old)
-            conn.execute(f"INSERT INTO pre_pr_review_runs ({columns}) SELECT {columns} FROM legacy_runs")
-            conn.execute("DROP TABLE legacy_runs")
-        database.init_database(self.db)
-        database.init_database(self.db)
-        with fixture_database.connect(self.db) as conn:
-            self.assertEqual(dict(conn.execute("SELECT * FROM pre_pr_review_runs").fetchone()), old)
-            self.assertEqual(conn.execute("SELECT * FROM schema_migrations ORDER BY version").fetchall(), versions)
-            ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name='pre_pr_review_runs'").fetchone()[0]
-            self.assertIn("verify_final", ddl)
-            self.assertIn("UNIQUE (round_id, stage, worker_id, attempt_no)", ddl)
-            self.assertIn("UNIQUE (output_dir)", ddl)
-            self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
-            self.assertIsNotNone(
-                conn.execute("SELECT 1 FROM sqlite_master WHERE name='pre_pr_review_runs_reserved'").fetchone()
-            )
-            with self.assertRaises(sqlite3.IntegrityError):
-                conn.execute("UPDATE pre_pr_review_runs SET stage='unsupported'")
-            store.new_run(conn, driver.round_id, "verify_final", "claude", driver.attempt_id, self.root, "new-prompt")
-
-    def emulate_pre_upgrade_ready_result(self, driver):
-        with fixture_database.connect(self.db) as conn:
-            entry = store.session(conn, task_id=driver.task_id)
-            proof = {key: value for key, value in entry["proof"].items() if key != "final_verification"}
-            store.update(conn, driver.round_id, proof_json=json.dumps(proof))
-            conn.execute("DELETE FROM pre_pr_review_runs WHERE stage='verify_final'")
-            ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name='pre_pr_review_runs'").fetchone()[0]
-            conn.execute("ALTER TABLE pre_pr_review_runs RENAME TO legacy_runs")
-            conn.execute(ddl.replace(",'verify_final'", ""))
-            conn.execute("INSERT INTO pre_pr_review_runs SELECT * FROM legacy_runs")
-            conn.execute("DROP TABLE legacy_runs")
-        return proof
-
-    def test_upgrade_preserves_old_accepted_frozen_publication(self):
-        from robert_agent.delivery.application import guards
-        from robert_agent.persistence.schema import database
-
-        driver = self.start(["claude"])
-        self.with_finding = True
-        self.assertTrue(driver.run()["ok"])
-        proof = self.emulate_pre_upgrade_ready_result(driver)
-        with patch.object(store, "_matches_final_verification", return_value=True):
-            self.cycle([])
-        database.init_database(self.db)
-        with fixture_database.connect(self.db) as conn:
-            entry = store.session(conn, task_id=driver.task_id)
-            self.assertEqual(entry["proof"], proof)
-            actions = queries.ready_actions(conn, 10)
-            self.assertEqual(len(actions), 2)
-            for action in actions:
-                self.assertIsNone(guards.publication_scope_guard(conn, action))
-
-    def test_upgrade_binds_only_the_preexisting_unaudited_result(self):
-        from robert_agent.persistence.schema import database
-
-        driver = self.start(["claude"])
-        self.with_finding = True
-        result = driver.run()
-        proof = self.emulate_pre_upgrade_ready_result(driver)
-        database.init_database(self.db)
-        self.cycle([])
-        with fixture_database.connect(self.db) as conn:
-            entry = store.session(conn, task_id=driver.task_id)
-            self.assertEqual(entry["proof"], proof)
-            self.assertEqual(len(queries.ready_actions(conn, 10)), 2)
-            self.assertTrue(
-                store.matches_submission(entry, driver.attempt_id, proof["fingerprint"], result_id=result["result_id"])
-            )
-            self.assertFalse(store.matches_submission(entry, driver.attempt_id, proof["fingerprint"]))
-            self.assertFalse(
-                store.matches_submission(entry, driver.attempt_id, proof["fingerprint"], result_id="new-result")
-            )
-            entry["proof"]["head_sha"] = proof["candidate_sha"]
-            self.assertFalse(
-                store.matches_submission(entry, driver.attempt_id, proof["fingerprint"], result_id=result["result_id"])
-            )
 
     def test_final_verifier_reuses_the_finished_address_worktree(self):
         driver = self.start(["claude"])

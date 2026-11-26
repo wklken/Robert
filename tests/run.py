@@ -56,7 +56,7 @@ def discover(start_directory):
 def run_module(module, identifiers, environment):
     started = time.monotonic()
     result = subprocess.run(
-        [sys.executable, "-B", "-m", "unittest", *identifiers],
+        [sys.executable, "-m", "unittest", *identifiers],
         env=environment,
         capture_output=True,
         text=True,
@@ -104,6 +104,8 @@ def run(args):
         print("\n".join(sorted([*identifiers, *(case.id() for case in discovery_cases)])))
         return 0
     environment = dict(os.environ)
+    # Each module process reuses bytecode without writing __pycache__ into the tested tree.
+    environment.setdefault("PYTHONPYCACHEPREFIX", str(test_run.PYCACHE_ROOT))
     environment["PYTHONPATH"] = os.pathsep.join(
         filter(
             None, (str(test_run.REPO_ROOT / "src"), str(args.start_directory.resolve()), environment.get("PYTHONPATH"))

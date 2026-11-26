@@ -30,7 +30,7 @@ class ModelRateLimitScenarios(unittest.TestCase):
 
     def test_diagnosis_rate_limit_recovery_and_retry_after(self):
         for header, kind in [
-            ("3", "seconds"),
+            ("2", "seconds"),
             (None, "http_date"),
             ("invalid", "invalid_header"),
             (None, "missing_header"),
