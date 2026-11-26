@@ -1,9 +1,10 @@
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
-from robert_agent.workflows.review import workspace as review_workspace
+from robert_agent.workflows.review import project_runtime, workspace as review_workspace
 from tests.support.review_workspace import ReviewWorkspaceFixture
 
 
@@ -126,7 +127,7 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
         external.mkdir()
         (external / ".python-version").write_text("3.11.6\n")
         (self.repo / "component").symlink_to(external, target_is_directory=True)
-        runtime = review_workspace._runtime_info(self.repo, ["component/deleted.py"])
+        runtime = project_runtime.runtime_info(self.repo, ["component/deleted.py"])
         self.assertNotIn("component/.python-version", runtime["python"]["declarations"])
 
     def test_runtime_preserves_nested_declarations_for_changed_components(self):
@@ -137,12 +138,36 @@ class ReviewWorkspaceTests(ReviewWorkspaceFixture):
         (dashboard / "app.py").write_text("value = 1\n")
         self.git(self.upstream, "add", ".")
         self.commit("value = 3\n")
-        with patch.object(review_workspace.shutil, "which", return_value=None):
+        with patch.object(project_runtime.shutil, "which", return_value=None):
             manifest = self.prepare("nested-runtime")
         runtime = json.loads(Path(manifest["context_dir"], "runtime-info.json").read_text())["python"]
         self.assertEqual(runtime["declarations"]["src/dashboard/.python-version"], "3.11.6")
-        self.assertEqual(runtime["declarations"]["src/dashboard/pyproject.toml"], ['">=3.11,<3.12"'])
+        self.assertEqual(runtime["declarations"]["src/dashboard/pyproject.toml"], [">=3.11,<3.12"])
         self.assertEqual(runtime["status"], "UNRESOLVED")
+
+    def test_snapshot_records_ready_frontend_tool_paths_and_missing_dependencies(self):
+        frontend = self.upstream / "frontend"
+        frontend.mkdir()
+        (frontend / ".nvmrc").write_text("24.22.1\n")
+        (frontend / "package.json").write_text('{"packageManager": "pnpm@11.25.0"}')
+        (frontend / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n")
+        self.git(self.upstream, "add", ".")
+        self.commit("value = 3\n")
+        bin_dir = self.root / "managed-tools"
+        bin_dir.mkdir()
+        for name, version in (("node", "v24.22.1"), ("pnpm", "11.25.0")):
+            path = bin_dir / name
+            path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{version}'\n")
+            path.chmod(0o755)
+
+        with patch.dict(os.environ, {"PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}):
+            manifest = self.freeze(self.prepare("frontend-runtime"))
+        path = Path(manifest["context_dir"], "runtime-info.json")
+        tools = json.loads(path.read_text())["components"]["frontend"]
+        self.assertEqual(tools["node"]["executable"], str(bin_dir / "node"))
+        self.assertEqual(tools["pnpm"]["executable"], str(bin_dir / "pnpm"))
+        self.assertEqual(tools["node_dependencies"]["status"], "MISSING")
+        self.assertTrue(review_workspace.verify_snapshot(manifest))
 
     def test_two_rounds_use_detached_independent_sources_and_frozen_context(self):
         first = self.freeze(self.prepare("round-1"))

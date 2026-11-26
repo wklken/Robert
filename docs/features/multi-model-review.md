@@ -51,6 +51,25 @@ head/base、完整 PR 范围、reviewer 顺序和配置、验收材料及授权�
 晚到的等价请求关联原任务，不改变冻结输入。报告发布后，每个触发分别保存原结果与发布回执，
 等价 GitHub review request 复用同一报告，不再调用模型或重复发布。报告发布后新发的人工通用 review 评论独立执行并回应；同一事件重放仍幂等。已取消、过期或无法继续推进的执行不会消费新的授权请求，新的事件独立开轮；尚可恢复的原任务保留既有额度和归属。既有历史轮次和运行进程保留各自身份。
 
+## 项目运行时清单
+
+准备审查快照时，Robert 为变更目录和祖先目录生成 `runtime-info.json`。清单按 worktree 相对目录记录
+版本要求、已验证的绝对可执行路径，以及受限的检查环境。reviewer 从对应组件目录使用这些路径。
+
+- Python 读取 `.python-version`、`pyproject.toml` 的 `[project].requires-python`、
+  `setup.cfg` 的 `[options].python_requires`，以及 `Pipfile` 的 `[requires]` 中的
+  `python_version` 和 `python_full_version`。这些运行约束须同时满足；mypy 等工具的目标版本不参与匹配。
+  清单保留环境中已有解释器的路径，配置解析失败或声明类型无效时标为 `UNRESOLVED`。
+- Node 识别 `.nvmrc` 与 `package.json` 的 Node 版本要求。声明 pnpm 时核对
+  `packageManager` 中的固定版本，并记录 `node_modules` 是否存在以及锁文件位置。
+- Go 解析 `go.mod` 和可见 `go.work` 的最低版本要求。验证时使用预装的本地工具链，
+  并记录 workspace 路径和可选的 toolchain 建议版本。
+
+运维人员可以把预装工具的 bin 目录加到 Robert 服务的 PATH。Robert 在项目目录之外探测版本，
+忽略相对 PATH 和来自被审查 worktree 的可执行文件。版本约束支持数字版本及简单的比较组合。
+缺少匹配工具时清单标为 `UNRESOLVED`。版本验证和依赖目录存在都不能证明依赖完整，
+准备阶段也不安装依赖或运行项目脚本。
+
 ## 并发额度
 
 `scheduler.model_max_concurrency` 控制共享模型额度。
