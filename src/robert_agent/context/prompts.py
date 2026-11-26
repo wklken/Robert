@@ -19,7 +19,11 @@ from robert_agent.resource_files import resource
 _SECTIONS = ("Stage", "Task", "Boundaries", "Context", "Work", "Verification", "Delivery", "Ending")
 _CONTRACT_VERSION = "robert.prompt.v1"
 _STAGE_VERSIONS = {
-    "review.evaluate": {1: "review-evaluate-model-preparation-v1.md", 2: "review-evaluate.md"},
+    "review.evaluate": {
+        1: "review-evaluate-model-preparation-v1.md",
+        2: "review-evaluate-controller-inventory-v2.md",
+        3: "review-evaluate.md",
+    },
     "review.address_findings": {
         1: "review-address-findings.md",
         2: "review-address-findings-single-round-v2.md",
