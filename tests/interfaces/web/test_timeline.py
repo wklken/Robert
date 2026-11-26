@@ -24,6 +24,32 @@ class TimelineEndpointsTests(BoardReadModelFixture):
                 self.assertEqual(headers["content-type"], f"{mime}; charset=utf-8")
                 self.assertIn(marker, body)
 
+    def test_live_display_routes_and_validation(self):
+        for route, marker in (
+            ("/timeline", b'href="/live-display"'),
+            ("/live-display", b'id="receipt-dialog"'),
+            ("/assets/live-display.css", b".display-metrics"),
+            ("/assets/live-display.js", b"/api/live-display"),
+        ):
+            with self.subTest(route=route):
+                status, _, body = server.build_http_response(route, self.db_path)
+                self.assertEqual(status, 200)
+                self.assertIn(marker, body)
+        status, headers, body = server.build_http_response("/api/live-display?tz=Asia/Shanghai", self.db_path)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(
+            json.loads(body), {"counts": {"total": 0, "week": 0, "today": 0, "running": 0}, "receipts": []}
+        )
+        for route, expected in (
+            ("/api/live-display?tz=Unknown/Zone", 422),
+            ("/api/live-display/receipt?task_id=task", 422),
+            ("/api/live-display/receipt?task_id=task&result_id=missing", 404),
+        ):
+            with self.subTest(route=route):
+                status, _, _ = server.build_http_response(route, self.db_path)
+                self.assertEqual(status, expected)
+
     def test_empty_period_and_validation(self):
         status, _, body = server.build_http_response(
             "/api/timeline?view=week&date=2026-11-22&tz=Asia%2FShanghai", self.db_path

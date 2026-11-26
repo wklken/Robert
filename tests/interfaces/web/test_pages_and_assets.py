@@ -206,6 +206,7 @@ class WebPagesAndAssetsTests(SummaryFixture):
                     b"/board",
                     b"/work?bucket=history",
                     b"/timeline",
+                    b"/live-display",
                     b"/proposals",
                     b"/operations",
                     b"/operations#knowledge",
