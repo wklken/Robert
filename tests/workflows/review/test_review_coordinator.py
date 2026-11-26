@@ -57,11 +57,11 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         report1 = first.run()
         self.assertTrue(report1.is_file())
         self.assertEqual(first.manifest["github_account"], "robert-bot")
-        self.assertEqual(first.manifest["decision_owner"]["login"], "maintainer")
+        self.assertEqual(first.manifest["decision_owner"]["login"], "author")
         reviewer_calls = [call for call in self.calls if call[0] == "review"]
         self.assertEqual(reviewer_calls[0][2:4], reviewer_calls[1][2:4])
         self.assertIn(b'Configured Robert GitHub account: "robert-bot"', reviewer_calls[0][2])
-        self.assertIn(b'"decision_mention": "@maintainer"', reviewer_calls[0][2])
+        self.assertIn(b'"decision_mention": "@author"', reviewer_calls[0][2])
         self.assertNotEqual(reviewer_calls[0][4], reviewer_calls[1][4])
         self.assertIn("Code Review 汇总报告", report1.read_text())
         phases = {"prepare": "review.prepare", "review": "review.evaluate", "synthesis": "review.synthesize"}

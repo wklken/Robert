@@ -413,10 +413,15 @@ class ReviewAuditTests(WorkerProtocolFixture):
     def test_single_review_audit_checks_confirmed_owner_and_complete_mention(self):
         from robert_agent.delivery.application import audit as audit_result
 
-        for login, body, accepted in (
-            ("Alice", "@Alice Please decide.", True),
-            ("Bob", "@Bob Please decide.", False),
-            ("Alice", "@Alice-other Please decide.", False),
+        for author, login, body, policy, accepted in (
+            ("robert-bot", "Alice", "@Alice Please decide.", "pr_author", True),
+            ("robert-bot", "Bob", "@Bob Please decide.", "pr_author", False),
+            ("robert-bot", "Alice", "@Alice-other Please decide.", "pr_author", False),
+            ("RimuruChan", "RimuruChan", "@RimuruChan Please decide.", "pr_author", True),
+            ("RimuruChan", "Alice", "@Alice Please decide.", "pr_author", False),
+            ("RimuruChan", "RimuruChan", "@RimuruChan-other Please decide.", "pr_author", False),
+            ("RimuruChan", "Alice", "@Alice Please decide.", None, True),
+            ("RimuruChan", "Alice", "@Alice Please decide.", "unknown", False),
         ):
             with self.subTest(login=login, body=body):
                 payload = internal_result(
@@ -427,8 +432,9 @@ class ReviewAuditTests(WorkerProtocolFixture):
                         {
                             "type": "comment",
                             "target_url": "https://github.com/x/y/pull/1",
-                            "pr_author_login": "robert-bot",
+                            "pr_author_login": author,
                             "decision_owner_login": login,
+                            **({"decision_owner_policy": policy} if policy else {}),
                             "body": self._dd_comment_body(body),
                         }
                     ],
@@ -445,6 +451,8 @@ class ReviewAuditTests(WorkerProtocolFixture):
                         "repo": "x/y",
                         "sources": [{"source_type": "pull_request", "number": 1}],
                         "decision_owner": {"login": "Alice"},
+                        "github_account": "robert-bot",
+                        "pr_authors": {"https://github.com/x/y/pull/1": author},
                     },
                 )
                 self.assertEqual(checked["ok"], accepted, checked)
