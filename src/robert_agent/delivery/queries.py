@@ -2,7 +2,7 @@
 
 from robert_agent.persistence.queries import github_actions as db_read_github_actions
 
-from robert_agent.execution import retry as retry_policy
+from robert_agent.delivery import retry as publication_retry
 
 from robert_agent.delivery import values as publication_values
 
@@ -17,10 +17,4 @@ def ready_actions(conn, limit, repo_id=None, task_ids=None, action_ids=None):
 
 
 def retry_budget_exhausted(prior, now):
-    first = prior.get("first_failed_at") or now
-    try:
-        elapsed = (retry_policy.timestamp(now) - retry_policy.timestamp(first)).total_seconds()
-        count = int(prior.get("attempt_count", 0))
-    except (ValueError, TypeError, OverflowError):
-        return True
-    return count < 0 or count >= retry_policy.MAX_ATTEMPTS or elapsed >= retry_policy.MAX_ELAPSED_SECONDS
+    return publication_retry.retry_budget_exhausted(prior, now)

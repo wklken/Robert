@@ -1,5 +1,6 @@
 """Safe, bounded execution information for the operator board."""
 
+from robert_agent.adapters.github.publication_transport import safe_diagnostics
 from robert_agent.foundation.contracts.delivery import PublishStatus
 
 from robert_agent.persistence import records as db_records
@@ -20,11 +21,12 @@ def publication_history(conn, task_id):
             metadata = json.loads(row["metadata_json"] or "{}")
             publication = metadata.get("publish", {}) if isinstance(metadata, dict) else {}
         except (TypeError, ValueError):
-            publication = {}
+            metadata, publication = {}, {}
+        metadata = metadata if isinstance(metadata, dict) else {}
         if not isinstance(publication, dict):
             publication = {}
-        # Only expose the receipt fields; bodies, responses and worktree paths
-        # are not part of the board's public read model.
+        # Request/response evidence is a bounded sanitized transport journal;
+        # the raw publication body and receipt response remain private.
         actions.append(
             {
                 "action_id": row["action_id"],
@@ -43,6 +45,9 @@ def publication_history(conn, task_id):
                 "max_attempts": publication.get("max_attempts"),
                 "next_retry_at": safe_text(publication.get("next_retry_at")),
                 "required_action": safe_text(publication.get("required_action")),
+                "error_class": safe_text(publication.get("error_class")),
+                "http_status": publication.get("http_status") if type(publication.get("http_status")) is int else None,
+                "diagnostics": safe_diagnostics(metadata.get("publication_diagnostics", [])),
             }
         )
     return actions

@@ -434,17 +434,27 @@ flowchart TD
 去重不等于网络请求保证恰好一次。`action_id`、`idempotency_key` 与请求 fingerprint
 绑定本地 intent；远端 marker、正文、PR owner、分支与 SHA 证明实际效果。
 读取失败（`*_query_failed`，包括超时）不构成证据：intent 保持 `executing`，按
-`execution/retry.py` 的次数、时长与退避只重新读取，同一结果中排在后面的动作继续等待；
+`delivery/retry.py` 的次数、时长与退避只重新读取，同一结果中排在后面的动作继续等待；
 用尽后进入 `attention`。标记缺失、候选冲突、SHA 或范围冲突、响应结构异常属于证据歧义，
 立即进入 `attention`。两种情况都不能假设写入失败而重复发布。退避期间监督把它视为预期等待，
 退避结束仍未解决时照常报告 `publication_effect_unresolved`。
 发布前的远端校验独立于 discovery 缓存。自动重试受次数、时间与退避约束，
 人工重试也须重新核对当前权限和版本。
 
+`adapters/github/publication_transport.py` 在原有命令执行边界采集脱敏的请求、响应、
+异常和响应头；`delivery/application/outcomes.py` 将有界日志保存在动作元数据中，
+`readmodels/execution.py` 再校验后提供给任务详情。日志独立于最终回执，成功恢复不会
+清除失败证据。适配器只提供传输事实，重试调度由 `delivery/retry.py` 所有：已证实的
+网络错误在原有预算内退避，限流遵守 `Retry-After`、额度耗尽时的
+`X-RateLimit-Reset` 和无提示时的次级限流退避。限流等待不消耗网络故障的有效时长预算。
+同一 GitHub 账号的持久化限流期限同时约束动作选取和发布前预算探测。
+`decide` 模式允许这些有界传输重试继续；既有恢复 claim、未知副作用与当前授权检查仍有效。
+
 源码：[publish_ready_actions](../src/robert_agent/delivery/application/publish.py)、
 [classify_remote_state](../src/robert_agent/delivery/application/reconcile.py)、
 [publication intent](../src/robert_agent/delivery/application/intents.py)、[发布锁](../src/robert_agent/delivery/lock.py)、
-[execution/retry.py](../src/robert_agent/execution/retry.py)。
+[delivery/retry.py](../src/robert_agent/delivery/retry.py)、
+[publication transport](../src/robert_agent/adapters/github/publication_transport.py)。
 崩溃与重复写入行为见 [test_publication_reconcile.py](../tests/delivery/test_publication_reconcile.py)。
 
 ## Worker 监督与失败恢复

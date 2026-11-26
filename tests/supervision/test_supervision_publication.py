@@ -299,10 +299,10 @@ class SupervisedPublicationTests(unittest.TestCase):
         self.assertEqual(self.intent()[0], "published")
         self.assertEqual(self.actions(), [])
 
-    def test_decide_configuration_is_carried_to_native_publisher_without_repair(self):
+    def test_decide_configuration_keeps_bounded_network_retries_native(self):
         self.config["supervision"]["mode"] = "decide"
         self.assertTrue(supervision_publication.needs_config(self.config))
         self.cycle(config=self.config)
         before = self.commands.count(["git", "push"])
         self.cycle(60, config=self.config)
-        self.assertEqual(self.commands.count(["git", "push"]), before)
+        self.assertEqual(self.commands.count(["git", "push"]), before + 1)

@@ -116,6 +116,16 @@ had usable evidence or repair attempts retain their original wall budget.
 Normal result ingestion, initial execution, audit/publication validation,
 cancellation and required cleanup retain their existing lifecycle owners.
 
+The publisher continues an already audited action after a proven network failure
+or GitHub rate limit within its original three-attempt budget, including in
+`decide` mode. It checks an ambiguous remote effect before retrying and rechecks
+current trust and scope immediately before each write. An active recovery claim,
+maintenance repair, unknown failure or exhausted budget still follows the normal
+supervision gates; transport retries do not authorize a new business task.
+GitHub `Retry-After` and exhausted primary `X-RateLimit-Reset` deadlines are
+persisted. Waiting for a provider deadline does not consume the ten-minute
+network retry window. No request for that publisher account is issued early.
+
 Grants bind the complete sampled context, candidate generation and administrator
 policy. Consumers recheck the current context and their own eligibility; new
 requirements, results, PR versions or changed policy invalidate stale grants.
