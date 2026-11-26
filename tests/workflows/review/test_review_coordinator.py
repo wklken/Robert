@@ -82,7 +82,7 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         self.assertEqual(index["preparation_mode"], "controller-inventory")
         self.assertIn("not read", index["reading_notes"])
 
-    def test_later_review_request_keeps_original_owner_in_native_prompts(self):
+    def test_later_review_request_keeps_pr_author_in_native_prompts(self):
         self.cycle([self.event()])
         first = self.coordinator()
         first.run()
@@ -93,9 +93,25 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         self.cycle([self.event("second", actor="another-maintainer")])
         second = self.coordinator()
         second.run()
-        self.assertEqual(second.manifest["decision_owner"]["login"], "maintainer")
+        self.assertEqual(second.manifest["decision_owner"]["login"], "author")
         self.assertEqual(second.request["event"]["actor_login"], "another-maintainer")
-        self.assertIn(b'"decision_mention": "@maintainer"', self.calls[-1][2])
+        self.assertIn(b'"decision_mention": "@author"', self.calls[-1][2])
+
+    def test_review_request_addresses_decisions_to_author_not_requester(self):
+        event = self.event() | {"event_type": "review_request", "requester_login": "maintainer"}
+        self.cycle([event])
+        driver = self.coordinator()
+        driver.run()
+        self.assertEqual(driver.manifest["decision_owner"]["login"], "author")
+        for stage, _, prompt, *_ in self.calls:
+            self.assertIn(b'"decision_mention": "@author"', prompt, stage)
+        with fixture_database.connect(self.db) as conn:
+            metadata = json.loads(
+                conn.execute(
+                    "SELECT metadata_json FROM workstreams WHERE workstream_id=?", (driver.session["workstream_id"],)
+                ).fetchone()[0]
+            )
+        self.assertEqual(metadata["decision_owner"]["login"], "maintainer")
 
     def test_file_handoff_same_prompt_and_two_independent_rounds(self):
         self.cycle([self.event()])
@@ -103,11 +119,11 @@ class ReviewCoordinatorTests(ReviewCoordinatorFixture):
         report1 = first.run()
         self.assertTrue(report1.is_file())
         self.assertEqual(first.manifest["github_account"], "robert-bot")
-        self.assertEqual(first.manifest["decision_owner"]["login"], "maintainer")
+        self.assertEqual(first.manifest["decision_owner"]["login"], "author")
         reviewer_calls = [call for call in self.calls if call[0] == "review"]
         self.assertEqual(reviewer_calls[0][2:4], reviewer_calls[1][2:4])
         self.assertIn(b'Configured Robert GitHub account: "robert-bot"', reviewer_calls[0][2])
-        self.assertIn(b'"decision_mention": "@maintainer"', reviewer_calls[0][2])
+        self.assertIn(b'"decision_mention": "@author"', reviewer_calls[0][2])
         self.assertNotEqual(reviewer_calls[0][4], reviewer_calls[1][4])
         self.assertIn("Code Review 汇总报告", report1.read_text())
         phases = {"prepare": "review.prepare", "review": "review.evaluate", "synthesis": "review.synthesize"}
