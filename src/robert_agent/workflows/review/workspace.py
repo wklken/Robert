@@ -291,7 +291,7 @@ def _build_snapshot(
     manifest = {
         "schema_version": 1,
         "context_version": 1,
-        "prompt_version": 2,
+        "prompt_version": 3,
         "round_id": round_id,
         "snapshot_id": snapshot_id,
         "head_sha": head_sha,
@@ -349,10 +349,10 @@ def verify_snapshot(manifest, *, require_current_prompt=False):
                 # Version 1 was also used by the first controller-inventory release.
                 # Adoption must match a known full rendering, not only a local hash.
                 version = manifest.get("prompt_version")
-                if type(version) is not int or version not in (1, 2):
+                if type(version) is not int or version not in (1, 2, 3):
                     raise ValueError("unsupported review prompt version")
                 text = path.read_text(encoding="utf-8")
-                if text != _reviewer_text(manifest) and not (
+                if text != _reviewer_text(manifest, stage_version=2 if version == 1 else version) and not (
                     version == 1 and text == _reviewer_text(manifest, stage_version=1)
                 ):
                     raise ValueError("review prompt no longer matches a supported built-in template")
@@ -409,7 +409,9 @@ def freeze_context(manifest):
         frozen["files"][str(context / name)] = review_files.sha256_file(context / name)
     prompt_path = Path(manifest["artifact_root"]) / "reviewer-prompt.md"
     review_files.safe_path(prompt_path, manifest["artifact_root"])
-    expected_prompt = _reviewer_text(frozen)
+    # Some version 1 snapshots already used the controller-inventory template.
+    version = frozen["prompt_version"]
+    expected_prompt = _reviewer_text(frozen, stage_version=2 if version == 1 else version)
     if prompt_path.exists():
         if prompt_path.read_text(encoding="utf-8") != expected_prompt:
             raise ValueError("unregistered reviewer prompt differs from frozen context")
