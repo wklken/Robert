@@ -1,0 +1,168 @@
+.live-display {
+  color-scheme: dark;
+  --display-canvas: #152130;
+  --display-text: #f2f4f4;
+  --display-muted: #b6c3ce;
+  --display-rule: #415363;
+  --display-today: #f5ce91;
+  --display-running: #a8d9df;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: clamp(20px, 4vw, 96px);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: clamp(24px, 6vh, 94px);
+  background: var(--display-canvas);
+  color: var(--display-text);
+}
+
+.display-header,
+.display-title,
+.display-actions,
+.display-footer {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 1.5vw, 32px);
+}
+
+.display-header,
+.display-footer {
+  justify-content: space-between;
+}
+
+.display-title img {
+  width: clamp(32px, 3.2vw, 68px);
+  height: auto;
+}
+
+.display-title h1 {
+  margin: 0;
+  font-size: clamp(22px, 3vw, 60px);
+  line-height: 1.15;
+  letter-spacing: -.035em;
+}
+
+.display-actions {
+  flex: none;
+  font-size: clamp(14px, 1.25vw, 26px);
+}
+
+.display-actions a {
+  color: var(--display-muted);
+}
+
+.display-actions button,
+.live-display .receipt-header button {
+  border: 1px solid var(--display-rule);
+  border-radius: 5px;
+  background: transparent;
+  padding: .4em .75em;
+}
+
+.live-display main {
+  display: grid;
+}
+
+.display-metrics {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
+  column-gap: clamp(24px, 5vw, 100px);
+}
+
+.display-metric {
+  border-top: 1px solid var(--display-rule);
+  padding: clamp(14px, 2.2vh, 42px) 0;
+}
+
+.display-metric dt {
+  color: var(--display-muted);
+  font-size: clamp(17px, 2.25vw, 44px);
+  line-height: 1.2;
+}
+
+.display-metric dd {
+  margin: 0;
+  font-size: clamp(54px, min(14vw, 20vh), 360px);
+  line-height: 1.08;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.045em;
+  overflow-wrap: anywhere;
+}
+
+.display-metric-today dd { color: var(--display-today); }
+.display-metric-running dd { color: var(--display-running); }
+
+.display-footer {
+  border-top: 1px solid var(--display-rule);
+  padding-top: .8em;
+  color: var(--display-muted);
+  font-size: clamp(14px, 1.4vw, 27px);
+}
+
+#sync-status::before {
+  content: "";
+  display: inline-block;
+  width: .6em;
+  height: .6em;
+  border-radius: 50%;
+  margin-inline-end: .55em;
+  background: currentColor;
+  vertical-align: .08em;
+}
+
+#sync-status[data-state="live"]::before { color: var(--display-running); }
+#sync-status[data-state="retrying"]::before { color: var(--display-today); }
+#sync-time { text-align: end; }
+
+.live-display .receipt-container {
+  color-scheme: light;
+  --receipt-paper: #fffdf6;
+  --receipt-ink: #252b28;
+  --receipt-muted: #54635b;
+  --receipt-rule: #a1ae9e;
+  width: min(920px, 66vw);
+  font-size: clamp(16px, 1.45vw, 28px);
+}
+
+.live-display #receipt-dialog::backdrop { background: rgb(8 15 24 / .72); }
+.live-display .receipt-paper { padding: clamp(20px, 3vw, 48px); }
+.live-display .receipt-kicker { font-size: .8em; }
+.live-display .receipt-title {
+  font-size: clamp(24px, 2.5vw, 48px);
+  text-wrap: balance;
+}
+.live-display .receipt-header button { border-color: var(--receipt-rule); }
+.live-display .receipt-summary { margin: 0 0 .8em; }
+.live-display .receipt-lines {
+  border-top: 1px dashed var(--receipt-rule);
+  padding-top: .6em;
+}
+
+.receipt-queue {
+  margin: .7em 0 0;
+  color: var(--receipt-muted);
+  font-size: .85em;
+}
+
+.receipt-timer {
+  margin-top: 1em;
+  height: 3px;
+  background: var(--receipt-rule);
+  transform-origin: left center;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #receipt-dialog[open] .receipt-timer { animation: display-receipt-time 30s linear forwards; }
+  @keyframes display-receipt-time { to { transform: scaleX(0); } }
+}
+
+@media (max-width: 650px) {
+  .live-display { gap: 24px; }
+  .display-header { align-items: flex-start; flex-wrap: wrap; }
+  .display-metrics { column-gap: 16px; }
+  .display-metric dd { font-size: clamp(40px, 14vw, 80px); }
+  .live-display .receipt-container { width: calc(100vw - 28px); }
+}

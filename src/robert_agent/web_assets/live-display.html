@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Robert · Live display</title>
+  <!-- workbench-head -->
+  <link rel="stylesheet" href="/assets/github-shell.css">
+  <link rel="stylesheet" href="/assets/timeline.css">
+  <link rel="stylesheet" href="/assets/live-display.css">
+  <script src="/assets/live-display.js" defer></script>
+</head>
+<body class="live-display">
+  <header class="display-header">
+    <div class="display-title">
+      <img src="/assets/robert-favicon.svg" alt="" width="48" height="48">
+      <h1 data-i18n="title">Robert live display</h1>
+    </div>
+    <div class="display-actions">
+      <a href="/timeline" data-i18n="timeline">Timeline</a>
+      <button id="fullscreen" type="button" hidden data-i18n="fullscreen">Full screen</button>
+    </div>
+  </header>
+  <main>
+    <dl class="display-metrics">
+      <div class="display-metric display-metric-today">
+        <dt data-i18n="today">Completed today</dt>
+        <dd id="metric-today">—</dd>
+      </div>
+      <div class="display-metric display-metric-running">
+        <dt data-i18n="running">In progress</dt>
+        <dd id="metric-running">—</dd>
+      </div>
+      <div class="display-metric">
+        <dt data-i18n="week">Completed this week</dt>
+        <dd id="metric-week">—</dd>
+      </div>
+      <div class="display-metric">
+        <dt data-i18n="total">All-time completions</dt>
+        <dd id="metric-total">—</dd>
+      </div>
+    </dl>
+  </main>
+  <footer class="display-footer">
+    <div id="sync-status" role="status" data-state="loading">
+      <span id="sync-message" data-i18n="loading">Connecting…</span>
+    </div>
+    <time id="sync-time"></time>
+  </footer>
+  <dialog id="receipt-dialog" class="receipt-container" aria-labelledby="receipt-title">
+    <article class="receipt-paper">
+      <header class="receipt-header">
+        <span class="receipt-brand"><img src="/assets/robert-favicon.svg" alt="" width="28" height="28"> Robert</span>
+        <form method="dialog">
+          <button type="submit" data-i18n="close">Close</button>
+        </form>
+      </header>
+      <p class="receipt-kicker" data-i18n="receipt">Agent receipt</p>
+      <h2 id="receipt-title" class="receipt-title"></h2>
+      <p id="display-receipt-summary" class="receipt-summary"></p>
+      <dl id="display-receipt-facts" class="receipt-lines"></dl>
+      <p id="receipt-queue" class="receipt-queue" hidden></p>
+      <div class="receipt-timer" aria-hidden="true"></div>
+    </article>
+  </dialog>
+</body>
+</html>

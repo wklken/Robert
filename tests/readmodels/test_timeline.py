@@ -1,9 +1,11 @@
 """Timeline entries come from completed and audited results."""
 
 from contextlib import closing
+from datetime import datetime
 import json
 import sqlite3
 
+from robert_agent.readmodels import timeline
 from robert_agent.readmodels.timeline import get_receipt, list_completed
 from tests.support.board import BoardReadModelFixture
 
@@ -65,6 +67,42 @@ class CompletedWorkTests(BoardReadModelFixture):
     def timeline(self, *, view="day", anchor="2026-11-02", zone="Asia/Shanghai"):
         self.conn.commit()
         return list_completed(self.db_path, view=view, anchor_date=anchor, timezone_name=zone)
+
+    def test_live_display_counts_confirmed_completions_in_the_screen_calendar(self):
+        self.result("older", output="local_result", when="2026-11-01T15:59:59.999999Z")
+        self.result("monday", output="local_result", when="2026-11-01T16:00:00Z")
+        self.result("delivered", when="2026-11-05T09:30:00Z")
+        self.action("delivered", "https://github.com/example/repo/pull/2")
+        self.conn.execute(
+            "UPDATE github_actions SET metadata_json = ? WHERE task_id = 'delivered'",
+            (json.dumps({"publish": {"published_at": "2026-11-04T16:00:00Z"}}),),
+        )
+        self.result("running", lifecycle="running")
+        self.result("waiting", lifecycle="waiting_for_user")
+        self.result("unpublished")
+        self.result("classification", output="classification_result")
+        self.result("unconfirmed")
+        self.action("unconfirmed", "https://github.com/example/repo/pull/3")
+        self.action("unconfirmed", status="not_published", index=2)
+        self.conn.commit()
+
+        snapshot = timeline.live_display(
+            self.db_path, timezone_name="Asia/Shanghai", now=datetime.fromisoformat("2026-11-05T02:00:00Z")
+        )
+        self.assertEqual(snapshot["counts"], {"total": 3, "week": 2, "today": 1, "running": 1})
+        self.assertEqual(
+            snapshot["receipts"],
+            [
+                ["older", "older-1"],
+                ["monday", "monday-1"],
+                ["delivered", "delivered-1"],
+            ],
+        )
+        receipt = timeline.get_receipt(
+            self.db_path, "delivered", "delivered-1", include_usage=False, include_entry=True
+        )
+        self.assertEqual(receipt["entry"]["title"], "Improve [list]")
+        self.assertEqual(receipt["entry"]["completed_at"], "2026-11-04T16:00:00+00:00")
 
     def test_uses_task_completion_date_and_links_the_original_request_and_confirmed_deliveries(self):
         self.result("published")

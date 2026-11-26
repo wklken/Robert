@@ -37,6 +37,9 @@ WEB_ASSETS = {
     "/work": ("index.html", "text/html; charset=utf-8"),
     "/board": ("board.html", "text/html; charset=utf-8"),
     "/timeline": ("timeline.html", "text/html; charset=utf-8"),
+    "/live-display": ("live-display.html", "text/html; charset=utf-8"),
+    "/assets/live-display.css": ("live-display.css", "text/css; charset=utf-8"),
+    "/assets/live-display.js": ("live-display.js", "text/javascript; charset=utf-8"),
     "/proposals": ("proposals.html", "text/html; charset=utf-8"),
     "/assets/proposals.js": ("proposals.js", "text/javascript; charset=utf-8"),
     "/assets/proposals.css": ("proposals.css", "text/css; charset=utf-8"),
@@ -250,14 +253,28 @@ def build_http_response(path, db_path, control_context=None):
                 {"ok": False, "status": "unavailable", "safe_error": "timeline data is unavailable"}, 409
             )
         return _json_response(payload)
-    if route == "/api/timeline/receipt":
+    if route == "/api/live-display":
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        try:
+            payload = timeline.live_display(db_path, timezone_name=query.get("tz", ["UTC"])[0])
+        except timeline.TimelineQueryError as exc:
+            return _json_response({"ok": False, "status": "failed_validation", "safe_error": str(exc)}, 422)
+        except db_errors.OperationalError:
+            return _json_response(
+                {"ok": False, "status": "unavailable", "safe_error": "timeline data is unavailable"}, 409
+            )
+        status, headers, body = _json_response(payload)
+        return status, {**headers, "cache-control": "no-store"}, body
+    if route in {"/api/timeline/receipt", "/api/live-display/receipt"}:
         query = parse_qs(parsed.query)
         task_id = query.get("task_id", [""])[0]
         result_id = query.get("result_id", [""])[0]
         if not all(value.strip() and len(value) <= 300 for value in (task_id, result_id)):
             return _json_response({"ok": False, "status": "failed_validation"}, 422)
         try:
-            payload = timeline.get_receipt(db_path, task_id, result_id)
+            payload = timeline.get_receipt(
+                db_path, task_id, result_id, include_entry=route == "/api/live-display/receipt"
+            )
         except db_errors.OperationalError:
             return _json_response(
                 {"ok": False, "status": "unavailable", "safe_error": "timeline data is unavailable"}, 409
