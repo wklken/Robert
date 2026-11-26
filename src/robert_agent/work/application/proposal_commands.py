@@ -93,6 +93,8 @@ def decide(
         if state == "blocked" and action in {"approve", "investigate"}:
             raise WorkItemConflictError("proposal needs refreshed evidence before approval")
         source = values.json_object(row["source_json"])
+        if action == "assign" and source.get("routing_conflict"):
+            raise WorkItemConflictError("resolve conflicting TAPD repository labels before choosing a repository")
         report = values.json_object(row["report_json"])
         repo_id = row["repo_id"]
         selected = None

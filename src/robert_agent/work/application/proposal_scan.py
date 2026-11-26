@@ -23,6 +23,7 @@ from robert_agent.work.application import proposal_sources, web_setup
 TIMEZONE = ZoneInfo("Asia/Shanghai")
 BATCH_LIMIT = 6
 MUTABLE_STATES = frozenset({"evaluated", "pending", "held", "blocked"})
+_ROUTING_CONFLICT = "原单据的仓库标签冲突，请在 TAPD 修正后复核。"
 _NETWORK_ERRORS = (ValueError, OSError, subprocess.SubprocessError, tapd_client.TapdError)
 
 
@@ -237,15 +238,17 @@ def _daily_revision(conn, source, now, *, previous=None, report=None, fingerprin
     revision = previous["revision"] + 1 if previous else 1
     proposal_id = previous["proposal_id"] if previous else values.new_id("p")
     repository = source.get("repository")
+    blocked_reason = _ROUTING_CONFLICT if source.get("routing_conflict") else ""
+    status = "held" if previous and previous["status"] == "held" else "pending"
     row = {
         "repo_id": values.repository_id(repository) if repository else None,
-        "status": "held" if previous and previous["status"] == "held" else "pending",
+        "status": "blocked" if blocked_reason else status,
         "version": previous["version"] + 1 if previous else 1,
         "revision": revision,
         "source_key": source["source_key"],
         "fingerprint": fingerprint,
         "updated_at": now,
-        "blocked_reason": "",
+        "blocked_reason": blocked_reason,
     }
     if previous:
         store.revise(conn, proposal_id, previous["version"], **row)
@@ -361,6 +364,9 @@ def _daily_assessment(config, setting, endpoint, row, source, repos, clients, co
         source, _ = proposal_sources.refresh(config, repo, source, clients=clients)
         if not source:
             return None, None
+    if source.get("routing_conflict"):
+        report = {"analyzed_at": now, "feasibility": "needs_clarification", "recommendation": "low"}
+        return source, (report, proposals.digest(source))
     name = source.get("repository")
     comments = proposal_sources.discussion(
         source,

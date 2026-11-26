@@ -1,4 +1,5 @@
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 import json
 import subprocess
@@ -155,6 +156,39 @@ class ProposalScanTests(unittest.TestCase):
         self.assertEqual(rep["updated"], 1)
         self.assertEqual(len(read(self.db, status="today")), 2)
         self.assertEqual(len(read(self.db, status="pending")), 3)
+
+    def test_scheduled_tapd_label_conflict_blocks_proposal_until_labels_are_fixed(self):
+        self.config["proposer"].update(
+            github_repositories=[],
+            schedule={"enabled": True, "analysis_limit": 1},
+            tapd_todo_states={"story": ["open"]},
+        )
+        self.project["label_rules"].append({"label": "backend", "repository": "test/backend"})
+        self.config["repos"].append({**self.config["repos"][0], "full_name": "test/backend"})
+        ticket = self._ticket("12", ("alice",))
+        self.tapd.recent_items.return_value = []
+        self.tapd.recent_items.side_effect = lambda _workspace, kind, **kwargs: (
+            [replace(ticket, labels="router|backend")] if kind == "story" else []
+        )
+        self.model.side_effect = lambda **kwargs: (
+            self.assessment if "code" in kwargs["evidence"] else {"label": "router", "reason": "Router"}
+        )
+        proposal_scan.scan_daily(self.config, now="2026-11-22T01:00:00Z")
+        proposals = read(self.db)
+        self.assertEqual([item["status"] for item in proposals], ["blocked"])
+        (blocked,) = proposals
+        self.assertIn("标签冲突", blocked["blocked_reason"])
+        self.assertEqual(blocked["repository_candidates"], [])
+        self.assertEqual(read(self.db, status="today"), [])
+        self.model.assert_not_called()
+
+        self.tapd.recent_items.side_effect = None
+        self.tapd.get_item.return_value = ticket
+        proposal_scan.scan_daily(self.config, now="2026-12-02T01:00:00Z")
+        (pending,) = read(self.db, status="today")
+        self.assertEqual(pending["proposal_id"], blocked["proposal_id"])
+        self.assertEqual(pending["repository"], "test/repo")
+        self.assertEqual(pending["report"]["feasibility"], "ready")
 
     def test_scan_records_gateway_usage_when_assessment_fails_validation(self):
         def response(**kwargs):

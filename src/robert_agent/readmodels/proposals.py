@@ -38,7 +38,7 @@ def _view(row):
         "source_url": source.get("url", ""),
         "provider": source.get("provider", ""),
         "repository": source.get("repository", ""),
-        "repository_candidates": source.get("repository_candidates", []),
+        "repository_candidates": [] if source.get("routing_conflict") else source.get("repository_candidates", []),
         "report": json_object(row["report_json"]),
     }
 

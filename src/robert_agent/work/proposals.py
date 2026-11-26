@@ -51,7 +51,7 @@ def github_source(repo, issue, allowed, *, in_progress_labels=()):
 
 
 def tapd_source(project, item, terminal, allowed, *, allow_unbound=False, todo_states=()):
-    _, repository, label = tapd_policy.select_repository(item.labels, project["label_rules"])
+    routing, repository, label = tapd_policy.select_repository(item.labels, project["label_rules"])
     if (
         (not repository and not allow_unbound)
         or item.owners is None
@@ -88,6 +88,8 @@ def tapd_source(project, item, terminal, allowed, *, allow_unbound=False, todo_s
     }
     if allow_unbound and not repository:
         source["repository_candidates"] = [dict(rule) for rule in project["label_rules"]]
+        if routing == "conflict":
+            source["routing_conflict"] = True
     return source
 
 
