@@ -22,7 +22,8 @@ _STAGE_VERSIONS = {
     "review.evaluate": {
         1: "review-evaluate-model-preparation-v1.md",
         2: "review-evaluate-controller-inventory-v2.md",
-        3: "review-evaluate.md",
+        3: "review-evaluate-bounded-runtime-v3.md",
+        4: "review-evaluate.md",
     },
     "review.address_findings": {
         1: "review-address-findings.md",

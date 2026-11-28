@@ -2,8 +2,11 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import shutil
+import stat
 import subprocess
 
 from robert_agent.adapters.git.review_revision import worktree_state
@@ -26,6 +29,8 @@ CONTEXT_FILES = (
     "runtime-info.json",
 )
 PRIMARY_FILES = ("context-summary.md", "source-index.json")
+ISOLATED_CHECKS_PROMPT_VERSION = 4
+_WRITE_BITS = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
 
 
 def _git(repo, *args):
@@ -90,6 +95,47 @@ def _is_test_artifact(tree, name):
     return False
 
 
+def _make_source_read_only(tree):
+    def fail(error):
+        raise error
+
+    for directory, _, files in os.walk(tree, topdown=False, onerror=fail):
+        # A tracked symlink belongs to the snapshot, but its target may not.
+        for path in (*(Path(directory, name) for name in files), Path(directory)):
+            mode = path.lstat().st_mode
+            if not stat.S_ISLNK(mode) and mode & _WRITE_BITS:
+                path.chmod(stat.S_IMODE(mode) & ~_WRITE_BITS)
+
+
+def _check_worktree_path(manifest, run_id):
+    if not re.fullmatch(r"review-run-[0-9a-f]{32}", run_id):
+        raise ValueError("invalid review run ID")
+    root = Path(manifest["artifact_root"])
+    return review_files.safe_path(root / "review-checkouts" / run_id, root, subdirectory="review-checkouts")
+
+
+def create_check_worktree(manifest, run_id):
+    """Create a private checkout of the pinned head with independent Git metadata."""
+    tree = Path(manifest["worktree_path"])
+    checkout = _check_worktree_path(manifest, run_id)
+    checkout.parent.mkdir(exist_ok=True)
+    checkout.mkdir(mode=0o700)
+    # Borrow immutable objects; checkout bytes, Git index and refs are private.
+    _git(tree, "clone", "--shared", "--no-checkout", "--", str(tree), str(checkout))
+    _git(checkout, "remote", "remove", "origin")
+    _git(checkout, "checkout", "--detach", manifest["head_sha"])
+    return checkout
+
+
+def discard_check_worktree(manifest, run_id):
+    """Discard a registered run's disposable checkout after its process has exited."""
+    try:
+        checkout = _check_worktree_path(manifest, run_id)
+    except ValueError:
+        return
+    shutil.rmtree(checkout, ignore_errors=True)
+
+
 def _trigger(github_context):
     if isinstance(github_context, list):
         event = github_context[0] if github_context else {}
@@ -103,7 +149,9 @@ def _trigger(github_context):
     }
 
 
-def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, github_context):
+def prepare_snapshot(
+    repo_root, worktree_root, artifact_root, round_id, pr_info, github_context, *, isolated_checks=False
+):
     """Fetch a captured PR revision and create a new detached worktree.
 
     ``artifact_root`` is the configured review artifact base. Returned paths add
@@ -138,7 +186,9 @@ def prepare_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info,
         or _git(repo_root, "rev-parse", base_local_ref).strip() != base_sha
     ):
         raise ValueError("PR snapshot changed while fetching; recapture PR metadata")
-    return _build_snapshot(repo_root, worktree_root, artifact_root, round_id, pr_info, github_context)
+    return _build_snapshot(
+        repo_root, worktree_root, artifact_root, round_id, pr_info, github_context, isolated_checks=isolated_checks
+    )
 
 
 def prepare_candidate_snapshot(
@@ -182,6 +232,7 @@ def _build_snapshot(
     *,
     original_request=None,
     review_report_mode=None,
+    isolated_checks=False,
 ):
     number = pr_info.get("number")
     head_sha = pr_info["head"]["sha"]
@@ -221,6 +272,8 @@ def _build_snapshot(
     tree.parent.mkdir(parents=True, exist_ok=True)
     context.mkdir(parents=True)
     _git(repo_root, "worktree", "add", "--detach", str(tree), head_sha)
+    if isolated_checks:
+        _make_source_read_only(tree)
     diff = _git(
         tree,
         "diff",
@@ -247,7 +300,7 @@ def _build_snapshot(
     manifest = {
         "schema_version": 1,
         "context_version": 1,
-        "prompt_version": 3,
+        "prompt_version": ISOLATED_CHECKS_PROMPT_VERSION if isolated_checks else 3,
         "round_id": round_id,
         "snapshot_id": snapshot_id,
         "head_sha": head_sha,
@@ -289,7 +342,9 @@ def verify_snapshot(manifest, *, require_current_prompt=False):
         if dirty:
             raise ValueError("review worktree source is dirty")
         tracked, untracked = worktree_files(tree, read_git=_git)
-        if any(not _is_test_artifact(tree, name) for name in untracked):
+        version = manifest.get("prompt_version")
+        isolated_checks = version == ISOLATED_CHECKS_PROMPT_VERSION
+        if untracked and (isolated_checks or any(not _is_test_artifact(tree, name) for name in untracked)):
             raise ValueError("review worktree contains unregistered files")
         if _source_hashes(tree, tracked) != manifest["source_hashes"]:
             raise ValueError("review worktree source hash changed")
@@ -304,8 +359,7 @@ def verify_snapshot(manifest, *, require_current_prompt=False):
             if require_current_prompt:
                 # Version 1 was also used by the first controller-inventory release.
                 # Adoption must match a known full rendering, not only a local hash.
-                version = manifest.get("prompt_version")
-                if type(version) is not int or version not in (1, 2, 3):
+                if type(version) is not int or version not in (1, 2, 3, ISOLATED_CHECKS_PROMPT_VERSION):
                     raise ValueError("unsupported review prompt version")
                 text = path.read_text(encoding="utf-8")
                 if text != _reviewer_text(manifest, stage_version=2 if version == 1 else version) and not (

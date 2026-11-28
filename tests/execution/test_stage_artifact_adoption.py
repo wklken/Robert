@@ -7,7 +7,7 @@ from unittest.mock import patch
 from robert_agent.execution.stages import StageStopped
 from robert_agent.persistence.rounds import review as store
 from tests.support import database
-from tests.support.review_coordinator import ReviewCoordinatorFixture
+from tests.support.review_coordinator import ReviewCoordinatorFixture, writable_snapshot_path
 
 
 class StageArtifactAdoptionTests(ReviewCoordinatorFixture):
@@ -82,7 +82,9 @@ class StageArtifactAdoptionTests(ReviewCoordinatorFixture):
 
     def test_source_mutation_refuses_adoption(self):
         driver, original = self.failed_registration()
-        (Path(driver.manifest["worktree_path"]) / "source.py").write_text("value = 999\n")
+        source = Path(driver.manifest["worktree_path"]) / "source.py"
+        with writable_snapshot_path(source):
+            source.write_text("value = 999\n")
         count = len(self.calls)
         with self.assertRaisesRegex((ValueError, RuntimeError), "dirty|changed"):
             driver.review()
