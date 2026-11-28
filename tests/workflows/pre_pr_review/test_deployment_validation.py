@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from subprocess import CalledProcessError
 from unittest.mock import patch
 
 import yaml
@@ -90,6 +91,25 @@ class DeploymentValidationTests(PrePRPublicationFixture):
 
     def test_runtime_code_cannot_skip(self):
         self.assert_draft_blocked("skipped", "only Markdown")
+
+    def test_git_probe_failure_posts_pending_status_without_launching_deployment(self):
+        driver, remote = self.start_validation()
+        with (
+            patch(
+                "robert_agent.workflows.pre_pr_review.deployment_validation.clean_head",
+                side_effect=CalledProcessError(128, ["git", "status"]),
+            ),
+            self.assertRaisesRegex(DeploymentValidationBlocked, "Git inspection failed"),
+        ):
+            driver.run()
+        self.assertFalse(self.checked)
+        self.assertEqual(remote.events.count("push"), 1)
+        self.assertTrue(remote.pr["draft"])
+        self.assertIn("Minikube 验证待处理", remote.comments[-1]["body"])
+        with database.connect(self.db) as conn:
+            entry = store.session(conn, task_id=driver.task_id)
+        self.assertEqual(entry["status"], "attention")
+        self.assertFalse(entry["proof"])
 
     def test_lost_status_comment_does_not_retry_an_incomplete_deployment(self):
         driver, remote = self.start_validation(status="blocked")
