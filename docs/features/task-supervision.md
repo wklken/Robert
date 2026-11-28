@@ -147,6 +147,8 @@ network retry window. No request for that publisher account is issued early.
 Grants bind the complete sampled context, candidate generation and administrator
 policy. Consumers recheck the current context and their own eligibility; new
 requirements, results, PR versions or changed policy invalidate stale grants.
+The policy digest includes global routes, Worker definitions, the default Worker
+and repository overrides. Changing these settings requires a new model decision.
 An unconsumed grant expires after 15 minutes. Candidate freshness is also bounded
 to 15 minutes; scans must refresh candidates before they can be selected again.
 An executed action enters verification, and its real result is included in the
@@ -250,6 +252,15 @@ a single stale failure cannot trigger a notice later. The recorded check waits
 up to one second to acquire its writer lock, then revalidates observations in
 the same transaction. Reads retain their bounded observation budget. A failed
 record write does not imply that task state could not be read.
+
+`status` reports database readiness separately from the saved observation.
+The health object's `freshness` and `coverage_freshness` are `fresh`, `stale`
+or `unknown`; the corresponding age fields report seconds since the last check
+and complete coverage. A check becomes stale after two polling intervals plus
+ten seconds, and complete coverage after the greater of five minutes or ten
+polling intervals. Missing, invalid or future timestamps are unknown. The saved
+`ok`, `status` and observation timestamps remain available as historical facts.
+The daemon resumes its fallback alerts when observations or coverage are stale.
 
 A successful check reports healthy status immediately and resets the consecutive
 failure count. The outage identity and delivery budget remain until regularly

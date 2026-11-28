@@ -8,7 +8,19 @@ The resident daemon runs three independently supervised lanes:
 - **Local drain:** authorizes and routes observations against current local state, supervises workers, audits results, and finalizes published results. Each repository's prepared tasks can dispatch immediately after its transaction commits, within the existing global and repository capacity limits.
 - **Publisher:** performs audited GitHub actions and configured operator notification delivery. It retains the existing task publication locks, fresh remote validation, retry policy, and idempotency checks. A slow publish does not block unrelated local dispatch.
 
+Live local cycles give the least recently dispatched repositories first use of
+the shared task slots. Repository limits and each repository's dispatch
+priorities still apply. The order follows persisted dispatches across cycles
+and daemon restarts.
+
 The daemon owns scanner and publisher subprocesses. Their startup identity is persisted before they execute remote work. Stop/restart checks process identity and process-group cleanup; unproven cleanup is reported as attention rather than treated as successful termination. Recovery is limited to expired/released prior owners of the same daemon scope.
+
+Inside the scanner's control deadline, account reads, repository reads, and
+enabled TAPD scanning receive separate portions of the remaining command time.
+Unused time stays available for later sources. A source that exceeds its
+portion reports a scoped timeout, and scanning continues within the remaining
+budget. A failure of the whole scanner still uses the control lane's retry
+budget.
 
 `robert daemon run --once` and standalone `run once` retain the synchronous diagnostic path. The three lanes apply to the resident service.
 

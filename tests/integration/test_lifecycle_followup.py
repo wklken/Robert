@@ -147,6 +147,40 @@ class LifecycleFollowupTests(unittest.TestCase):
         self.assertEqual(launch.call_count, 1)
         self.assertEqual(launch.call_args.kwargs["task_id"], tasks["repo:example/healthy"][0])
 
+    def test_freed_global_slot_reaches_waiting_repository(self):
+        f = self.fixture(board_fixture.BoardControlIntegrationFixture)
+        cfg = json.loads(f.config_path.read_text())
+        cfg["scheduler"]["max_concurrency"] = 1
+        cfg["repos"][0]["max_concurrency"] = 1
+        cfg["repos"].append({**cfg["repos"][0], "full_name": "example/healthy"})
+        f.config_path.write_text(json.dumps(cfg))
+        repo = validate_config.validate_config(f.config_path, skip_external=True)["repos"][1]
+        with closing(sqlite3.connect(f.db_path)) as conn, conn:
+            waiting_repo = work_repositories.upsert_repo(conn, repo)
+        first = self.create(f, key="first")["task_id"]
+        waiting = self.create(f, repo_id=waiting_repo, key="waiting")["task_id"]
+
+        with (
+            mock.patch.object(monitor, "supervise_running_attempts", return_value=0),
+            mock.patch.object(dispatch_queue, "ensure_dispatch_worktree", side_effect=lambda d, r, t, w: w),
+            mock.patch.object(worker, "dispatch_worker", return_value={"ok": True, "status": "running"}) as launch,
+        ):
+            for expected in (first, waiting):
+                cycle = run_once.run_once(
+                    f.config_path,
+                    dry_run=False,
+                    skip_external=True,
+                    skip_publish=True,
+                    consume_observations=True,
+                )
+                self.assertTrue(cycle["ok"], cycle)
+                launch.assert_called_once()
+                self.assertEqual(launch.call_args.kwargs["task_id"], expected)
+                launch.reset_mock()
+                f._finish_task(expected, values.utc_now())
+                if expected == first:
+                    self.create(f, key="later")
+
     def test_ordinary_prepared_request_rechecks_current_trust(self):
         f = self.fixture(run_fixture.RepositoryCycleFixture)
         cycle = run_once.run_once(

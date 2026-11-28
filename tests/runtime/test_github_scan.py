@@ -548,6 +548,52 @@ class ObservationTests(unittest.TestCase):
                     else:
                         synchronization.scan(fixture.config_path)
 
+    def test_slow_repository_cannot_consume_the_entire_scan_deadline(self):
+        from tests.support import repository_cycle as fixtures
+        from robert_agent.foundation.commands import run_command
+        import os
+        import yaml
+
+        fixture = fixtures.RepositoryCycleFixture()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        config = yaml.safe_load(fixture.config_path.read_text())
+        config["repos"].append({**config["repos"][0], "full_name": "example/healthy"})
+        fixture.config_path.write_text(yaml.safe_dump(config))
+        now = 100.0
+        visited = []
+
+        def remote(command, *, timeout):
+            nonlocal now
+            if command[0] == "example/backend":
+                now += timeout
+                raise subprocess.TimeoutExpired(command, timeout)
+            return subprocess.CompletedProcess(command, 0)
+
+        def scan_repo(config, repo, session, hints):
+            name = repo["full_name"]
+            visited.append(name)
+            run_command([name], runner=remote)
+            return "healthy-batch"
+
+        session = mock.Mock()
+        session.metrics.return_value = {}
+        session.collect_notifications.return_value = {}
+        session.poll_interval_seconds = None
+        with (
+            mock.patch.dict(os.environ, {"_ROBERT_CONTROL_DEADLINE": "160"}),
+            mock.patch.object(time, "monotonic", side_effect=lambda: now),
+            mock.patch.object(github_read, "GitHubReadSession", return_value=session),
+            mock.patch.object(github_budget, "budget", return_value=True),
+            mock.patch.object(synchronization, "scan_repo", side_effect=scan_repo),
+        ):
+            result = synchronization.scan(fixture.config_path)
+
+        self.assertEqual(visited, ["example/backend", "example/healthy"])
+        self.assertEqual(result["failure_scope"], "repository")
+        self.assertEqual(result["batch_count"], 1)
+        self.assertEqual(result["failures"], [{"repo": "example/backend", "reason": "repository_scan_timeout"}])
+
     def test_refresh_completion_preserves_poll_schedule_and_applies_its_retry_gate(self):
         from types import SimpleNamespace
         from tests.support import retention as fixtures

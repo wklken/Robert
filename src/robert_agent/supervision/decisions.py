@@ -54,7 +54,14 @@ def enabled(config):
 
 def policy_version(config):
     return digest(
-        {"supervision": config.get("supervision"), "daemon": config.get("daemon"), "repos": config.get("repos", [])}
+        {
+            "supervision": config.get("supervision"),
+            "daemon": config.get("daemon"),
+            "repos": config.get("repos", []),
+            "routes": config.get("routes", {}),
+            "workers": config.get("workers", []),
+            "default_worker": config.get("default_worker"),
+        }
     )
 
 

@@ -199,7 +199,7 @@ def status(config):
         return {
             "ok": True,
             "status": "ready",
-            "health": supervision_health.read_health(config),
+            "health": supervision_health.health_status(config),
             "incidents": incidents,
             "decisions": decision_control.status(config),
             "decision_runner": decision_control.runner_status(config),
@@ -208,7 +208,7 @@ def status(config):
         return {
             "ok": False,
             "status": "unobservable",
-            "health": supervision_health.read_health(config),
+            "health": supervision_health.health_status(config),
             "incidents": [],
         }
 

@@ -1,4 +1,5 @@
 from contextlib import closing
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -8,6 +9,8 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+
+import yaml
 
 from tests.support import PACKAGE_ROOT  # noqa: F401
 from tests.support.work_items import example_choices
@@ -202,6 +205,97 @@ class DecisionTests(unittest.TestCase):
                 with self.subTest(offset_microseconds=offset):
                     at = (expires + timedelta(microseconds=offset)).isoformat()
                     self.assertEqual(decisions.permit(conn, self.config, **{**self.candidate_args, "now": at}), allowed)
+
+    def test_execution_policy_changes_invalidate_approved_worker_retry(self):
+        original = {
+            **self.config,
+            "routes": {"new-pr": {"worker": "coder"}},
+            "workers": [
+                {"name": "coder", "command": ["codex"], "default_model": "default", "default_effort": "high"},
+                {"name": "reviewer", "command": ["claude"], "default_model": "default"},
+            ],
+            "default_worker": {"name": "coder", "command": ["codex"]},
+        }
+        for change in ("route_worker", "worker_command", "worker_model", "default_worker", "repository_override"):
+            with self.subTest(change=change), self.connect() as conn:
+                self.config = deepcopy(original)
+                self.offer(conn)
+                request = self.request(conn)
+                self.assertTrue(decisions.approve(conn, self.config, request, self.output(request), self.now))
+                self.assertTrue(decisions.permit(conn, self.config, **self.candidate_args))
+                if change == "route_worker":
+                    self.config["routes"]["new-pr"]["worker"] = "reviewer"
+                elif change == "worker_command":
+                    self.config["workers"][0]["command"] = ["replacement-codex"]
+                elif change == "worker_model":
+                    self.config["workers"][0]["default_model"] = "replacement-model"
+                elif change == "default_worker":
+                    self.config["default_worker"] = self.config["workers"][1]
+                else:
+                    self.config["repos"][0]["routes"] = {"new-pr": {"worker": "reviewer"}}
+                self.assertFalse(decisions.permit(conn, self.config, **self.candidate_args))
+
+    def test_legacy_policy_grant_requires_a_new_decision(self):
+        legacy_version = decisions.digest(
+            {"supervision": self.config["supervision"], "daemon": None, "repos": self.config["repos"]}
+        )
+        with self.connect() as conn:
+            with patch.object(decisions, "policy_version", return_value=legacy_version):
+                self.offer(conn)
+                request = self.request(conn)
+                self.assertTrue(decisions.approve(conn, self.config, request, self.output(request), self.now))
+            self.assertFalse(decisions.permit(conn, self.config, **self.candidate_args))
+
+    def test_worker_retry_reloads_changed_global_execution_policy_from_disk(self):
+        from robert_agent.configuration.command import validate_config
+
+        (self.root / ".git").mkdir()
+        trees = self.root / "trees"
+        trees.mkdir()
+        path = self.root / "robert.yml"
+        original = {
+            "version": 2,
+            "data_dir": str(self.root),
+            "database": self.db.name,
+            "github": {"account": "bot"},
+            "default_worker": "coder",
+            "workers": {
+                "coder": {"adapter": "cbc", "command": "cbc", "model": "default", "effort": "default"},
+                "reviewer": {"adapter": "cbc", "command": "cbc", "model": "other", "effort": "default"},
+            },
+            "routes": {"new-pr": {"worker": "coder"}},
+            "repos": [
+                {
+                    "full_name": "acme/project",
+                    "github_account": "bot",
+                    "trusted_actors": ["owner"],
+                    "default_branch": "main",
+                    "checkout": str(self.root),
+                    "worktrees": str(trees),
+                }
+            ],
+            "supervision": self.config["supervision"],
+        }
+        for change in ("routes", "workers", "default_worker"):
+            with self.subTest(change=change), self.connect() as conn:
+                raw = deepcopy(original)
+                path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+                self.config = validate_config(path, skip_external=True)
+                self.assertTrue(self.config["ok"], self.config)
+                self.offer(conn)
+                request = self.request(conn)
+                self.assertTrue(decisions.approve(conn, self.config, request, self.output(request), self.now))
+                self.assertTrue(decisions.permit(conn, self.config, **self.candidate_args))
+                if change == "routes":
+                    raw["routes"]["new-pr"]["worker"] = "reviewer"
+                elif change == "workers":
+                    raw["workers"]["coder"]["model"] = "replacement"
+                else:
+                    raw["default_worker"] = "reviewer"
+                path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+                current = validate_config(path, skip_external=True)
+                self.assertTrue(current["ok"], current)
+                self.assertFalse(decisions.permit(conn, self.config, **self.candidate_args))
 
     def test_wait_never_grants_recovery_and_stale_decision_is_rejected(self):
         with self.connect() as conn:

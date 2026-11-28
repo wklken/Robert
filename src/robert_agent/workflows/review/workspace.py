@@ -1,7 +1,10 @@
 """Immutable, round-specific Git source and context bundles for PR review."""
 
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -32,6 +35,10 @@ def _git(repo, *args):
     return run_command(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout
 
 
+def _git_root(path):
+    return Path(_git(path, "rev-parse", "--show-toplevel").removesuffix("\n")).resolve()
+
+
 def _digest(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -42,16 +49,31 @@ def _file_digest(path):
     return review_files.sha256_file(path)
 
 
-def _source_hashes(tree, names=None):
+def _source_hashes(tree, names=None, *, gitlinks_from_index=False):
     if names is None:
         names = _git(tree, "ls-files", "-z").split("\0")
+    gitlinks = {}
+    if gitlinks_from_index:
+        for entry in filter(None, _git(tree, "ls-files", "--stage", "-z").split("\0")):
+            metadata, name = entry.split("\t", 1)
+            mode, commit, stage = metadata.split()
+            if mode == "160000":
+                if stage != "0":
+                    raise ValueError("review submodule index is unmerged")
+                gitlinks[name] = commit
     result = {}
     for name in names:
         if not name:
             continue
         path = tree / name
         # Submodules are represented by their Git commit, never followed.
-        if path.is_dir() and not path.is_symlink():
+        if name in gitlinks:
+            if path.is_symlink() or (path.exists() and not path.is_dir()):
+                raise ValueError("review submodule path changed")
+            if path.is_dir() and any(path.iterdir()) and _git_root(path) != path:
+                raise ValueError("review submodule contains unregistered files")
+            result[name] = "gitlink:" + gitlinks[name]
+        elif path.is_dir() and not path.is_symlink():
             result[name] = "gitlink:" + _git(path, "rev-parse", "HEAD").strip()
         else:
             result[name] = _file_digest(path)
@@ -172,6 +194,22 @@ def prepare_candidate_snapshot(
     )
 
 
+@contextmanager
+def _preparation_lock(artifacts):
+    artifacts.parent.mkdir(parents=True, exist_ok=True)
+    # Retain the inode so concurrent preparers always compete for the same lock.
+    lock_path = review_files.safe_path(artifacts.with_name(f".{artifacts.name}.lock"), artifacts.parent)
+    with lock_path.open("a") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError("review snapshot preparation already running") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
 def _build_snapshot(
     repo_root,
     worktree_root,
@@ -191,13 +229,93 @@ def _build_snapshot(
     if original_request:
         identity.append(original_request)
     snapshot_id = _digest(json.dumps(identity))[:24]
-    tree = worktree_root / "review" / (f"pr-{number}" if number else "candidate") / round_id / snapshot_id
-    artifacts = artifact_root / round_id / snapshot_id
+    tree = review_files.safe_path(
+        worktree_root / "review" / (f"pr-{number}" if number else "candidate") / round_id / snapshot_id,
+        worktree_root,
+    )
+    artifacts = review_files.safe_path(artifact_root / round_id / snapshot_id, artifact_root)
     context = artifacts / "context"
-    if tree.exists() or artifacts.exists():
-        saved_path = review_files.safe_path(context / "manifest.json", artifact_root)
-        saved = review_files._read_json(saved_path)
-        expected = {
+    with _preparation_lock(artifacts):
+        if artifacts.exists():
+            saved_path = review_files.safe_path(context / "manifest.json", artifact_root)
+            saved = review_files._read_json(saved_path)
+            expected = {
+                "round_id": round_id,
+                "snapshot_id": snapshot_id,
+                "head_sha": head_sha,
+                "base_sha": base_sha,
+                "base_ref": base_ref,
+                "merge_base_sha": merge_base,
+                "pr_number": number,
+                "worktree_path": str(tree),
+                "context_dir": str(context),
+                "artifact_root": str(artifacts),
+            }
+            if (
+                any(saved.get(key) != value for key, value in expected.items())
+                or saved.get("review_report_mode") != review_report_mode
+            ):
+                raise ValueError("existing round snapshot identity does not match")
+            if _trigger(github_context).get("trigger_event_fingerprint") != saved.get("trigger_event_fingerprint"):
+                raise ValueError("existing round trigger identity does not match")
+            verify_snapshot(saved, require_current_prompt=True)
+            return saved
+        preparation = review_files.safe_path(artifacts.with_name(f".{snapshot_id}.preparing.json"), artifact_root)
+        staging = review_files.safe_path(artifacts.with_name(f".{snapshot_id}.preparing"), artifact_root)
+        owner = {
+            "repo_root": str(repo_root),
+            "worktree_path": str(tree),
+            "snapshot_id": snapshot_id,
+            "head_sha": head_sha,
+            "trigger": _trigger(github_context),
+        }
+        if preparation.exists():
+            if review_files._read_json(preparation) != owner:
+                raise ValueError("review preparation identity changed")
+        else:
+            if tree.exists() or staging.exists():
+                raise ValueError("unregistered partial review snapshot")
+            review_files.atomic_json(preparation, owner)
+        staged_context = review_files.safe_path(staging / "context", artifact_root)
+        staged_context.mkdir(parents=True, exist_ok=True)
+        if tree.exists():
+            if _git_root(tree) != tree:
+                raise ValueError("partial review worktree lost its Git identity")
+            existing_head, dirty = worktree_state(tree, read_git=_git)
+            if existing_head != head_sha or dirty:
+                raise ValueError("partial review worktree changed")
+        else:
+            tree.parent.mkdir(parents=True, exist_ok=True)
+            _git(repo_root, "worktree", "add", "--detach", str(tree), head_sha)
+        diff = _git(
+            tree,
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--binary",
+            merge_base,
+            head_sha,
+            "--",
+        )
+        changed_paths = _git(tree, "diff", "--no-ext-diff", "--name-only", merge_base, head_sha, "--")
+        content = {
+            "pr-info.json": json.dumps(pr_info, ensure_ascii=False, indent=2) + "\n",
+            "github-context.json": json.dumps(github_context, ensure_ascii=False, indent=2) + "\n",
+            "changed-files.txt": changed_paths,
+            "diff.patch": diff,
+            "diff-stat.txt": _git(tree, "diff", "--no-ext-diff", "--stat", merge_base, head_sha, "--"),
+            "diff-linecount.txt": str(len(diff.splitlines())) + "\n",
+            "runtime-info.json": json.dumps(
+                runtime_info(tree, changed_paths.splitlines()), ensure_ascii=False, indent=2
+            )
+            + "\n",
+        }
+        for name, text in content.items():
+            review_files.atomic_text(review_files.safe_path(staged_context / name, artifact_root), text)
+        manifest = {
+            "schema_version": 1,
+            "context_version": 1,
+            "prompt_version": 3,
             "round_id": round_id,
             "snapshot_id": snapshot_id,
             "head_sha": head_sha,
@@ -205,69 +323,22 @@ def _build_snapshot(
             "base_ref": base_ref,
             "merge_base_sha": merge_base,
             "pr_number": number,
+            "repo": (pr_info["base"].get("repo") or {}).get("full_name", ""),
             "worktree_path": str(tree),
             "context_dir": str(context),
             "artifact_root": str(artifacts),
+            "source_hash_version": 2,
+            "source_hashes": _source_hashes(tree, gitlinks_from_index=True),
+            "files": {str(context / name): review_files.sha256_file(staged_context / name) for name in CONTEXT_FILES},
+            "frozen": False,
+            **({"original_request": original_request} if original_request else {}),
+            **({"review_report_mode": review_report_mode} if review_report_mode else {}),
+            **_trigger(github_context),
         }
-        if (
-            any(saved.get(key) != value for key, value in expected.items())
-            or saved.get("review_report_mode") != review_report_mode
-        ):
-            raise ValueError("existing round snapshot identity does not match")
-        if _trigger(github_context).get("trigger_event_fingerprint") != saved.get("trigger_event_fingerprint"):
-            raise ValueError("existing round trigger identity does not match")
-        verify_snapshot(saved, require_current_prompt=True)
-        return saved
-    tree.parent.mkdir(parents=True, exist_ok=True)
-    context.mkdir(parents=True)
-    _git(repo_root, "worktree", "add", "--detach", str(tree), head_sha)
-    diff = _git(
-        tree,
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--binary",
-        merge_base,
-        head_sha,
-        "--",
-    )
-    changed_paths = _git(tree, "diff", "--no-ext-diff", "--name-only", merge_base, head_sha, "--")
-    content = {
-        "pr-info.json": json.dumps(pr_info, ensure_ascii=False, indent=2) + "\n",
-        "github-context.json": json.dumps(github_context, ensure_ascii=False, indent=2) + "\n",
-        "changed-files.txt": changed_paths,
-        "diff.patch": diff,
-        "diff-stat.txt": _git(tree, "diff", "--no-ext-diff", "--stat", merge_base, head_sha, "--"),
-        "diff-linecount.txt": str(len(diff.splitlines())) + "\n",
-        "runtime-info.json": json.dumps(runtime_info(tree, changed_paths.splitlines()), ensure_ascii=False, indent=2)
-        + "\n",
-    }
-    for name, text in content.items():
-        (context / name).write_text(text, encoding="utf-8")
-    manifest = {
-        "schema_version": 1,
-        "context_version": 1,
-        "prompt_version": 3,
-        "round_id": round_id,
-        "snapshot_id": snapshot_id,
-        "head_sha": head_sha,
-        "base_sha": base_sha,
-        "base_ref": base_ref,
-        "merge_base_sha": merge_base,
-        "pr_number": number,
-        "repo": (pr_info["base"].get("repo") or {}).get("full_name", ""),
-        "worktree_path": str(tree),
-        "context_dir": str(context),
-        "artifact_root": str(artifacts),
-        "source_hashes": _source_hashes(tree),
-        "files": {str(context / name): review_files.sha256_file(context / name) for name in CONTEXT_FILES},
-        "frozen": False,
-        **({"original_request": original_request} if original_request else {}),
-        **({"review_report_mode": review_report_mode} if review_report_mode else {}),
-        **_trigger(github_context),
-    }
-    review_files.atomic_json(context / "manifest.json", manifest)
-    return manifest
+        review_files.atomic_json(staged_context / "manifest.json", manifest)
+        os.replace(staging, artifacts)
+        preparation.unlink()
+        return manifest
 
 
 def _reviewer_text(manifest, *, stage_version=None):
@@ -291,7 +362,10 @@ def verify_snapshot(manifest, *, require_current_prompt=False):
         tracked, untracked = worktree_files(tree, read_git=_git)
         if any(not _is_test_artifact(tree, name) for name in untracked):
             raise ValueError("review worktree contains unregistered files")
-        if _source_hashes(tree, tracked) != manifest["source_hashes"]:
+        source_version = manifest.get("source_hash_version", 1)
+        if type(source_version) is not int or source_version not in (1, 2):
+            raise ValueError("unsupported review source hash version")
+        if _source_hashes(tree, tracked, gitlinks_from_index=source_version == 2) != manifest["source_hashes"]:
             raise ValueError("review worktree source hash changed")
         for name, expected in manifest["files"].items():
             path = review_files.safe_path(name, manifest["artifact_root"])

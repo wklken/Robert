@@ -596,6 +596,157 @@ class PublicationReconcileTests(PublicationReconcileFixture):
             ).fetchone()[0]
         self.assertEqual(intent_status, "attention")
 
+    def assert_terminal_pr_creation_is_reconciled(self, terminal_state):
+        body = "<!-- robert-workstream task_id=task-1 -->\nPR"
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE worker_results SET metadata_json=json_set(?, '$.result_contract', 'compact-v1') "
+                "WHERE result_id='result-1'",
+                (json.dumps({"audit": {"status": "accepted", "action_scope": {"repo": "x/y", "sources": []}}}),),
+            )
+            conn.execute(
+                "UPDATE github_actions SET action_type='open_pr', target_url=NULL, metadata_json=? "
+                "WHERE action_id='action-1'",
+                (json.dumps({"repo": "x/y", "head": "feature", "base": "main", "body": body, "title": "Fix"}),),
+            )
+        candidate = {
+            "number": 4,
+            "url": "https://github.com/x/y/pull/4",
+            "baseRefName": "main",
+            "headRefName": "feature",
+            "headRepositoryOwner": {"login": "x"},
+            "body": body,
+            "state": terminal_state,
+        }
+        create_calls = []
+
+        def runner(command, **_kwargs):
+            if command[:3] == ["gh", "pr", "list"]:
+                all_states = command[command.index("--state") + 1] == "all"
+                return Completed(json.dumps([candidate] if create_calls and all_states else []))
+            if command[:3] == ["gh", "pr", "view"]:
+                return Completed(json.dumps(candidate))
+            if command[:3] == ["gh", "pr", "create"]:
+                create_calls.append(command)
+                if len(create_calls) == 1:
+                    raise RuntimeError("response lost after successful PR creation")
+                return Completed("https://github.com/x/y/pull/5\n")
+            raise AssertionError(command)
+
+        with self.assertRaisesRegex(RuntimeError, "response lost"):
+            publish.publish_ready_actions(self.db_path, run_command=runner)
+        result = publish.publish_ready_actions(self.db_path, run_command=runner)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(create_calls), 1)
+        self.assertEqual((result["published_count"], result["deduplicated_count"]), (1, 1))
+        state, intent, _ = self.publication_state()
+        self.assertEqual(intent, "published")
+        self.assertEqual(state["receipt"]["external_id"], "4")
+        self.assertEqual(state["receipt"]["target_url"], candidate["url"])
+        self.assertEqual(state["response"]["reconciliation"]["pr_state"], terminal_state)
+
+    def test_closed_pr_creation_reconciles_original_receipt_without_recreating(self):
+        self.assert_terminal_pr_creation_is_reconciled("CLOSED")
+
+    def test_merged_pr_creation_reconciles_original_receipt_without_recreating(self):
+        self.assert_terminal_pr_creation_is_reconciled("MERGED")
+
+    def test_saturated_pr_history_does_not_prove_absence(self):
+        action = {
+            "action_type": "open_pr",
+            "metadata_json": json.dumps(
+                {"repo": "x/y", "head": "feature", "base": "main", "body": "<!-- robert-workstream task_id=t -->"}
+            ),
+        }
+        calls = []
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            return Completed(json.dumps([{"number": number} for number in range(1, 101)]))
+
+        result = publication_reconcile.classify_remote_state(action, {"repo": "x/y"}, runner)
+
+        self.assertEqual((result["status"], result["reason_code"]), ("unknown", "open_pr_history_incomplete"))
+        self.assertEqual(len(calls), 1)
+
+    def test_empty_pr_history_response_does_not_prove_absence(self):
+        action = {
+            "action_type": "open_pr",
+            "metadata_json": json.dumps(
+                {"repo": "x/y", "head": "feature", "base": "main", "body": "<!-- robert-workstream task_id=t -->"}
+            ),
+        }
+        for stdout in ("", " ", "null", "{}"):
+            with self.subTest(stdout=stdout):
+                result = publication_reconcile.classify_remote_state(
+                    action, {"repo": "x/y"}, lambda *_args, **_kwargs: Completed(stdout)
+                )
+                self.assertEqual((result["status"], result["reason_code"]), ("unknown", "open_pr_response_malformed"))
+
+    def test_unrelated_closed_pr_is_not_the_effect_of_this_intent(self):
+        action = {
+            "action_type": "open_pr",
+            "metadata_json": json.dumps(
+                {"repo": "x/y", "head": "feature", "base": "main", "body": "<!-- robert-workstream task_id=t -->"}
+            ),
+        }
+        candidate = {
+            "number": 4,
+            "url": "https://github.com/x/y/pull/4",
+            "headRefName": "feature",
+            "baseRefName": "main",
+            "state": "CLOSED",
+            "body": "<!-- robert-workstream task_id=older -->",
+        }
+
+        def runner(command, **_kwargs):
+            return Completed(json.dumps([candidate] if command[:3] == ["gh", "pr", "list"] else candidate))
+
+        result = publication_reconcile.classify_remote_state(action, {"repo": "x/y"}, runner)
+
+        self.assertEqual(result["status"], "confirmed_absent")
+
+    def test_malformed_pr_state_does_not_authorize_retry(self):
+        action = {
+            "action_type": "open_pr",
+            "metadata_json": json.dumps(
+                {"repo": "x/y", "head": "feature", "base": "main", "body": "<!-- robert-workstream task_id=t -->"}
+            ),
+        }
+        for state in ([], {}, 1, "invalid"):
+            with self.subTest(state=state):
+                candidate = {"number": 4, "state": state}
+
+                def runner(command, **_kwargs):
+                    return Completed(json.dumps([candidate] if command[:3] == ["gh", "pr", "list"] else candidate))
+
+                result = publication_reconcile.classify_remote_state(action, {"repo": "x/y"}, runner)
+                self.assertEqual((result["status"], result["reason_code"]), ("unknown", "open_pr_response_malformed"))
+
+    def test_edited_or_retargeted_closed_pr_does_not_prove_absence(self):
+        marker = "<!-- robert-workstream task_id=t -->"
+        action = {
+            "action_type": "open_pr",
+            "metadata_json": json.dumps({"repo": "x/y", "head": "feature", "base": "main", "body": marker}),
+        }
+        for body, base in (("Updated description", "main"), (marker, "stable")):
+            with self.subTest(body=body, base=base):
+                candidate = {
+                    "number": 4,
+                    "url": "https://github.com/x/y/pull/4",
+                    "headRefName": "feature",
+                    "baseRefName": base,
+                    "state": "CLOSED",
+                    "body": body,
+                }
+
+                def runner(command, **_kwargs):
+                    return Completed(json.dumps([candidate] if command[:3] == ["gh", "pr", "list"] else candidate))
+
+                result = publication_reconcile.classify_remote_state(action, {"repo": "x/y"}, runner)
+                self.assertEqual(result["status"], "unknown")
+
     def test_open_pr_crash_does_not_accept_matching_marker_from_wrong_head_owner(self):
         body = "<!-- robert-workstream task_id=task-1 -->\nPR"
         scope = {
