@@ -118,8 +118,9 @@ API 使用现有取消命令的 `abandon_review_run_ids` 列表，仍要求仓�
 
 ## 文件交接
 
-源码快照仅放行下文列出的、被 Git 忽略的明确测试产物。已跟踪文件即使命中忽略规则也必须
-保持不变；其他新文件、HEAD、源码哈希、上下文和 prompt 的变化仍会被拒绝。
+新建的 PR 审查快照移除普通文件和目录的写权限，供 reviewer 读取固定版本的源码和规则。
+快照拒绝所有未登记文件，包括 Git 忽略项。HEAD、已跟踪的源码、上下文和 prompt 仍须通过原有校验。
+文件权限用于阻止普通写入，快照校验仍负责发现拥有额外权限的进程造成的变化。
 
 每轮 fetch 当前 PR head/base，验证 SHA 后建立独立 detached Git worktree。
 完整 PR diff 从该轮 merge-base 到 head 计算。共享源码和上下文不被后续轮次 reset。
@@ -135,9 +136,14 @@ Robert 冻结 manifest 和一次生成的 `reviewer-prompt.md`。所有 reviewer
 启动前后核对 SHA256；重试也不改变 prompt。不同 CLI 内置的系统提示不在此字节一致保证内。
 部署更新 prompt 模板后，已登记的轮次和阶段继续使用原文件，并核对登记的哈希。
 冻结 manifest 已落盘但尚未登记数据库时，恢复核对原快照身份、源码及所有已登记上下文哈希、冻结文件集合和提示词哈希，再按内建模板完整渲染比对提示词后接纳。
-当前支持共享清单模板及模型准备模板 v1；已有 `prompt_version=1` 的冻结包可匹配这两种模板，新快照使用 `prompt_version=2`。恢复保留原提示词字节与哈希，不重新生成共享资料；未知版本、未知模板或校验失败会拒绝接纳。尚未写入冻结 manifest 的旧提示词不享有此恢复保证。
-每个子进程使用相同 cwd，通过独立环境变量 `ROBERT_REVIEW_OUTPUT_DIR` 得到自己的结果目录，
-不将 worker 名称或各自输出路径插入 prompt，不修改宿主环境。
+新 PR 审查快照使用 `prompt_version=4`，旧轮次恢复时继续校验并使用原提示词和快照规则。
+未知版本、未知模板或校验失败会拒绝接纳。恢复已冻结的轮次保留原提示词字节与哈希。
+每个 reviewer 的 cwd 都是固定快照，各自通过 `ROBERT_REVIEW_OUTPUT_DIR` 获得结果目录。
+Robert 为每次 reviewer 运行准备同一 head 的独立 Git checkout，通过 `ROBERT_REVIEW_TEST_WORKTREE`
+传入路径。测试从该副本的对应组件目录执行，缓存和其他生成物可以留在副本或 `TMPDIR` 内。
+测试副本有独立索引和 refs，借用本地 Git 对象，并从提交重新检出文件。它不会继承未跟踪文件及本地依赖目录。
+审核报告在 `coverage.notes` 中记录检查目录、命令、退出状态和缺失依赖等证据限制。
+已登记的运行会清理测试副本。失败或中断的运行保留副本供诊断，重试使用独立副本。
 
 reviewer 自行阅读 manifest、完整 diff、摘要、源码索引及相关源码，写 `result.json.tmp`，
 关闭后原子重命名为 `result.json`。stdout/stderr 只用于诊断。结果必须包含轮次、快照、head SHA、
@@ -195,7 +201,6 @@ mention 不扩大发布或修改权限，各阶段继续使用原有 JSON schema
 - 仅某个模型失败时，同轮重试复用已验证的其他模型结果；汇总失败仅重跑汇总。产物已落盘但数据库登记前崩溃，可重新验证后接纳。
 - 配置了 `fallback_model` 时，同轮同阶段同一 worker 连续两次超时，下一次重试使用备用模型；其他 worker 的失败不会计入。实际选择在启动前持久化，恢复、报告和 Board 使用该值，reviewer prompt 不变。CLI 的 `default` 表示未指定具体模型，不推测其实际名称；相同模型配置不宣称为不同模型。
 - 原成功文件缺失或 hash 改变，不再作为有效结果使用。无法确认进程身份或启动结果时停止自动执行；未知启动按上面的人工恢复流程处理，不盲目拉起第二个进程。主进程退出但进程组仍存在时同样停止，不能把仍可能变化的文件登记为成功。
-- 源码快照拒绝未跟踪的审查规则、源码和配置，即使 Git 忽略这些文件。仅放行被 Git 忽略的明确测试产物：根目录 `bkcore_unittest.sqlite3`、`__pycache__` 内的 `.pyc`，以及根目录 `.pytest_cache` 的 `.gitignore`、`CACHEDIR.TAG`、`README.md`、`nodeids` 和 `v/cache/{nodeids,lastfailed,stepwise}`。这些产物可以在测试后更新，但文件及其父目录不能是符号链接；已跟踪文件仍受原有状态和哈希校验约束。
 - 使用现有任务 Retry/Cancel 和 publication retry。发布失败沿用原 action/result，仅重试发布和远端对账。
 - 发布前再次核对 head、base、目标分支和 PR 是否仍打开；变化标记 `superseded`，需要新触发请求。确认旧进程已停止后，重新触发失败任务会创建新轮次并读取当前 PR；旧轮次及其产物保留。已有排队请求会继续执行。
 - 发布按 repository、PR、round 去重；遇到模糊响应先分页查询 PR Reviews，核对 marker、commit 和完整正文，不能确认时不重复发布。
