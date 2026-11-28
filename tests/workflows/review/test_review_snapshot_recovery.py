@@ -10,6 +10,19 @@ from tests.support.review_workspace import ReviewWorkspaceFixture
 
 
 class ReviewSnapshotRecoveryTests(ReviewWorkspaceFixture):
+    def test_interrupted_isolated_review_keeps_the_read_only_snapshot(self):
+        round_id = "interrupted-isolated"
+        with patch.object(workspace, "runtime_info", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                self.prepare(round_id, isolated_checks=True)
+        manifest = self.freeze(self.prepare(round_id, isolated_checks=True))
+        self.assertEqual(manifest["prompt_version"], workspace.ISOLATED_CHECKS_PROMPT_VERSION)
+        self.assertEqual(manifest["source_hash_version"], 2)
+        tree = Path(manifest["worktree_path"])
+        self.assertEqual(tree.stat().st_mode & 0o222, 0)
+        self.assertEqual((tree / "source.py").stat().st_mode & 0o222, 0)
+        self.assertEqual(self.prepare(round_id, isolated_checks=True), manifest)
+
     def test_same_round_recovers_interrupted_controller_preparation(self):
         for index, failure in enumerate((OSError("temporary runtime failure"), KeyboardInterrupt())):
             round_id = "interrupted-" + str(index)
@@ -118,6 +131,24 @@ class ReviewSnapshotRecoveryTests(ReviewWorkspaceFixture):
         component = tree / "vendor/component"
         self.git(component, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-am", "changed")
         with self.assertRaisesRegex(ValueError, "dirty"):
+            workspace.verify_snapshot(manifest)
+
+    def test_read_only_source_keeps_submodules_uninitialized(self):
+        self.add_submodule()
+        manifest = self.freeze(self.prepare("isolated-gitlink", isolated_checks=True))
+        tree = Path(manifest["worktree_path"])
+        checkout = workspace.create_check_worktree(manifest, "review-run-" + "a" * 32)
+        self.git(checkout, "-c", "protocol.file.allow=always", "submodule", "update", "--init")
+        self.assertTrue(workspace.verify_snapshot(manifest))
+
+        component = tree / "vendor/component"
+        mode = component.stat().st_mode & 0o777
+        component.chmod(mode | 0o200)
+        try:
+            self.git(tree, "-c", "protocol.file.allow=always", "submodule", "update", "--init")
+        finally:
+            component.chmod(mode)
+        with self.assertRaisesRegex(ValueError, "submodule contains unregistered files"):
             workspace.verify_snapshot(manifest)
 
     def test_uninitialized_gitlink_cannot_contain_unregistered_source(self):

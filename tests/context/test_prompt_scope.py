@@ -40,9 +40,13 @@ class PromptScopeTests(unittest.TestCase):
             manifest, severities=review_files.SEVERITIES, recommendations=review_files.RECOMMENDATIONS
         )
         current = render_prompt.render_prompt(request)
-        self.assertEqual(render_prompt.render_prompt(request, stage_version=3).text, current.text)
+        self.assertEqual(render_prompt.render_prompt(request, stage_version=4).text, current.text)
+        self.assertIn("ROBERT_REVIEW_TEST_WORKTREE", current.text)
         self.assertIn("Do not search unrelated checkouts", current.text)
         self.assertIn("could change a finding or the merge recommendation", current.text)
+        bounded_runtime = render_prompt.render_prompt(request, stage_version=3)
+        self.assertIn("Do not search unrelated checkouts", bounded_runtime.text)
+        self.assertNotIn("ROBERT_REVIEW_TEST_WORKTREE", bounded_runtime.text)
         previous = render_prompt.render_prompt(request, stage_version=2)
         self.assertIn("executable verification is still required", previous.text)
         self.assertNotIn("Do not search unrelated checkouts", previous.text)
@@ -50,7 +54,7 @@ class PromptScopeTests(unittest.TestCase):
         self.assertIn("preparation summary's documented interpreter", legacy.text)
         self.assertNotIn("discovery inventories", legacy.text)
         self.assertIn("stages/review-evaluate-model-preparation-v1.md", legacy.metadata["resources"])
-        for invalid in (0, 4, True, "../review-boundary.md"):
+        for invalid in (0, 5, True, "../review-boundary.md"):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "unsupported prompt stage version"):
                 render_prompt.render_prompt(request, stage_version=invalid)
 

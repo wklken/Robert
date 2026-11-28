@@ -69,6 +69,16 @@ class ReviewStages(StageCoordinator):
     artifact_kinds = ("result", "report", "evaluation", "context_summary", "source_index")
     workflow_name = "review"
 
+    def stage_environment(self, run):
+        environment = super().stage_environment(run)
+        if self._uses_isolated_checks() and run["stage"] == "review":
+            checkout = review_workspace.create_check_worktree(self.manifest, run["run_id"])
+            environment["ROBERT_REVIEW_TEST_WORKTREE"] = str(checkout)
+        return environment
+
+    def _uses_isolated_checks(self):
+        return self.manifest.get("prompt_version") == review_workspace.ISOLATED_CHECKS_PROMPT_VERSION
+
     def report_anchor_callbacks(self):
         """Persist a report's trusted seal before its independent DB registration."""
 
@@ -193,7 +203,10 @@ class ReviewStages(StageCoordinator):
                 }
 
             try:
-                return self.run_phase("review", worker, self.manifest["prompt_path"], validate), None
+                record = self.run_phase("review", worker, self.manifest["prompt_path"], validate)
+                if self._uses_isolated_checks():
+                    review_workspace.discard_check_worktree(self.manifest, record["run_id"])
+                return record, None
             except StageStopped:
                 raise
             except (ValueError, OSError, RuntimeError) as exc:
@@ -300,6 +313,7 @@ class Coordinator(ReviewStages):
                         self.round_id,
                         pr,
                         [self.request["event"]],
+                        isolated_checks=True,
                     )
                     if not self.manifest.get("frozen"):
                         self.manifest["github_account"] = repo["github_account"]

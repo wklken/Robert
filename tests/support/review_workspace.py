@@ -39,7 +39,7 @@ class ReviewWorkspaceFixture(unittest.TestCase):
         self.head = self.git(self.upstream, "rev-parse", "HEAD")
         self.git(self.upstream, "update-ref", "refs/pull/42/head", "HEAD")
 
-    def prepare(self, round_id):
+    def prepare(self, round_id, *, isolated_checks=False):
         return review_workspace.prepare_snapshot(
             self.repo,
             self.root / "worktrees",
@@ -52,6 +52,7 @@ class ReviewWorkspaceFixture(unittest.TestCase):
                 "user": {"login": "author"},
             },
             [{"event_fingerprint": round_id}],
+            isolated_checks=isolated_checks,
         )
 
     def freeze(self, manifest):
