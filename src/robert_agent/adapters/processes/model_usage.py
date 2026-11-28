@@ -63,7 +63,17 @@ def source_for_agent(agent, event_type=None):
 
 def gateway_usage(response):
     """Keep only measurements from the response envelope outside generated content."""
-    counters = _tokens(response.get("usage"))
+    usage = response.get("usage")
+    counters = _tokens(usage)
+    if isinstance(usage, dict):
+        for detail, source_key, target_key in (
+            ("input_tokens_details", "cached_tokens", "cache_read_input_tokens"),
+            ("output_tokens_details", "reasoning_tokens", "reasoning_output_tokens"),
+        ):
+            details = usage.get(detail)
+            count = details.get(source_key) if isinstance(details, dict) else None
+            if type(count) is int and count >= 0:
+                counters.setdefault(target_key, count)
     cost = _usd(response.get("total_cost_usd"))
     if not counters and cost is None:
         return {}
