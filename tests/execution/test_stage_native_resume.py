@@ -8,7 +8,7 @@ from unittest.mock import patch
 from robert_agent.execution.stages import StageStopped
 from robert_agent.persistence.rounds import review as store
 from tests.support import database
-from tests.support.review_coordinator import ReviewCoordinatorFixture
+from tests.support.review_coordinator import ReviewCoordinatorFixture, writable_snapshot_path
 
 
 class StageNativeResumeTests(ReviewCoordinatorFixture):
@@ -160,21 +160,24 @@ class StageNativeResumeTests(ReviewCoordinatorFixture):
         with patch("pathlib.Path.home", return_value=self.root):
             driver, original, _ = self.prepare_interrupted()
             source = Path(driver.manifest["worktree_path"]) / "source.py"
-            source.write_text("value = 7\n")
+            with writable_snapshot_path(source):
+                source.write_text("value = 7\n")
             with database.connect(self.db) as conn:
                 run = next(r for r in store.runs(conn, driver.round_id) if r["run_id"] == original["run_id"])
             checkpoint = driver.source_checkpoint(run)
             run["dispatch"]["result_checkpoint"] = checkpoint
-            source.write_text("value = 8\n")
+            with writable_snapshot_path(source):
+                source.write_text("value = 8\n")
             self.assertNotEqual(driver.source_checkpoint(run), checkpoint)
 
     def test_ignored_runtime_configuration_is_part_of_source_pin(self):
         with patch("pathlib.Path.home", return_value=self.root):
             driver, original, _ = self.prepare_interrupted()
             tree = Path(driver.manifest["worktree_path"])
-            (tree / ".gitignore").write_text("runtime-config.json\n")
             config = tree / "runtime-config.json"
-            config.write_text('{"enabled": true}\n')
+            with writable_snapshot_path(tree):
+                (tree / ".gitignore").write_text("runtime-config.json\n")
+                config.write_text('{"enabled": true}\n')
             with database.connect(self.db) as conn:
                 run = next(r for r in store.runs(conn, driver.round_id) if r["run_id"] == original["run_id"])
             checkpoint = driver.source_checkpoint(run)
@@ -184,8 +187,9 @@ class StageNativeResumeTests(ReviewCoordinatorFixture):
     def test_stopped_writer_progress_is_pinned_before_interruption_recovery(self):
         with patch("pathlib.Path.home", return_value=self.root):
             driver, original, _ = self.prepare_interrupted()
-            tree = Path(driver.manifest["worktree_path"])
-            (tree / "source.py").write_text("value = 7\n")
+            source = Path(driver.manifest["worktree_path"]) / "source.py"
+            with writable_snapshot_path(source):
+                source.write_text("value = 7\n")
             from robert_agent.execution.stages import terminate_children
 
             with database.connect(self.db) as conn:

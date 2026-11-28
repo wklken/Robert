@@ -12,7 +12,9 @@ Read the frozen PR metadata, GitHub trigger context, complete diff/stat/linecoun
 
 Read the registered context files directly. Inspect only the manifest identity and context paths you need; its complete source hash inventory is controller validation data. A controller-generated summary and index are discovery inventories, not source reading or semantic verification evidence.
 
-For executable checks, use the pinned worktree, its runtime declarations and dependency lockfiles, and paths explicitly identified in `runtime-info.json`. For each affected component, make one pass over the relevant declared runtime and dependency locations. Do not search unrelated checkouts, walk the host filesystem, or look through package-manager caches for substitutes. If the required runtime or dependencies are unavailable, stop environment discovery and record the unexecuted checks in `coverage.notes`. Use supplied CI results only when they match the pinned revision and check, and identify them as CI evidence.
+Read source and review rules from the pinned, read-only worktree. Run all executable project checks from the corresponding component directory under `ROBERT_REVIEW_TEST_WORKTREE`. Robert provisions this writable checkout at the same pinned commit for this run. Keep generated files there or in `TMPDIR`. Do not write to the pinned worktree, change reviewed source or configuration in the test checkout, or use generated files as additional source or review rules. If the test checkout is unavailable, record the checks as unexecuted.
+
+Use the pinned runtime declarations and dependency lockfiles and the paths explicitly identified in `runtime-info.json`. Keep the identified runtime executable paths, but translate project paths in environment hints such as `GOWORK` to their equivalents in the test checkout. For each affected component, make one pass over the relevant declared runtime and dependency locations. Do not search unrelated checkouts, walk the host filesystem, or look through package-manager caches for substitutes. If the required runtime or dependencies are unavailable, stop environment discovery and record the unexecuted checks in `coverage.notes`. Use supplied CI results only when they match the pinned revision and check, and identify them as CI evidence.
 
 After reviewing the changed paths and their direct contracts, pursue additional investigation only when a reachable case with a concrete impact could change a finding or the merge recommendation. Identify the specific evidence that would settle the question. If the evidence is unavailable within the review scope, record the remaining uncertainty and continue.
 
@@ -26,7 +28,7 @@ ${review_policy}${review_summary_guidance}
 
 Report concrete introduced defects with trigger, impact, source location, and evidence. Distinguish pre-existing behavior. Validate dependency, contract, and scope claims against actual added or deleted lines. For Python syntax claims use the project interpreter from `runtime-info.json`. `UNRESOLVED` means unverified.
 
-Review large diffs in batches and report every unreviewed scope. In `coverage.notes`, state checks performed, important unexecuted checks, evidence limits, and justification for the merge recommendation, including unresolved material risks.
+Review large diffs in batches and report every unreviewed scope. In `coverage.notes`, state checks performed with their component directory, command and exit status, important unexecuted checks, evidence limits, and justification for the merge recommendation, including unresolved material risks.
 
 ## Delivery
 
