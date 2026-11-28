@@ -1,6 +1,7 @@
 """supervision health responsibilities."""
 
 from robert_agent.foundation.contracts.supervision import SupervisionMode
+from robert_agent.foundation.timestamps import utc_timestamp
 
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -43,9 +44,39 @@ def atomic_json(path, payload):
 
 def read_health(config):
     try:
-        return json.loads(health_path(config).read_text())
+        value = json.loads(health_path(config).read_text())
+        return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def _observation_age(value, current):
+    observed = utc_timestamp(value)
+    if current is None or observed is None or observed > current:
+        return None
+    return (current - observed).total_seconds()
+
+
+def _freshness(age, maximum):
+    if age is None:
+        return "unknown"
+    return "fresh" if age <= maximum else "stale"
+
+
+def health_status(config, *, now=None):
+    """Project observation freshness without rewriting the persisted sample."""
+    sample = read_health(config)
+    current = utc_timestamp(now or utc_now())
+    poll = config.get("supervision", {}).get("poll_seconds", supervision_config.DEFAULTS["poll_seconds"])
+    age = _observation_age(sample.get("checked_at"), current)
+    complete_age = _observation_age(sample.get("last_complete_check_at"), current)
+    return {
+        **sample,
+        "freshness": _freshness(age, poll * 2 + 10),
+        "observation_age_seconds": age,
+        "coverage_freshness": _freshness(complete_age, max(300, poll * 10)),
+        "complete_observation_age_seconds": complete_age,
+    }
 
 
 def health(config, result, now):
@@ -119,21 +150,8 @@ def health(config, result, now):
 def owns_health_alerts(config, now):
     if not config or config.get("supervision", {}).get("mode") == SupervisionMode.OFF.value:
         return False
-    health = read_health(config)
-    from robert_agent.supervision.rules import timestamp
-
-    current = timestamp(now)
-    checked = timestamp(health.get("checked_at"))
-    complete = timestamp(health.get("last_complete_check_at"))
-    poll = config.get("supervision", {}).get("poll_seconds", 60)
-    return bool(
-        health.get("ok")
-        and current
-        and checked
-        and complete
-        and 0 <= (current - checked).total_seconds() <= poll * 2 + 10
-        and 0 <= (current - complete).total_seconds() <= max(300, poll * 10)
-    )
+    health = health_status(config, now=now)
+    return bool(health.get("ok") and health["freshness"] == "fresh" and health["coverage_freshness"] == "fresh")
 
 
 def runtime_status(config):

@@ -15,6 +15,7 @@ from robert_agent.persistence.queries import workstreams as db_read_workstreams
 from robert_agent.persistence.stores import artifacts as db_write_artifacts
 from robert_agent.persistence.stores import attempts as db_write_attempts
 from robert_agent.persistence.stores import execution_subjects as db_write_execution_subjects
+from robert_agent.persistence.stores import repos as db_write_repos
 from robert_agent.persistence.stores import tasks as db_write_tasks
 from robert_agent.persistence.stores import workstreams as db_write_workstreams
 from robert_agent.supervision import store as supervision_store
@@ -876,6 +877,11 @@ def dispatch_queued_locked(
                         "status": "completed_by_worker_result",
                         "original_status": dispatch_result.get("status"),
                     }
+                if dispatch_result.get("ok") and dispatch_result.get("status") in {
+                    AttemptStatus.RUNNING.value,
+                    "completed_by_worker_result",
+                }:
+                    db_write_repos.record_dispatch_turn(conn, repo_id)
                 if not dispatch_result.get("ok", True) or dispatch_result.get("status") == "failed":
                     run_now = values.utc_now()
                     work_application_lifecycle.finalize_failed_task(

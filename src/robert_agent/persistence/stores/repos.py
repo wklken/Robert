@@ -1,13 +1,26 @@
 """Shared stores operations for repos."""
 
-from robert_agent.persistence.expressions import sql_constant
+from robert_agent.persistence.expressions import sql_constant, valid_json_or_empty
 
-from sqlalchemy import bindparam
+from sqlalchemy import bindparam, cast, func, Integer, select, update
 from sqlalchemy.dialects.sqlite import insert
 
 
 from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
+
+
+def record_dispatch_turn(conn, repo_id):
+    repo = tables["repos"]
+    all_repos = repo.alias("dispatch_repos")
+    orders = func.json_extract(valid_json_or_empty(all_repos.c.metadata_json), "$.dispatch_order")
+    next_order = select(func.coalesce(func.max(cast(orders, Integer)), 0) + 1).scalar_subquery()
+    stmt = (
+        update(repo)
+        .where(repo.c.repo_id == repo_id)
+        .values(metadata_json=func.json_set(valid_json_or_empty(repo.c.metadata_json), "$.dispatch_order", next_order))
+    )
+    return statements.write(conn, stmt)
 
 
 def insert_fixture(conn):

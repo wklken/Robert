@@ -25,6 +25,7 @@ from robert_agent.foundation.commands import emit
 from robert_agent.work import queries as work_queries
 from robert_agent.work import repositories as work_repositories
 from robert_agent.persistence.rounds import review as review_store
+from robert_agent.persistence.queries import repos as repo_queries
 import argparse
 import json
 import os
@@ -209,6 +210,11 @@ def run_once(
             },
         }
         publish_budget = {"remaining": (None if max_publish_actions is None else max(0, int(max_publish_actions)))}
+
+        if not dry_run and len(repos) > 1 and dispatch_budget["remaining"]:
+            # Keep immediate dispatch, but give the least recently served repository first use of the shared slots.
+            last_turn = repo_queries.dispatch_order(conn, repo_ids)
+            repos.sort(key=lambda entry: last_turn.get(entry[0], 0))
 
         run_journal.mark_run_step(conn, run_id, "repo_pipelines", "running", run_now)
         repo_summaries = []

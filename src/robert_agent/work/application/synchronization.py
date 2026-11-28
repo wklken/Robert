@@ -20,7 +20,8 @@ from robert_agent.adapters.github import discovery as discover
 from robert_agent.workflows import pr_health
 from robert_agent.persistence.schema import database as storage
 from robert_agent.configuration import command as validate_config
-from robert_agent.foundation.commands import ControlDeadlineExceeded
+from robert_agent.foundation.commands import ControlDeadlineExceeded, ScopedDeadlineExceeded
+from robert_agent.foundation.commands import control_deadline, limit_command_deadline
 from robert_agent.foundation import tapd_identity
 from robert_agent.adapters.github import read as github_read
 from robert_agent.adapters.github import recording as github_recording
@@ -274,6 +275,16 @@ def _wake_tapd_repositories(config, repos):
         wakeup_notifier.notify(db_path)
 
 
+def _scan_deadline(remaining_units):
+    deadline = control_deadline()
+    now = time.monotonic()
+    if deadline is None or deadline <= now:
+        return None
+    available = deadline - now
+    # Leave bounded time to commit observations and return the result to the parent.
+    return now + (available - min(5, available / 10)) / remaining_units
+
+
 def scan(config_path, *, runner=subprocess.run, refresh_context=False, tapd_runner=None):
     config = validate_config.validate_config(config_path, skip_external=True)
     if not config["ok"]:
@@ -285,53 +296,72 @@ def scan(config_path, *, runner=subprocess.run, refresh_context=False, tapd_runn
         with closing(db_database.connect(db_path, timeout=5)) as conn:
             pending = {row[0] for row in db_read_wakeups.find_for_scan(conn)}
         repos = [repo for repo in repos if repo["full_name"] in pending]
-    sessions, buckets, failures, batches = {}, {}, [], []
+    account_repositories = {}
     for repo in repos:
-        account = repo["github_account"]
-        if account in sessions:
-            continue
+        account_repositories.setdefault(repo["github_account"], []).append(repo)
+    scan_tapd = not refresh_context and bool((config.get("tapd") or {}).get("enabled"))
+    remaining = len(account_repositories) + len(repos) + int(scan_tapd)
+    sessions, buckets, failures, batches = {}, {}, [], []
+    for account, account_repos in account_repositories.items():
+        deadline = _scan_deadline(remaining)
+        remaining -= 1
         session = github_read.GitHubReadSession(
             db_path, account=account, host=os.environ.get("GH_HOST", "github.com"), runner=runner
         )
         sessions[account] = session
         try:
-            if not github_budget.budget(session, config):
-                failures.append({"account": account, "reason": "core_rate_limit_floor"})
-                continue
-            account_repos = [item for item in repos if item["github_account"] == account]
-            try:
-                buckets[account] = (
-                    session.cached_notifications(account_repos)
-                    if refresh_context
-                    else session.collect_notifications(account_repos)
-                )
-            except ControlDeadlineExceeded:
-                raise
-            except (subprocess.SubprocessError, OSError, ValueError):
-                # Search remains a fallback when notification lookup fails.
-                buckets[account] = {}
-                failures.append({"account": account, "reason": "notification_read_failed"})
+            with limit_command_deadline(deadline):
+                if not github_budget.budget(session, config):
+                    failures.append({"account": account, "reason": "core_rate_limit_floor"})
+                    continue
+                try:
+                    buckets[account] = (
+                        session.cached_notifications(account_repos)
+                        if refresh_context
+                        else session.collect_notifications(account_repos)
+                    )
+                except ScopedDeadlineExceeded:
+                    buckets[account] = {}
+                    failures.append({"account": account, "reason": "notification_read_timeout"})
+                except ControlDeadlineExceeded:
+                    raise
+                except (subprocess.SubprocessError, OSError, ValueError):
+                    # Search remains a fallback when notification lookup fails.
+                    buckets[account] = {}
+                    failures.append({"account": account, "reason": "notification_read_failed"})
+        except ScopedDeadlineExceeded:
+            failures.append({"account": account, "reason": "rate_limit_check_timeout"})
         except ControlDeadlineExceeded:
             raise
         except (subprocess.SubprocessError, OSError, ValueError):
             failures.append({"account": account, "reason": "rate_limit_check_failed"})
     for repo in repos:
+        deadline = _scan_deadline(remaining)
+        remaining -= 1
         if repo["github_account"] not in buckets:
             continue
         try:
-            identifier = scan_repo(
-                config,
-                repo,
-                sessions[repo["github_account"]],
-                buckets[repo["github_account"]].get(repo["full_name"], []),
-            )
+            with limit_command_deadline(deadline):
+                identifier = scan_repo(
+                    config,
+                    repo,
+                    sessions[repo["github_account"]],
+                    buckets[repo["github_account"]].get(repo["full_name"], []),
+                )
             if identifier is not None:
                 batches.append(identifier)
+        except ScopedDeadlineExceeded:
+            failures.append({"repo": repo["full_name"], "reason": "repository_scan_timeout"})
         except ControlDeadlineExceeded:
             raise
         except (subprocess.SubprocessError, OSError, ValueError, db_errors.Error):
             failures.append({"repo": repo["full_name"], "reason": "repo_scan_failed"})
-    tapd = {} if refresh_context else tapd_scan.scan(config, runner=tapd_runner)
+    try:
+        with limit_command_deadline(_scan_deadline(remaining) if scan_tapd else None):
+            tapd = {} if refresh_context else tapd_scan.scan(config, runner=tapd_runner)
+    except ScopedDeadlineExceeded:
+        failures.append({"provider": "tapd", "reason": "tapd_scan_timeout"})
+        tapd = {"enabled": True, "projects": [], "status": "timed_out"}
     if tapd.get("enabled"):
         _wake_tapd_repositories(config, repos)
     intervals = [session.poll_interval_seconds for session in sessions.values() if session.poll_interval_seconds]

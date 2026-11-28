@@ -36,6 +36,7 @@ WORKSTREAM_MARKER_RE = re.compile(
     r"<!--\s*robert-workstream\b.*?-->",
     re.I | re.S,
 )
+_PR_HISTORY_LIMIT = 100
 
 _SCOPE_KEYS = {
     "repo",
@@ -306,9 +307,11 @@ def _reconcile_open_pr(action, action_scope, run_command):
         "--head",
         branch,
         "--state",
-        "open",
+        "all",
+        "--limit",
+        str(_PR_HISTORY_LIMIT),
         "--json",
-        "number,url,baseRefName,headRefName,headRepositoryOwner",
+        "number,url,baseRefName,headRefName,headRepositoryOwner,state",
     ]
     try:
         completed = run_command(command, capture_output=True, text=True)
@@ -319,11 +322,13 @@ def _reconcile_open_pr(action, action_scope, run_command):
     if _command_failure(completed, "open_pr_query_failed"):
         return _result("unknown", "open_pr_query_failed")
     try:
-        response = json.loads(getattr(completed, "stdout", "") or "[]")
+        response = json.loads(getattr(completed, "stdout", ""))
     except (TypeError, ValueError):
         return _result("unknown", "open_pr_response_malformed")
     if not isinstance(response, list):
         return _result("unknown", "open_pr_response_malformed")
+    if len(response) >= _PR_HISTORY_LIMIT:
+        return _result("unknown", "open_pr_history_incomplete")
     candidates = []
     for item in response:
         if not isinstance(item, dict):
@@ -348,7 +353,7 @@ def _reconcile_open_pr(action, action_scope, run_command):
             "--repo",
             repo,
             "--json",
-            "number,url,body,baseRefName,headRefName,headRepositoryOwner",
+            "number,url,body,baseRefName,headRefName,headRepositoryOwner,state",
         ]
         try:
             viewed = run_command(view_command, capture_output=True, text=True)
@@ -370,6 +375,9 @@ def _reconcile_open_pr(action, action_scope, run_command):
         actual_head = detail.get("headRefName") or candidate.get("headRefName") or ""
         actual_owner = _owner(detail.get("headRepositoryOwner")) or _owner(candidate.get("headRepositoryOwner"))
         body = detail.get("body") if isinstance(detail.get("body"), str) else ""
+        state = detail.get("state") or candidate.get("state")
+        if state is not None and (not isinstance(state, str) or state not in {"OPEN", "CLOSED", "MERGED"}):
+            return _result("unknown", "open_pr_response_malformed")
         exact = (
             actual_repo.casefold() == repo.casefold()
             and actual_base == base
@@ -380,12 +388,12 @@ def _reconcile_open_pr(action, action_scope, run_command):
         if exact and scope.get("pre_pr_review"):
             exact = reviewed_pr.matches_remote_pr(scope, metadata, detail.get("number"), run_command)
         if exact:
-            matches.append(detail)
+            matches.append({**detail, "state": state})
             continue
-        # A candidate on the requested branch/base but with a conflicting
-        # marker/owner is ambiguity, never proof of absence.
-        if actual_repo.casefold() == repo.casefold() and actual_base == base and actual_head == branch:
-            return _result("unknown", "open_pr_candidate_conflict")
+        if state in {"CLOSED", "MERGED"} and marker not in body and _marker(body, WORKSTREAM_MARKER_RE):
+            continue  # A previous task may have used this branch for a different PR.
+        # A maintainer may have edited the body or retargeted the PR after creation.
+        return _result("unknown", "open_pr_candidate_conflict")
     if len(matches) > 1:
         return _result("unknown", "open_pr_candidate_conflict", match_count=len(matches))
     if matches:
@@ -396,8 +404,9 @@ def _reconcile_open_pr(action, action_scope, run_command):
             source_sha=(scope.get("pre_pr_review") or {}).get("head_sha"),
             external_id=str(detail.get("number") or ""),
             target_url=detail.get("url") or "",
+            pr_state=detail.get("state"),
         )
-    return _result("unknown", "open_pr_candidate_conflict")
+    return _result("confirmed_absent", "open_pr_lookup_complete_absent")
 
 
 def _remote_branch(action, action_scope, run_command, *, push_remote=None):

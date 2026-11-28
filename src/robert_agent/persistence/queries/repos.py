@@ -1,12 +1,19 @@
 """Shared queries operations for repos."""
 
-from robert_agent.persistence.expressions import sql_constant
+from robert_agent.persistence.expressions import sql_constant, valid_json_or_empty
 
-from sqlalchemy import select, bindparam, and_, func, LABEL_STYLE_NONE
+from sqlalchemy import select, bindparam, and_, cast, func, Integer, LABEL_STYLE_NONE
 
 
 from robert_agent.persistence.catalog import tables
 from robert_agent.persistence import statements
+
+
+def dispatch_order(conn, repo_ids):
+    repo = tables["repos"]
+    order = func.json_extract(valid_json_or_empty(repo.c.metadata_json), "$.dispatch_order")
+    query = select(repo.c.repo_id, cast(order, Integer)).where(repo.c.repo_id.in_(repo_ids))
+    return {repo_id: value or 0 for repo_id, value in statements.read(conn, query)}
 
 
 def find_for_repo_id(conn):
