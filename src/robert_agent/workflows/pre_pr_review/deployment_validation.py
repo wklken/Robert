@@ -3,12 +3,14 @@
 import json
 from pathlib import Path
 import re
+import subprocess
 
 from robert_agent.adapters.git.review_revision import clean_head, git
 from robert_agent.context.native_prompts import deployment_validation_input
 from robert_agent.context.prompts import render_prompt
 from robert_agent.context.skills import NAME_RE
 from robert_agent.execution.stages import StageStopped, StageSuperseded
+from robert_agent.foundation.commands import ControlDeadlineExceeded
 from robert_agent.persistence.rounds import pre_pr_review as store
 from robert_agent.security.redaction import redact_report
 
@@ -130,6 +132,10 @@ def verify(driver, disposition, settings):
 
         worker = {**settings["worker"], "fallback_model": None}
         return driver.run_phase(STAGE, worker, prompt, validate)
+    except ControlDeadlineExceeded:
+        raise
+    except subprocess.SubprocessError as exc:
+        raise DeploymentValidationBlocked(f"Minikube validation for {head}: Git inspection failed") from exc
     except (OSError, ValueError, RuntimeError) as exc:
         raise DeploymentValidationBlocked(f"Minikube validation for {head}: {exc}") from exc
 
