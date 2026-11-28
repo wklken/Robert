@@ -423,6 +423,52 @@ def candidate_verification_input(manifest, candidate):
     )
 
 
+def deployment_validation_input(manifest, identity, tree, skill_path, skill_digest, *, docs_only, timeout_seconds):
+    return PromptInput(
+        "review.validate_deployment",
+        identity,
+        _files_output(
+            "deployment_validation",
+            _REVIEW_DIR,
+            ("deployment-validation.json",),
+            "Final PR deployment validation gate",
+            {
+                "schema_version": 1,
+                **identity,
+                "environment": "dev/bk-e2e",
+                "status": "blocked",
+                "images": {},
+                "assertions": [],
+                "cleanup": "not_needed",
+                "summary": "State the concrete obstacle or the observed result.",
+            },
+        ),
+        authority={
+            "source_access": "read-only checkout",
+            "deployment_target": "dev/bk-e2e",
+            "allowed_github_actions": [],
+            "output_directory": _REVIEW_DIR,
+        },
+        context_items=(
+            *original_request_context(manifest.get("original_request")),
+            _file_item("pinned-worktree", "Candidate source at head_sha", "Robert", tree, identity["head_sha"]),
+            _file_item(
+                "fast-local-k8s-context",
+                "Operator-registered Minikube validation skill and its relative tools",
+                "Robert host",
+                skill_path,
+                skill_digest,
+            ),
+        ),
+        values={
+            "docs_only": "yes" if docs_only else "no",
+            "merge_base_sha": manifest["merge_base_sha"],
+            "head_sha": identity["head_sha"],
+            "timeout_seconds": str(timeout_seconds),
+        },
+    )
+
+
 def final_review_input(inputs, input_path):
     identity = {
         key: inputs[key]

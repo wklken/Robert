@@ -219,7 +219,7 @@ class PrePrReviewRun(Base):
     __table_args__ = (
         CheckConstraint(
             "stage IN ('implement','prepare','review','synthesis','address_findings',"
-            "'verify_final','repair_handoff','validate_candidate')"
+            "'verify_final','repair_handoff','validate_candidate','validate_deployment')"
         ),
         UniqueConstraint("round_id", "stage", "worker_id", "attempt_no"),
         Index("pre_pr_review_runs_reserved", "slot_reserved", sqlite_where=text("slot_reserved=1")),

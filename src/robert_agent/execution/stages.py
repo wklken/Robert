@@ -441,6 +441,9 @@ class StageCoordinator:
             self.manifest, run["output_dir"], self.data_dir, workflow_name=self.workflow_name
         )
 
+    def authorize_launch(self, run):
+        """Allow a workflow to recheck authority after waiting for a model slot."""
+
     def launch_with_slot(self, run, worker, prompt_path, environment):
         store = self.store
         while True:
@@ -506,19 +509,24 @@ class StageCoordinator:
                             )
                     if acquired:
                         resume = recorded.get("native_resume")
-                        launched = self.launcher(
-                            task_id=self.task_id,
-                            attempt_id=run["run_id"],
-                            prompt_path=prompt_path,
-                            worktree_path=worktree,
-                            worker_agent_config=worker,
-                            model=run["model"],
-                            reasoning_effort=worker["default_effort"],
-                            trusted_environment=environment,
-                            log_dir=run["output_dir"],
-                            dry_run=False,
-                            **({"resume": resume} if resume else {}),
-                        )
+                        try:
+                            self.authorize_launch(run)
+                        except StageStopped as exc:
+                            launched = {"ok": False, "status": "failed_dispatch", "safe_error": str(exc)}
+                        else:
+                            launched = self.launcher(
+                                task_id=self.task_id,
+                                attempt_id=run["run_id"],
+                                prompt_path=prompt_path,
+                                worktree_path=worktree,
+                                worker_agent_config=worker,
+                                model=run["model"],
+                                reasoning_effort=worker["default_effort"],
+                                trusted_environment=environment,
+                                log_dir=run["output_dir"],
+                                dry_run=False,
+                                **({"resume": resume} if resume else {}),
+                            )
                         launched = {
                             **recorded,
                             **launched,

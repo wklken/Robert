@@ -16,6 +16,30 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(result["route_id"], "update-existing-pr")
         self.assertNotIn("open_pr", result["allowed_github_actions"])
 
+    def test_deployment_validation_is_frozen_only_for_opted_in_new_pr_work(self):
+        from robert_agent.workflows import routing
+
+        writer = {"name": "coder", "default_model": "write-model"}
+        validator = {"name": "validator", "default_model": "validation-model", "timeout_seconds": 720}
+        config = {
+            "default_worker": writer,
+            "workers": [writer, validator],
+            "skills": {"search_paths": []},
+        }
+        skill_path = "/opt/skills/fast-local-k8s-context/SKILL.md"
+        review = {"workers": ["coder"], "deployment_validation": {"worker": "validator", "skill_path": skill_path}}
+        repo = {"routes": {"new-pr": {"pre_pr_review": review}}}
+        result = routing.effective_route(config, repo, {}, route_id="new-pr")
+        self.assertEqual(
+            result["pre_pr_review_plan"]["deployment_validation"],
+            {"worker": validator, "skill_path": skill_path},
+        )
+        self.assertTrue(result["skill_status"]["runnable"])
+        self.assertNotIn("pre_pr_review_plan", routing.effective_route(config, {}, {}, route_id="new-pr"))
+        for route_id in ("review-pr", "update-existing-pr"):
+            with self.subTest(route_id=route_id):
+                self.assertNotIn("pre_pr_review_plan", routing.effective_route(config, repo, {}, route_id=route_id))
+
     def test_tapd_ticket_queue_follows_issue_rules_and_pr_queue_follows_pr_rules(self):
         from robert_agent.workflows import routing
 

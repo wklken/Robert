@@ -38,6 +38,27 @@ repos:
 
 配置的 `checkout`、`worktrees` 和数据目录可以通过根目录或祖先目录的软链接访问。新候选审查快照记录真实路径；已有快照中的同一可信根目录别名仍可校验。可信根目录内部的文件和子目录软链接继续被拒绝，审查文件必须位于本轮登记的目录内。
 
+## BlueKing API Gateway 本地部署验证
+
+Robert 升级到支持部署验证的版本后，在目标仓库的 `routes.new-pr.pre_pr_review` 下加入 `deployment_validation`。以下配置启用 `TencentBlueKing/blueking-apigateway` 的新 PR 验证，使用已配置的 `reviewer` Worker 和服务账户可读的完整技能目录。
+
+```yaml
+repos:
+  - full_name: TencentBlueKing/blueking-apigateway
+    # 保留该仓库已有的 checkout、worktrees、default_branch 和 trusted_actors。
+    routes:
+      new-pr:
+        pre_pr_review:
+          workers: [reviewer, tclaude]
+          deployment_validation:
+            worker: reviewer
+            skill_path: /root/.agents/skills/fast-local-k8s-context/SKILL.md
+```
+
+Robert 先开草稿 PR，再发布首轮 Review 报告。意见处置完成、所需的定向复核通过后，独立的部署验证 Worker 使用 `fast-local-k8s-context` 构建最终提交的受影响组件，在本机 Minikube `dev` 的 `bk-e2e` 命名空间临时部署，并通过真实入口验证本次变更。Worker 按技能要求记录运行镜像、预期与实际结果、恢复情况，以及适用的请求或发布 ID。凭据和原始运行日志保存在本机。
+
+Robert 将 Worker 报告与最终 SHA、源码检查点一起封存。相同提交的重试可复用已接纳的证据。仓库必需检查继续作为发布条件。严格符合无运行时影响条件的 Markdown 文档变更可记录跳过原因。验证失败或环境不可用时，草稿和 Review 报告可供继续处理，最终推送与任务完成暂停。强制终止可能打断恢复，进程退出会释放共享环境锁。再次使用该环境前，需根据私有验证产物确认镜像、配置及测试数据已恢复。
+
 ## 失败与恢复
 
 - 首次草稿通过独立基础验证门禁。审查或处置未完成时，最终更新门禁保持关闭。进程状态不明时，先停掉残留进程，再用任务取消中的未知启动处置功能确认。

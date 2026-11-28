@@ -33,7 +33,13 @@ from robert_agent.workflows.review import files, workspace, report_checkpoint
 from robert_agent.workflows.review.coordinator import ReviewStages
 from robert_agent.workflows.pre_pr_review import base_impact, final_verification, handoff_repair, final_repair
 from robert_agent.workflows.pre_pr_review.verification import final_verification_checks
-from robert_agent.workflows.pre_pr_review import decisions, single_round, targeted, verification_retry
+from robert_agent.workflows.pre_pr_review import (
+    decisions,
+    deployment_validation,
+    single_round,
+    targeted,
+    verification_retry,
+)
 
 
 def _append_finding_ids(body, items):
@@ -69,6 +75,7 @@ class Coordinator(ReviewStages):
         "validate_candidate": ("candidate-verification.json",),
         "address_findings": ("dispositions.json",),
         "repair_handoff": ("handoff.json",),
+        deployment_validation.STAGE: (deployment_validation.RESULT,),
     }
     artifact_kinds = (
         *ReviewStages.artifact_kinds,
@@ -76,6 +83,7 @@ class Coordinator(ReviewStages):
         "candidate_verification",
         "dispositions",
         "final_verification",
+        "deployment_validation",
     )
     stage = "implement"
 
@@ -205,7 +213,7 @@ class Coordinator(ReviewStages):
 
     def preserve_phase_artifact(self, run):
         return artifact_available(run) and (
-            run["stage"] in {"address_findings", "verify_final"}
+            run["stage"] in {"address_findings", "verify_final", deployment_validation.STAGE}
             or run["stage"] == "implement"
             and run["artifact"].get("output_type") == "waiting_for_user"
         )
@@ -229,6 +237,8 @@ class Coordinator(ReviewStages):
             return self.handoff_repair_worktree
         if run["stage"] == "verify_final":
             return self.final_review["worktree_path"]
+        if run["stage"] == deployment_validation.STAGE:
+            return self.deployment_input["worktree"]
         if run["stage"] == "address_findings":
             path = self.address_workspace(run["run_id"])
             if not path.exists():
@@ -327,7 +337,32 @@ class Coordinator(ReviewStages):
         }
 
     def recovery_workers(self):
-        return {**super().recovery_workers(), self.implementer["name"]: self.implementer}
+        workers = {**super().recovery_workers(), self.implementer["name"]: self.implementer}
+        if deployment := self.plan.get("deployment_validation"):
+            worker = deployment["worker"]
+            workers[worker["name"]] = worker
+        return workers
+
+    def authorize_launch(self, run):
+        if run["stage"] == deployment_validation.STAGE:
+            settings = self.plan["deployment_validation"]
+            inputs = self.deployment_input
+            try:
+                self.publication().check_deployment_locked(self.manifest["head_sha"], settings)
+                if (
+                    clean_head(inputs["worktree"]) != inputs["head_sha"]
+                    or store.digest(settings["skill_path"]) != inputs["skill_sha256"]
+                ):
+                    raise StageStopped("deployment validation source or skill changed while waiting")
+            except (OSError, subprocess.SubprocessError, ValueError, RuntimeError) as exc:
+                text = redact_and_truncate(str(exc), 500, strict_assignments=True).get("text", "[redacted]")
+                raise StageStopped(text) from exc
+
+    def native_resume_source(self, stage, worker, prompt_path, prompt_hash, previous):
+        if stage == deployment_validation.STAGE:
+            # A fresh process must check cluster state after an interrupted rollout.
+            return None, None
+        return super().native_resume_source(stage, worker, prompt_path, prompt_hash, previous)
 
     def prepare(self):
         self.phase("preparing")
@@ -1051,6 +1086,10 @@ class Coordinator(ReviewStages):
             verification = None
         else:
             verification = final_verification.verify(self, report, report_sha, finding_ids, disposition)
+        deployment = None
+        if settings := self.plan.get("deployment_validation"):
+            deployment = deployment_validation.verify(self, disposition, settings)
+        deployment_summary = deployment_validation.disclosure(deployment) if deployment else None
         self.stage = "finalize"
         self.phase(self.stage)
         draft["verification"] = response["verification"]
@@ -1101,6 +1140,7 @@ class Coordinator(ReviewStages):
             },
             "candidate_sha": head,
             "final_sha": final,
+            **({"deployment_validation": deployment} if deployment else {}),
         }
 
         def render_appendix():
@@ -1122,6 +1162,7 @@ class Coordinator(ReviewStages):
                     "",
                     "## 未处理及原因",
                     *(deferred or ["无。"]),
+                    *(["", "## Minikube 行为验证", deployment_summary] if deployment_summary else []),
                 ]
             )
 
@@ -1199,6 +1240,7 @@ class Coordinator(ReviewStages):
                 "base_sha": publication_base,
                 "reviewed_base_sha": self.manifest["base_sha"],
                 **({"base_refresh": self.base_refresh} if self.base_refresh else {}),
+                **({"deployment_validation": deployment} if deployment else {}),
                 "report_sha256": report_sha,
                 "dispositions_sha256": disposition["dispositions_sha256"],
                 "fingerprint": fingerprint,
@@ -1226,6 +1268,7 @@ class Coordinator(ReviewStages):
                         "",
                         "### 验证",
                         *(f"- {check['status']} · {check['purpose']}" for check in normalized["verification"]),
+                        *([f"- {deployment_summary}"] if deployment_summary else []),
                     ]
                 )
                 proof["publication"] = self.publication().finish_locked(
@@ -1424,6 +1467,8 @@ class Coordinator(ReviewStages):
         self.phase(self.stage)
         action = next(action for action in draft["planned_github_actions"] if action["type"] == "open_pr")
         action["body"] += "\n\n本 PR 等待第一轮评审。评审报告和后续处置见评论。"
+        if self.plan.get("deployment_validation"):
+            action["body"] += "\n\n最终提交须完成 Minikube 行为验证，结果见第一轮处理评论。"
         if "issue_resolution" in action:
             action.update(issue_resolution="partial", remaining_scope="第一轮评审及必要整改")
         return self.publication().preliminary(
@@ -1459,6 +1504,14 @@ class Coordinator(ReviewStages):
             return self.finalize(report, sha, disposition)
         except ReviewDecisionRequired as exc:
             return self.wait_for_decision(exc, locals().get("sha"))
+        except deployment_validation.DeploymentValidationBlocked as exc:
+            try:
+                self.publication().deployment_blocked(self.manifest["head_sha"])
+            except (OSError, subprocess.SubprocessError, ValueError, RuntimeError) as comment_error:
+                raise deployment_validation.DeploymentValidationBlocked(
+                    f"{exc}; unable to publish the deployment status comment"
+                ) from comment_error
+            raise
         except final_verification.FinalReviewBlocked as exc:
             if pr_first:
                 head = self.manifest["head_sha"]

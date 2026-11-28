@@ -20,10 +20,22 @@ from tests.support.tapd_cycle import TAPD_CONFIG
 
 class PrePRReviewFixture(ReviewCoordinatorFixture):
     def start(
-        self, workers, *, local=False, tapd=False, github_comment=False, legacy=True, legacy_report=True, pr_first=False
+        self,
+        workers,
+        *,
+        local=False,
+        tapd=False,
+        github_comment=False,
+        legacy=True,
+        legacy_report=True,
+        pr_first=False,
+        deployment_validation=None,
     ):
         config = yaml.safe_load(self.config_path.read_text())
-        config["repos"][0]["routes"] = {"new-pr": {"pre_pr_review": {"workers": workers}}}
+        review = {"workers": workers}
+        if deployment_validation is not None:
+            review["deployment_validation"] = deployment_validation
+        config["repos"][0]["routes"] = {"new-pr": {"pre_pr_review": review}}
         if tapd:
             config.update(yaml.safe_load(TAPD_CONFIG.format(trusted="alice")))
         self.config_path.write_text(yaml.safe_dump(config))
