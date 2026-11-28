@@ -206,6 +206,110 @@ class SupervisionModelTests(unittest.TestCase):
         self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertEqual(payload["system"], self.bundle["instructions"])
 
+    def test_tcodex_gateway_uses_responses_without_starting_an_agent_turn(self):
+        message = {
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "output_text", "text": json.dumps(self.decision)},
+            ],
+        }
+        completed = {
+            "type": "response.completed",
+            "response": {
+                "status": "completed",
+                "output": [{"type": "reasoning"}, message],
+                "usage": {"input_tokens": 100, "output_tokens": 10, "input_tokens_details": {"cached_tokens": 20}},
+            },
+        }
+        usage = []
+        with tempfile.TemporaryDirectory() as root:
+            gateway = self.tcodex_gateway(root)
+            body = self.responses_stream({"type": "response.created"}, completed)
+            with patch.object(model, "send_request", return_value=BytesIO(body)) as send:
+                self.assertEqual(
+                    model.call(self.bundle, "decision", gateway, "gpt-model", 5, on_usage=usage.append),
+                    self.decision,
+                )
+        request = send.call_args.args[0]
+        payload = json.loads(request.data)
+        self.assertEqual(request.full_url, "http://127.0.0.1:12345/responses")
+        self.assertEqual(request.get_header("Accept"), "text/event-stream")
+        self.assertTrue(request.get_header("X-conversation-request-id"))
+        self.assertTrue(request.get_header("Session_id"))
+        self.assertEqual(payload["model"], "gpt-model")
+        self.assertEqual(payload["tools"], [])
+        self.assertEqual(payload["tool_choice"], "none")
+        self.assertFalse(payload["store"])
+        self.assertEqual(payload["instructions"], self.bundle["instructions"])
+        self.assertEqual(json.loads(payload["input"][0]["content"][0]["text"]), self.bundle)
+        self.assertEqual(
+            usage[0]["usage"],
+            {
+                "input_tokens": 100,
+                "output_tokens": 10,
+                "cache_read_input_tokens": 20,
+            },
+        )
+
+    def test_tcodex_gateway_requires_completed_text_without_tool_calls(self):
+        streams = (
+            self.responses_stream({"type": "response.incomplete"}),
+            self.responses_stream({"type": "response.created"}),
+            self.responses_stream(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "status": "completed",
+                        "output": [{"type": "function_call", "name": "shell"}],
+                    },
+                }
+            ),
+        )
+        with tempfile.TemporaryDirectory() as root:
+            gateway = self.tcodex_gateway(root)
+            for body in streams:
+                with self.subTest(body=body):
+                    with patch.object(model, "send_request", return_value=BytesIO(body)):
+                        with self.assertRaises(model.ModelError):
+                            model.call(self.bundle, "decision", gateway, "gpt-model", 5)
+
+    def test_tcodex_gateway_rejects_nonlocal_provider_before_sending_evidence(self):
+        with tempfile.TemporaryDirectory() as root:
+            gateway = self.tcodex_gateway(root, url="https://example.com")
+            with patch.object(model, "send_request") as send:
+                with self.assertRaises(model.ModelError):
+                    model.call(self.bundle, "decision", gateway, "gpt-model", 5)
+            send.assert_not_called()
+
+    @staticmethod
+    def responses_stream(*events):
+        return b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events)
+
+    @staticmethod
+    def tcodex_gateway(root, *, url="http://127.0.0.1:12345"):
+        executable = Path(root) / "tcodex"
+        executable.write_text(
+            f"#!{sys.executable}\n"
+            "import json, sys\n"
+            'assert sys.argv[1:] == ["app-server", "--listen", "stdio://"]\n'
+            "for line in sys.stdin:\n"
+            "    msg = json.loads(line)\n"
+            '    if msg["method"] == "initialize":\n'
+            '        print(json.dumps({"id": msg["id"], "result": {}}), flush=True)\n'
+            '    if msg["method"] == "config/read":\n'
+            '        print(json.dumps({"id": msg["id"], "result": {"config": {\n'
+            '            "model_provider": "fixture", "model_providers": {"fixture": {\n'
+            f'                "base_url": {url!r}, "wire_api": "responses"\n'
+            "            }}\n"
+            "        }}}), flush=True)\n"
+        )
+        executable.chmod(0o700)
+        metadata = Path(root) / "gateway.json"
+        metadata.write_text(json.dumps({"type": "tcodex", "executable": str(executable), "home": root}))
+        metadata.chmod(0o600)
+        return model.load_gateway(metadata)
+
     def test_candidate_decisions_retain_action_scope(self):
         self.bundle["candidates"] = [{"id": "candidate-fixture", "action": "repair_ci"}]
         decision = {**self.decision, "action": "repair_ci", "candidate_id": "candidate-fixture"}
@@ -254,18 +358,18 @@ class SupervisionModelTests(unittest.TestCase):
             metadata = Path(root) / "metadata.json"
             metadata.write_text(json.dumps({"url": "http://127.0.0.1:12345"}))
             metadata.chmod(0o600)
-            self.assertEqual(model.gateway_endpoint(metadata), "http://127.0.0.1:12345")
+            self.assertEqual(model.load_gateway(metadata), "http://127.0.0.1:12345")
             metadata.chmod(0o622)
             with self.assertRaises(ValueError):
-                model.gateway_endpoint(metadata)
+                model.load_gateway(metadata)
             metadata.chmod(0o600)
             link = Path(root) / "link.json"
             link.symlink_to(metadata)
             with self.assertRaises(ValueError):
-                model.gateway_endpoint(link)
+                model.load_gateway(link)
             metadata.write_text(json.dumps({"url": 12345}))
             with self.assertRaises(ValueError):
-                model.gateway_endpoint(metadata)
+                model.load_gateway(metadata)
 
     def test_command_outputs_only_validated_text_and_safe_failure_details(self):
         response = self.response()

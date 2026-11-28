@@ -603,6 +603,8 @@ def dispatch_queued_locked(
                         continue
                     plan = pre_pr_review.bind_implementer(conn, candidate_review["round_id"], selected_worker)
             profiles = [plan["implementer"], *plan["workers"]]
+            if deployment := plan.get("deployment_validation"):
+                profiles.append(deployment["worker"])
             current = {worker["name"]: worker for worker in (config_result or {}).get("workers", [])}
             if config_result and any(
                 profile["name"] not in current

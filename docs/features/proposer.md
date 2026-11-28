@@ -20,7 +20,7 @@ proposer:
   tapd_started_states:
     story: "status_2"
     bug: "in_progress"
-  gateway_metadata: /path/to/local-messages-gateway.json
+  gateway_metadata: /path/to/local-model-gateway.json
   schedule:
     enabled: true
     analysis_time: "08:30"
@@ -32,7 +32,7 @@ proposer:
 
 `tapd_projects` 引用一个已配置的网关 TAPD 项目，值由项目 host 和 workspace ID 组成。需求和缺陷各自配置待办、进行中的真实工作流状态 ID。待办状态可以有多个，进行中状态必须与待办状态不同。仓库标签映射仍由 `tapd.projects[].label_rules` 维护，详见 [TAPD 来源](tapd.md)。
 
-`schedule.worker` 引用已配置的 Worker，其 `model` 应是本地 Messages gateway 可接受的模型名。Proposer 通过该 gateway 进行无工具分析，提交经过脱敏的单据、讨论和固定到仓库默认分支 commit 的代码片段。Worker 的模型配置决定分析模型。gateway metadata 文件由服务用户拥有，并且只有文件所有者可写。来源内容需要允许发送到配置的 gateway。
+`schedule.worker` 引用已配置的 Worker，其 `model` 应是本地网关可接受的模型名。Proposer 使用与任务监督相同的网关，支持 Opus 的 Messages API 和 GPT 的 tcodex Responses API，配置方式见 [本地模型网关](task-supervision.md#local-model-gateway)。Proposer 通过网关进行无工具分析，提交经过脱敏的单据、讨论和固定到仓库默认分支 commit 的代码片段。网关 metadata 文件由服务用户拥有，并且只有文件所有者可写。来源内容需要允许发送到配置的网关。
 
 `schedule.web_url` 是操作员实际可访问的 Robert Web origin，可以使用内网域名和端口。它只包含协议、主机和可选端口。摘要附带 `/proposals` 入口。启用 Web 写操作后，页面上的决定遵循现有认证、仓库权限和 CSRF 检查，见 [Web 认证与远程部署](web-authentication.md)。
 

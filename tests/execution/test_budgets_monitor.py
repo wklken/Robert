@@ -57,6 +57,13 @@ class PipelineBudgetTests(unittest.TestCase):
         }
         self.assertEqual(pipeline_timeout(plan), 2 * 80 + 200 + 50 + 100 + 6 * 80)
 
+    def test_opted_in_round_reserves_the_deployment_workers_timeout(self):
+        from robert_agent.execution.budgets import pipeline_timeout
+
+        plan = {**review_plan(), "review_policy": "single_review_single_repair"}
+        enabled = {**plan, "deployment_validation": {"worker": {"timeout_seconds": 600}}}
+        self.assertEqual(pipeline_timeout(enabled), pipeline_timeout(plan) + 600)
+
     def test_unknown_review_policy_cannot_supply_an_extended_budget(self):
         from robert_agent.execution.budgets import pipeline_timeout
 

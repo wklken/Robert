@@ -23,6 +23,7 @@ def pipeline_timeout(plan: Mapping) -> int:
     Each stage uses its recorded worker timeout. Reviews overlap; the first
     reviewer owns synthesis for historical report plans. A single-round plan
     reserves implementation, one address pass and, for PR-first plans, one targeted review.
+    Opted-in rounds also reserve one deployment validation pass on the final revision.
     Historical plans retain two address and two verification passes. Each write
     pass reserves at most three artifact-only repairs, capped at 120 seconds.
     Pool waiting shares one allowance, capped at an hour and at the plan timeout.
@@ -51,10 +52,13 @@ def pipeline_timeout(plan: Mapping) -> int:
     targeted_pass = plan.get("review_publication") == ReviewPublicationMode.PR_FIRST_V1
     reviewer_passes = synthesis_passes + (int(targeted_pass) if policy else 2)
     handoff_repairs = write_passes * MAX_HANDOFF_REPAIR_ATTEMPTS * min(implement, MAX_HANDOFF_REPAIR_SECONDS)
+    deployment = plan.get("deployment_validation")
+    deployment_seconds = _positive_seconds(deployment["worker"]["timeout_seconds"]) if deployment else 0
     return (
         write_passes * implement
         + max(reviews)
         + reviewer_passes * reviews[0]
         + min(limit, MAX_PIPELINE_QUEUE_SECONDS)
         + handoff_repairs
+        + deployment_seconds
     )

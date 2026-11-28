@@ -12,7 +12,9 @@ from robert_agent.persistence.dialects.sqlite import execute_control
 
 def _upgrade_stage_contract(conn, table, sqlite):
     row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table.name,)).fetchone()
-    if not row or all(stage in row[0] for stage in ("verify_final", "repair_handoff", "validate_candidate")):
+    if not row or all(
+        stage in row[0] for stage in ("verify_final", "repair_handoff", "validate_candidate", "validate_deployment")
+    ):
         return
     # Only rows physically present under the old stage contract can retain
     # their exact already-recorded result. This never authorizes a new result.

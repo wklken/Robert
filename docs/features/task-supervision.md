@@ -36,12 +36,13 @@ the command; ordinary coding adapters are not this profile. An existing
 In `decide` mode the supervisor does not start separate advisory diagnosis calls
 or automatic maintenance proposals; the decision loop owns the next action.
 
-### Local Messages gateway wrapper
+### Local model gateway
 
 The installed [supervision model wrapper](../../src/robert_agent/adapters/services/supervision_model.py)
-can call an existing local gateway implementing the Messages API. Configure the
-absolute installed interpreter path and the gateway's administrator-owned metadata
-file; its `url` must be an HTTP endpoint on `127.0.0.1` with an explicit port.
+accepts Messages gateway metadata with a `url` field and tcodex gateway
+metadata for GPT models. Configure the absolute installed interpreter path
+and the gateway's administrator-owned metadata file. HTTP connections go to
+`127.0.0.1` on an explicit port.
 The metadata must be a regular file owned by the service account and must not be
 writable by group or other users. Symlinks and redirects are rejected.
 
@@ -66,11 +67,24 @@ supervision:
     max_calls_per_hour: 12
 ```
 
-The same command supports `--kind diagnosis` in a diagnosis profile. Model requests
-expose no tools and request disabled thinking. If the gateway still returns
-`thinking` or `redacted_thinking` blocks, the wrapper discards them and parses only
-the text blocks. This includes gateway thinking blocks containing only a signature.
-Tool blocks, unknown or malformed blocks, incomplete turns and
+The same command supports `--kind diagnosis` in a diagnosis profile. Existing
+Messages metadata selects the Messages API and requests disabled thinking.
+For tcodex, use a metadata file such as
+
+```json
+{
+  "type": "tcodex",
+  "executable": "/opt/bin/tcodex",
+  "home": "/home/robert"
+}
+```
+
+The service account needs an authenticated tcodex installation in the configured
+home directory. Robert starts the app server for the duration of the request
+and reads its Responses proxy address. The request uses low reasoning effort.
+
+Both transports omit tools. The wrapper discards reasoning and parses only
+assistant text. Tool calls, unknown or malformed blocks, incomplete turns and
 missing text fail the call. The resulting JSON must still cite the supplied
 bundle/hash and known evidence IDs, select an offered action and satisfy the
 existing output limits. Thinking content never enters stdout or error details.

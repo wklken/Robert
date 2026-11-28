@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from functools import lru_cache
+from pathlib import Path
 from typing import TypedDict
 
 import yaml
@@ -99,21 +100,44 @@ def resolve_route_config(config, repo, route_policy):
     result.setdefault("required_skills", [])
     result.setdefault("recommended_skills", [])
     if "pre_pr_review" in result:
-        review = result["pre_pr_review"]
-        names = review.get("workers") if isinstance(review, dict) and set(review) == {"workers"} else None
-        if (
-            not isinstance(names, list)
-            or not names
-            or any(not isinstance(name, str) or name not in by_name for name in names)
-            or len(set(names)) != len(names)
-        ):
-            raise ValueError("pre_pr_review.workers must name distinct configured workers")
-        result["pre_pr_review"] = {"workers": list(names)}
+        _validate_pre_pr_review(result, by_name)
     if "multi_agent_review" in result:
         _validate_multi_review(result, workers)
     if "multi_agent_vote" in result:
         _validate_multi_vote(result, workers)
     return result
+
+
+def _validate_pre_pr_review(route, workers):
+    review = route["pre_pr_review"]
+    if not isinstance(review, dict) or set(review) - {"workers", "deployment_validation"}:
+        raise ValueError("pre_pr_review supports workers and deployment_validation")
+    names = review.get("workers")
+    if (
+        not isinstance(names, list)
+        or not names
+        or any(not isinstance(name, str) or name not in workers for name in names)
+        or len(set(names)) != len(names)
+    ):
+        raise ValueError("pre_pr_review.workers must name distinct configured workers")
+    normalized = {"workers": list(names)}
+    if "deployment_validation" in review:
+        validation = review["deployment_validation"]
+        if not isinstance(validation, dict) or set(validation) != {"worker", "skill_path"}:
+            raise ValueError("pre_pr_review.deployment_validation requires worker and skill_path")
+        name, skill_path = validation["worker"], validation["skill_path"]
+        if not isinstance(name, str) or name not in workers:
+            raise ValueError("pre_pr_review.deployment_validation.worker must name a configured worker")
+        if (
+            not isinstance(skill_path, str)
+            or not skill_path.isprintable()
+            or skill_path != skill_path.strip()
+            or not Path(skill_path).is_absolute()
+            or Path(skill_path).name != "SKILL.md"
+        ):
+            raise ValueError("pre_pr_review.deployment_validation.skill_path must be an absolute SKILL.md path")
+        normalized["deployment_validation"] = {"worker": name, "skill_path": skill_path}
+    route["pre_pr_review"] = normalized
 
 
 def _validate_multi_review(route, workers):

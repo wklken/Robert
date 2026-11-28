@@ -92,7 +92,7 @@ class ProposalScanTests(unittest.TestCase):
         for target, value in (
             ("proposal_sources.issues.list_recent", self.issues),
             ("proposal_sources.issues.discussion", ()),
-            ("model_gateway.gateway_endpoint", "http://127.0.0.1:7001"),
+            ("model_gateway.load_gateway", "http://127.0.0.1:7001"),
             ("tapd_client.client_for", self.tapd),
         ):
             patcher = patch(f"robert_agent.work.application.proposal_scan.{target}", return_value=value)

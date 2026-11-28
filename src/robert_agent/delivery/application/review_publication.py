@@ -499,6 +499,38 @@ class Publication:
             self._pull(scope, self.current["pr"]["number"], expected_heads=(reviewed_head,), require_marker=False)
             return self._comment("blocked", reviewed_head, summary)
 
+    def check_deployment_locked(self, reviewed_head, settings):
+        """Check the draft and current opt-in while the stage owns the launch lock."""
+        self._load_active()
+        if not self.current or "report" not in self.current or self.current["candidate_sha"] != reviewed_head:
+            raise StageStopped("deployment validation requires a published draft and review report")
+        scope, _, _ = self._authorize(expected=self.current["authority"])
+        repo = next(repo for repo in self.config["repos"] if repo["full_name"] == scope["repo"])
+        config = repo.get("routes", {}).get("new-pr", {}).get("pre_pr_review", {}).get("deployment_validation")
+        worker = settings["worker"]
+        current_worker = next(
+            (profile for profile in self.config["workers"] if profile["name"] == worker["name"]), None
+        )
+        if (
+            config != {"worker": worker["name"], "skill_path": settings["skill_path"]}
+            or not current_worker
+            or any(worker[key] != current_worker[key] for key in ("agent", "command_argv", "environment_allowlist"))
+        ):
+            raise StageStopped("current configuration does not authorize the registered deployment worker")
+        self._pull(scope, self.current["pr"]["number"], expected_heads=(reviewed_head,), require_marker=False)
+        self.check_active()
+
+    def deployment_blocked(self, reviewed_head):
+        with self._locked():
+            scope, _, _ = self._authorize(expected=self.current["authority"])
+            self._pull(scope, self.current["pr"]["number"], expected_heads=(reviewed_head,), require_marker=False)
+            return self._comment(
+                "deployment_blocked",
+                reviewed_head,
+                f"## Minikube 验证待处理\n\n送审提交 `{reviewed_head}` 对应的部署验证未通过。"
+                "草稿及评审报告已保留。具体失败与恢复状态见 Robert 任务详情。",
+            )
+
     def finish_locked(self, normalized, head, base_proof, *, report_sha, dispositions_sha, summary):
         """Complete GitHub effects while the coordinator owns the publication lock."""
         self._load_active()

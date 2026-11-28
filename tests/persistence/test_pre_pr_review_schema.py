@@ -40,9 +40,11 @@ class PrePrReviewSchemaTests(unittest.TestCase):
             (json.dumps({"candidate": "sealed"}),),
         )
 
-    def old_stage_contract(self, *, has_final_verifier):
+    def old_stage_contract(self, *, has_final_verifier, has_handoff_stages=False):
         ddl = self.conn.execute("SELECT sql FROM sqlite_master WHERE name='pre_pr_review_runs'").fetchone()[0]
-        ddl = ddl.replace(",'repair_handoff'", "").replace(",'validate_candidate'", "")
+        ddl = ddl.replace(",'validate_deployment'", "")
+        if not has_handoff_stages:
+            ddl = ddl.replace(",'repair_handoff'", "").replace(",'validate_candidate'", "")
         if not has_final_verifier:
             ddl = ddl.replace(",'verify_final'", "")
         self.conn.execute("DROP TABLE pre_pr_review_runs")
@@ -84,7 +86,7 @@ class PrePrReviewSchemaTests(unittest.TestCase):
         self.assertIsNotNone(
             self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='pre_pr_review_runs_reserved'").fetchone()
         )
-        for stage in ("verify_final", "repair_handoff", "validate_candidate"):
+        for stage in ("verify_final", "repair_handoff", "validate_candidate", "validate_deployment"):
             self.conn.execute(
                 "INSERT INTO pre_pr_review_runs SELECT ?,round_id,?,worker_id,model,attempt_no,owner_attempt_id,status,"
                 "?,prompt_sha256,slot_reserved,started_at,dispatch_json,artifact_json,error,created_at,updated_at "
@@ -97,6 +99,15 @@ class PrePrReviewSchemaTests(unittest.TestCase):
             self.conn.execute("UPDATE pre_pr_review_runs SET stage='review' WHERE run_id='verify_final'")
         with self.assertRaises(sqlite3.IntegrityError):
             self.conn.execute("UPDATE pre_pr_review_runs SET output_dir='sealed/run' WHERE run_id='verify_final'")
+
+    def test_deployment_stage_upgrade_from_current_schema_preserves_live_rows(self):
+        self.old_stage_contract(has_final_verifier=True, has_handoff_stages=True)
+        session_rows = self.rows("pre_pr_review_sessions")
+        run_rows = self.rows("pre_pr_review_runs")
+        pre_pr_review.initialize(self.conn)
+        self.assertEqual(self.rows("pre_pr_review_sessions"), session_rows)
+        self.assertEqual(self.rows("pre_pr_review_runs"), run_rows)
+        self.conn.execute("UPDATE pre_pr_review_runs SET stage='validate_deployment' WHERE run_id='live'")
 
     def test_oldest_upgrade_binds_only_matching_preexisting_result_and_preserves_evidence(self):
         self.old_stage_contract(has_final_verifier=False)
